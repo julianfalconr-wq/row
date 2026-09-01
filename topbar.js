@@ -25,10 +25,17 @@
   padding: max(10px, env(safe-area-inset-top)) 14px 10px;
   /* Fully opaque so each page's body background can't bleed through
      and tint the bar a different color. Matches the dashboard's base
-     dark background so the bar feels continuous with the page chrome. */
+     dark background so the bar feels continuous with the page chrome.
+     Self-contained (doesn't depend on any page's own CSS variables)
+     since this bar is shared verbatim across every page. */
   background: #0a0a0b;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-  font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  transition: background 0.3s, border-color 0.3s;
+}
+html[data-theme="light"] .topbar {
+  background: #F3F3F1;
+  border-bottom-color: rgba(15, 15, 20, 0.10);
 }
 .topbar-pill {
   flex: 1 1 0; min-width: 0;
@@ -43,6 +50,13 @@
   transition: background 0.15s, border-color 0.15s;
 }
 .topbar-pill:hover { background: rgba(255, 255, 255, 0.07); border-color: rgba(255, 255, 255, 0.10); }
+html[data-theme="light"] .topbar-pill {
+  background: #FFFFFF;
+  border-color: rgba(15, 15, 20, 0.10);
+  color: #141416;
+  box-shadow: 0 1px 3px rgba(20, 20, 26, 0.06);
+}
+html[data-theme="light"] .topbar-pill:hover { background: #FAFAFA; }
 .topbar-pill-dot {
   width: 7px; height: 7px; border-radius: 50%;
   background: #6ee7b7; flex-shrink: 0;
@@ -62,6 +76,7 @@
   color: rgba(255, 255, 255, 0.5);
   flex-shrink: 0;
 }
+html[data-theme="light"] .topbar-pill-label { color: #8B8A90; }
 .topbar-pill-count {
   margin-left: auto;
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
@@ -70,6 +85,7 @@
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+html[data-theme="light"] .topbar-pill-count { color: #141416; }
 .topbar-water-wrap {
   flex: 1 1 0; min-width: 0;
   display: flex;
@@ -89,6 +105,12 @@
 }
 .topbar-water-pill:hover { background: rgba(125, 211, 252, 0.12); }
 .topbar-water-pill .topbar-pill-dot { background: #7DD3FC; }
+html[data-theme="light"] .topbar-water-pill {
+  background: rgba(56, 175, 224, 0.12);
+  border-color: rgba(56, 175, 224, 0.24);
+  color: #141416;
+}
+html[data-theme="light"] .topbar-water-pill:hover { background: rgba(56, 175, 224, 0.18); }
 .topbar-water-add {
   flex: 0 0 auto;
   width: 38px;
@@ -108,13 +130,35 @@
 .topbar-water-add.flash {
   background: linear-gradient(180deg, rgba(125, 211, 252, 0.65), rgba(110, 231, 183, 0.65));
 }
+html[data-theme="light"] .topbar-water-add { color: #141416; }
+.topbar-theme-toggle {
+  flex: 0 0 auto;
+  width: 38px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #FAFAFA;
+  font-size: 15px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.15s, border-color 0.15s;
+}
+.topbar-theme-toggle:hover { background: rgba(255, 255, 255, 0.07); border-color: rgba(255, 255, 255, 0.10); }
+html[data-theme="light"] .topbar-theme-toggle {
+  background: #FFFFFF;
+  border-color: rgba(15, 15, 20, 0.10);
+  color: #141416;
+  box-shadow: 0 1px 3px rgba(20, 20, 26, 0.06);
+}
+html[data-theme="light"] .topbar-theme-toggle:hover { background: #FAFAFA; }
 
 @media (max-width: 480px) {
   .topbar { padding-left: 10px; padding-right: 10px; gap: 4px; }
   .topbar-pill, .topbar-water-pill { padding: 7px 9px; gap: 5px; }
   .topbar-pill-label { font-size: 9px; letter-spacing: 0.10em; }
   .topbar-pill-count { font-size: 11px; }
-  .topbar-water-add { width: 32px; font-size: 16px; }
+  .topbar-water-add, .topbar-theme-toggle { width: 32px; font-size: 16px; }
 }
 @media (max-width: 380px) {
   .topbar-pill-label { display: none; }
@@ -195,6 +239,9 @@ body.topbar-modal-open {
     <span class="topbar-pill-dot"></span>
     <span class="topbar-pill-label">FINANCE</span>
   </a>
+  <button type="button" class="topbar-theme-toggle" id="topbarThemeToggle" aria-label="Toggle light/dark theme">
+    <span id="topbarThemeIcon">☀️</span>
+  </button>
 </header>
 `;
 
@@ -408,14 +455,42 @@ body.topbar-modal-open {
     sync();
   }
 
+  // -------- Theme (dark/light) — global, shared across every page --------
+  // The active theme is stored once in localStorage and mirrored onto
+  // <html data-theme="..."> on every page. Each page's own stylesheet
+  // reacts to that attribute for its own colors; this only owns the
+  // toggle control, the persisted value, and the topbar's own look.
+  function getTheme() {
+    try { return localStorage.getItem('dashboard:theme') || 'dark'; } catch (e) { return 'dark'; }
+  }
+  function applyTheme(theme) {
+    document.documentElement.setAttribute('data-theme', theme);
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute('content', theme === 'light' ? '#F3F3F1' : '#050506');
+    const icon = document.getElementById('topbarThemeIcon');
+    if (icon) icon.textContent = theme === 'light' ? '🌙' : '☀️';
+  }
+  function setTheme(theme) {
+    try { localStorage.setItem('dashboard:theme', theme); } catch (e) {}
+    applyTheme(theme);
+  }
+
   // -------- Boot --------
   function boot() {
     injectStyleAndHTML();
     const btn = document.getElementById('topbarWaterAdd');
     if (btn) btn.addEventListener('click', (e) => { e.preventDefault(); addWater(); });
+    const themeBtn = document.getElementById('topbarThemeToggle');
+    if (themeBtn) themeBtn.addEventListener('click', () => setTheme(getTheme() === 'light' ? 'dark' : 'light'));
+    applyTheme(getTheme());
     render();
     lockGestures();
     startModalLock();
+
+    // Pick up a theme change made on another tab/page.
+    window.addEventListener('storage', (e) => {
+      if (e.key === 'dashboard:theme') applyTheme(getTheme());
+    });
 
     // Re-render when localStorage changes from another tab/window OR when
     // the page becomes visible (sync may have pulled in the background).

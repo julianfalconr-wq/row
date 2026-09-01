@@ -2,6 +2,14 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<script>
+(function () {
+  try {
+    var t = localStorage.getItem('dashboard:theme');
+    if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+  } catch (e) {}
+})();
+</script>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="theme-color" content="#050506">
 <meta name="color-scheme" content="dark">
@@ -36,6 +44,24 @@
   --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 
+:root[data-theme="light"] {
+  --bg: #F3F3F1;
+  --bg-card: rgba(15, 15, 20, 0.04);
+  --bg-secondary: rgba(15, 15, 20, 0.035);
+  --bg-input: rgba(15, 15, 20, 0.045);
+  --bg-input-focus: rgba(15, 15, 20, 0.07);
+  --bg-dropdown: rgba(255, 255, 255, 0.98);
+
+  --border: rgba(15, 15, 20, 0.09);
+  --border-soft: rgba(15, 15, 20, 0.06);
+  --border-strong: rgba(15, 15, 20, 0.16);
+
+  --text-primary: #141416;
+  --text-secondary: #55545C;
+  --text-tertiary: #8B8A90;
+  --text-quaternary: #B8B7BC;
+}
+
 * { box-sizing: border-box; }
 html, body {
   margin: 0; padding: 0;
@@ -54,9 +80,11 @@ body::before {
     radial-gradient(60% 50% at 82% 14%, rgba(224, 118, 88, 0.16) 0%, transparent 60%),
     radial-gradient(50% 40% at 18% 90%, rgba(180, 180, 200, 0.06) 0%, transparent 60%);
   filter: blur(40px);
+  opacity: 1;
   pointer-events: none; z-index: 0;
   animation: drift 36s ease-in-out infinite alternate;
 }
+html[data-theme="light"] body::before { opacity: 0.35; }
 body::after {
   content: ''; position: fixed; inset: 0;
   background-image: radial-gradient(rgba(255,255,255,0.014) 1px, transparent 1px);

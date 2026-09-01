@@ -2,6 +2,14 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<script>
+(function () {
+  try {
+    var t = localStorage.getItem('dashboard:theme');
+    if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+  } catch (e) {}
+})();
+</script>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0a0a0b">
 <title>Progressive Overload Coach</title>
@@ -108,6 +116,18 @@ const CONFIG = {
   --font: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, sans-serif;
   --font-mono: ui-monospace, SF Mono, Menlo, Consolas, monospace;
 }
+:root[data-theme="light"] {
+  --bg: #F3F3F1;
+  --bg-card: #FFFFFF;
+  --text-1: #141416;
+  --text-2: rgba(20,20,22,0.62);
+  --text-3: rgba(20,20,22,0.42);
+  --text-4: rgba(20,20,22,0.26);
+  --border: rgba(15,15,20,0.10);
+  --border-strong: rgba(15,15,20,0.18);
+  --accent: #141416;
+}
+html[data-theme="light"] body { background: radial-gradient(ellipse 80% 60% at 50% 0%, #FAFAF8 0%, #F3F3F1 60%); }
 * { box-sizing: border-box; }
 html, body {
   margin: 0; padding: 0;
@@ -872,11 +892,11 @@ img, video, canvas, svg { max-width: 100%; }
   display: flex; align-items: center; gap: 16px; margin-bottom: 14px;
 }
 .wt-divider::before, .wt-divider::after {
-  content: ''; flex: 1; height: 1px; background: rgba(255,255,255,0.10);
+  content: ''; flex: 1; height: 1px; background: var(--border-strong);
 }
 .wt-divider span {
   font-size: 11px; letter-spacing: 0.22em; font-weight: 600;
-  color: rgba(255,255,255,0.85);
+  color: var(--text-1);
 }
 .wt-card {
   background: var(--bg-card);
