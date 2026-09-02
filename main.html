@@ -19,6 +19,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="sync.js" defer></script>
 <script src="topbar.js" defer></script>
+<script src="cronometer-lib.js" defer></script>
 <style>
 :root {
   --surface-1: #050506;
@@ -223,17 +224,23 @@ body::after {
   .goal-ticker-meta { font-size: 10px; padding: 2px 7px; }
 }
 
-/* ===== Component 3: Day Ring (WHOOP-style recovery ring) ===== */
+/* ===== Component 3: Day Ring (WHOOP-style recovery ring) + Nutrition Score ===== */
+.top-cards-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-bottom: 22px;
+}
 .day-ring-wrap {
   display: flex; flex-wrap: wrap;
   align-items: center; justify-content: center;
   gap: 26px;
   padding: 24px;
-  margin-bottom: 22px;
   border-radius: 18px;
   background: var(--surface-2);
   border: 1px solid var(--line-soft);
   box-shadow: var(--shadow-card);
+  flex: 2 1 360px;
 }
 .day-ring {
   position: relative;
@@ -290,6 +297,71 @@ body::after {
   .day-ring-track, .day-ring-fill { stroke-width: 10; }
   .day-ring-percent { font-size: 34px; }
   .day-ring-status { font-size: 13px; }
+}
+
+/* ----- Total Nutrition Score (Cronometer) ----- */
+.nutrition-score-wrap {
+  display: flex; flex-wrap: wrap;
+  align-items: center; justify-content: center;
+  gap: 18px;
+  padding: 24px;
+  border-radius: 18px;
+  background: var(--surface-2);
+  border: 1px solid var(--line-soft);
+  box-shadow: var(--shadow-card);
+  flex: 1 1 260px;
+  text-decoration: none;
+  color: inherit;
+  transition: transform 0.2s ease, border-color 0.2s ease;
+}
+.nutrition-score-wrap:hover {
+  transform: translateY(-3px);
+  border-color: rgba(196,181,253,0.5);
+}
+.nutrition-score-ring {
+  position: relative;
+  width: 128px; height: 128px;
+  flex-shrink: 0;
+}
+.nutrition-score-ring svg { width: 100%; height: 100%; display: block; }
+.nutrition-score-track { fill: none; stroke: var(--line); stroke-width: 11; }
+.nutrition-score-fill {
+  fill: none;
+  stroke: #C4B5FD;
+  stroke-width: 11;
+  stroke-linecap: round;
+  transform: rotate(-90deg);
+  transform-origin: 60px 60px;
+  transition: stroke 0.7s cubic-bezier(0.22, 1, 0.36, 1),
+              stroke-dashoffset 0.7s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.nutrition-score-overlay {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  pointer-events: none;
+}
+.nutrition-score-percent {
+  font-size: 30px; font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+  color: var(--text-primary);
+  line-height: 1;
+}
+.nutrition-score-label {
+  margin-top: 4px;
+  font-family: var(--font-mono);
+  font-size: 9px; font-weight: 800;
+  letter-spacing: 0.18em; text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+.nutrition-score-text { display: flex; flex-direction: column; gap: 6px; max-width: 200px; }
+.nutrition-score-title { font-size: 15px; font-weight: 700; color: var(--text-primary); }
+.nutrition-score-sub { font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); }
+@media (max-width: 480px) {
+  .nutrition-score-ring { width: 104px; height: 104px; }
+  .nutrition-score-track, .nutrition-score-fill { stroke-width: 9; }
+  .nutrition-score-percent { font-size: 24px; }
 }
 
 /* ===== Component 4: section + To Do List ===== */
@@ -667,29 +739,54 @@ body::after {
     </div>
   </div>
 
-  <div class="day-ring-wrap">
-    <div class="day-ring">
-      <svg viewBox="0 0 120 120">
-        <defs>
-          <filter id="dayRingGlow" x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur stdDeviation="2.4" result="b" />
-            <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
-          </filter>
-        </defs>
-        <circle class="day-ring-track" cx="60" cy="60" r="52" />
-        <circle class="day-ring-fill"  cx="60" cy="60" r="52" id="dayRingFill" filter="url(#dayRingGlow)" />
-      </svg>
-      <div class="day-ring-overlay">
-        <div class="day-ring-percent" id="dayRingPercent">—</div>
-        <div class="day-ring-phase"   id="dayRingPhase">—</div>
-        <div class="day-ring-clock"   id="dayRingClock">—</div>
+  <div class="top-cards-row">
+    <div class="day-ring-wrap">
+      <div class="day-ring">
+        <svg viewBox="0 0 120 120">
+          <defs>
+            <filter id="dayRingGlow" x="-20%" y="-20%" width="140%" height="140%">
+              <feGaussianBlur stdDeviation="2.4" result="b" />
+              <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+            </filter>
+          </defs>
+          <circle class="day-ring-track" cx="60" cy="60" r="52" />
+          <circle class="day-ring-fill"  cx="60" cy="60" r="52" id="dayRingFill" filter="url(#dayRingGlow)" />
+        </svg>
+        <div class="day-ring-overlay">
+          <div class="day-ring-percent" id="dayRingPercent">—</div>
+          <div class="day-ring-phase"   id="dayRingPhase">—</div>
+          <div class="day-ring-clock"   id="dayRingClock">—</div>
+        </div>
+      </div>
+      <div class="day-ring-text">
+        <div class="day-ring-status"    id="dayRingStatus">Loading…</div>
+        <div class="day-ring-remaining" id="dayRingRemaining">—</div>
+        <div class="day-ring-hours">8:00 AM – 12:00 AM</div>
       </div>
     </div>
-    <div class="day-ring-text">
-      <div class="day-ring-status"    id="dayRingStatus">Loading…</div>
-      <div class="day-ring-remaining" id="dayRingRemaining">—</div>
-      <div class="day-ring-hours">8:00 AM – 12:00 AM</div>
-    </div>
+
+    <a href="health.html#cronometer" class="nutrition-score-wrap" id="nutritionScoreLink">
+      <div class="nutrition-score-ring">
+        <svg viewBox="0 0 120 120">
+          <defs>
+            <filter id="nutriRingGlow" x="-20%" y="-20%" width="140%" height="140%">
+              <feGaussianBlur stdDeviation="2.4" result="b" />
+              <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+            </filter>
+          </defs>
+          <circle class="nutrition-score-track" cx="60" cy="60" r="52" />
+          <circle class="nutrition-score-fill"  cx="60" cy="60" r="52" id="nutriRingFill" filter="url(#nutriRingGlow)" />
+        </svg>
+        <div class="nutrition-score-overlay">
+          <div class="nutrition-score-percent" id="nutriRingPercent">—</div>
+          <div class="nutrition-score-label">SCORE</div>
+        </div>
+      </div>
+      <div class="nutrition-score-text">
+        <div class="nutrition-score-title">Total Nutrition Score</div>
+        <div class="nutrition-score-sub" id="nutriScoreSub">Loading…</div>
+      </div>
+    </a>
   </div>
 
   <div class="section">
@@ -1367,6 +1464,64 @@ document.addEventListener('DOMContentLoaded', function () {
       window.dispatchEvent(new Event('storage'));
     }
   });
+});
+</script>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  const fillEl    = document.getElementById('nutriRingFill');
+  const percentEl = document.getElementById('nutriRingPercent');
+  const subEl     = document.getElementById('nutriScoreSub');
+  if (!fillEl || typeof window.CronoLib === 'undefined') return;
+
+  const C = 2 * Math.PI * 52;
+  fillEl.setAttribute('stroke-dasharray', C);
+  fillEl.setAttribute('stroke-dashoffset', C);
+
+  function setRing(pct) {
+    const clamped = Math.max(0, Math.min(100, pct));
+    fillEl.setAttribute('stroke-dashoffset', C * (1 - clamped / 100));
+  }
+
+  async function render() {
+    if (!window.CronoLib.getSecret()) {
+      percentEl.textContent = '—';
+      subEl.textContent = 'Tap to connect Cronometer';
+      setRing(0);
+      return;
+    }
+    const result = await window.CronoLib.fetchCronometerData();
+    if (!result.ok) {
+      percentEl.textContent = '—';
+      subEl.textContent = 'No data synced yet';
+      setRing(0);
+      return;
+    }
+    const dates = window.CronoLib.listAvailableDates(result.rows, result.headers);
+    if (!dates.length) {
+      percentEl.textContent = '—';
+      subEl.textContent = 'No dated rows found';
+      setRing(0);
+      return;
+    }
+    const latest = dates[0];
+    const targets = window.CronoLib.loadTargets();
+    const totals = window.CronoLib.sumNutrientsForDate(result.rows, result.headers, latest, targets);
+    totals.supplements = window.CronoLib.getStackCompletionForDate(latest);
+    const { score } = window.CronoLib.computeScore(totals, targets);
+
+    if (score == null) {
+      percentEl.textContent = '—';
+      subEl.textContent = 'Not enough data for ' + latest;
+      setRing(0);
+      return;
+    }
+    percentEl.textContent = score + '%';
+    subEl.textContent = latest + ' · tap for details';
+    setRing(score);
+    window.CronoLib.saveScoreForDate(latest, score);
+  }
+
+  render();
 });
 </script>
 </body>

@@ -17,6 +17,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="sync.js" defer></script>
 <script src="topbar.js" defer></script>
+<script src="cronometer-lib.js" defer></script>
 <style>
 :root {
   --bg: #050506;
@@ -127,6 +128,180 @@ main {
   .water-embed { margin-top: 40px; }
   .water-iframe { height: 780px; }
 }
+
+/* ===== Cronometer ===== */
+.crono-embed { margin-top: 56px; }
+@media (max-width: 480px) { .crono-embed { margin-top: 40px; } }
+
+.crono-card {
+  background: var(--bg-card);
+  border-radius: 16px;
+  padding: 22px 22px 18px;
+  backdrop-filter: blur(24px) saturate(1.2);
+  -webkit-backdrop-filter: blur(24px) saturate(1.2);
+  box-shadow: 0 12px 40px rgba(0,0,0,0.45);
+}
+
+.crono-empty {
+  text-align: center;
+  padding: 22px 8px 10px;
+}
+.crono-empty-title { font-size: 16px; font-weight: 700; color: var(--text-primary); margin-bottom: 6px; }
+.crono-empty-sub { font-size: 13px; color: var(--text-tertiary); max-width: 320px; margin: 0 auto 16px; line-height: 1.5; }
+.crono-empty-link {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 10px 18px; border-radius: 999px;
+  background: var(--accent); color: #08110D;
+  text-decoration: none; font-size: 13px; font-weight: 700;
+}
+
+.crono-header {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; margin-bottom: 16px;
+}
+.crono-date-select {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  font-family: inherit; font-size: 13px; font-weight: 600;
+  padding: 8px 12px; border-radius: 10px; outline: none;
+  max-width: 200px;
+}
+.crono-settings-btn {
+  flex-shrink: 0;
+  width: 34px; height: 34px;
+  border-radius: 50%;
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  color: var(--text-tertiary);
+  font-size: 15px; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: color 0.15s, border-color 0.15s;
+}
+.crono-settings-btn:hover { color: var(--text-primary); border-color: var(--text-tertiary); }
+
+.crono-energy-row {
+  display: flex; align-items: center; gap: 20px;
+  flex-wrap: wrap;
+  margin-bottom: 22px;
+}
+.crono-ring { position: relative; width: 132px; height: 132px; flex-shrink: 0; }
+.crono-ring svg { width: 100%; height: 100%; display: block; }
+.crono-ring-track { fill: none; stroke: var(--border); stroke-width: 11; }
+.crono-ring-fill {
+  fill: none; stroke: #C4B5FD; stroke-width: 11; stroke-linecap: round;
+  transform: rotate(-90deg); transform-origin: 60px 60px;
+  transition: stroke 0.5s, stroke-dashoffset 0.7s cubic-bezier(0.22,1,0.36,1);
+}
+.crono-ring-overlay {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+}
+.crono-ring-percent { font-size: 26px; font-weight: 800; color: var(--text-primary); letter-spacing: -0.02em; line-height: 1; }
+.crono-ring-label { margin-top: 3px; font-family: var(--font-mono); font-size: 9px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-tertiary); }
+
+.crono-energy-text { display: flex; flex-direction: column; gap: 8px; }
+.crono-score-badge {
+  display: inline-flex; align-items: center; gap: 6px; align-self: flex-start;
+  padding: 5px 12px; border-radius: 999px;
+  background: rgba(196,181,253,0.12); border: 1px solid rgba(196,181,253,0.30);
+  color: #C4B5FD; font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+}
+.crono-energy-val { font-family: var(--font-mono); font-size: 15px; color: var(--text-primary); font-weight: 600; }
+.crono-energy-sub { font-size: 12px; color: var(--text-tertiary); }
+
+.crono-bars-title {
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--text-tertiary); margin: 18px 0 10px;
+}
+.crono-bar-row + .crono-bar-row { margin-top: 12px; }
+.crono-bar-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 5px; }
+.crono-bar-label { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.crono-bar-value { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-tertiary); }
+.crono-bar-track { height: 7px; border-radius: 999px; background: var(--border); overflow: hidden; }
+.crono-bar-fill { height: 100%; border-radius: 999px; background: #6BE3A4; transition: width 0.5s ease, background 0.3s ease; }
+.crono-bar-fill.is-under { background: #FFC93C; }
+.crono-bar-fill.is-over { background: #FF6B6B; }
+
+.crono-empty-metrics { text-align: center; font-size: 12px; font-style: italic; color: var(--text-tertiary); padding: 8px 0; }
+
+/* ----- Settings modal ----- */
+.modal-bg {
+  display: none; position: fixed; inset: 0;
+  background: rgba(0,0,0,0.65); backdrop-filter: blur(6px);
+  z-index: 100; align-items: center; justify-content: center; padding: 20px;
+}
+.modal-bg.show { display: flex; }
+.modal {
+  width: 100%; max-width: 620px;
+  background: var(--bg-dropdown);
+  border: 1px solid var(--border-strong);
+  border-radius: 16px;
+  padding: 22px; max-height: 88vh; overflow-y: auto;
+}
+.modal h3 { margin: 0 0 4px; font-size: 17px; font-weight: 700; color: var(--text-primary); }
+.modal .modal-sub { font-size: 12px; color: var(--text-tertiary); margin-bottom: 16px; }
+
+.crono-weight-total {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 14px; border-radius: 10px; margin-bottom: 14px;
+  background: var(--bg-secondary); border: 1px solid var(--border);
+  font-size: 12.5px; font-weight: 700; color: var(--text-secondary);
+}
+.crono-weight-total.is-off { color: #FF6B6B; border-color: rgba(255,107,107,0.35); }
+.crono-weight-total.is-ok { color: #6BE3A4; border-color: rgba(107,227,164,0.35); }
+
+.crono-metric-table { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
+.crono-metric-row {
+  display: grid;
+  grid-template-columns: 1.4fr 0.6fr 0.7fr 0.7fr 0.6fr auto;
+  gap: 6px; align-items: center;
+  padding: 8px; border-radius: 10px;
+  background: var(--bg-secondary);
+}
+.crono-metric-row input {
+  width: 100%;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  font-family: inherit; font-size: 12px;
+  padding: 7px 8px; border-radius: 8px; outline: none;
+  -moz-appearance: textfield;
+}
+.crono-metric-row input::-webkit-outer-spin-button,
+.crono-metric-row input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.crono-metric-row input:focus { border-color: var(--accent); }
+.crono-metric-row .crono-field-label { font-size: 9px; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 2px; display: block; }
+.crono-metric-del {
+  border: 0; background: transparent; color: var(--text-tertiary);
+  font-size: 17px; cursor: pointer; padding: 4px 6px;
+}
+.crono-metric-del:hover { color: #FF6B6B; }
+@media (max-width: 620px) {
+  .crono-metric-row { grid-template-columns: 1fr 1fr; grid-auto-rows: auto; }
+  .crono-metric-del { grid-column: 1 / -1; justify-self: end; }
+}
+
+.crono-modal-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+.crono-btn-primary {
+  padding: 10px 18px; border: 0; border-radius: 10px;
+  background: var(--accent); color: #08110D;
+  font-family: inherit; font-size: 13px; font-weight: 700; cursor: pointer;
+}
+.crono-btn-ghost {
+  padding: 10px 16px; border-radius: 10px;
+  background: transparent; border: 1px solid var(--border-strong);
+  color: var(--text-secondary);
+  font-family: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.crono-btn-add {
+  width: 100%; padding: 9px; border-radius: 10px;
+  border: 1px dashed var(--border-strong); background: transparent;
+  color: var(--text-tertiary);
+  font-family: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+  margin-bottom: 14px;
+}
+.crono-btn-add:hover { color: var(--text-primary); border-color: var(--text-tertiary); }
 
 .stack-card {
   background: var(--bg-card);
@@ -686,6 +861,84 @@ main {
     </div>
   </div>
 
+  <section id="cronometer" class="crono-embed">
+    <div class="section-title">Cronometer</div>
+    <div class="crono-card">
+
+      <div id="cronoEmpty" class="crono-empty">
+        <div class="crono-empty-title">Not connected</div>
+        <div class="crono-empty-sub">Import your Cronometer diary export to see your daily nutrition score, macros, and micros here.</div>
+        <a href="cronometer.html" class="crono-empty-link">Go to Cronometer import →</a>
+      </div>
+
+      <div id="cronoContent" style="display:none">
+        <div class="crono-header">
+          <select id="cronoDateSelect" class="crono-date-select"></select>
+          <button id="cronoSettingsBtn" class="crono-settings-btn" type="button" aria-label="Configure targets">⚙</button>
+        </div>
+
+        <div class="crono-energy-row">
+          <div class="crono-ring">
+            <svg viewBox="0 0 120 120">
+              <defs>
+                <filter id="cronoRingGlow" x="-20%" y="-20%" width="140%" height="140%">
+                  <feGaussianBlur stdDeviation="2" result="b" />
+                  <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+                </filter>
+              </defs>
+              <circle class="crono-ring-track" cx="60" cy="60" r="52" />
+              <circle class="crono-ring-fill" cx="60" cy="60" r="52" id="cronoRingFill" filter="url(#cronoRingGlow)" />
+            </svg>
+            <div class="crono-ring-overlay">
+              <div class="crono-ring-percent" id="cronoRingPercent">—</div>
+              <div class="crono-ring-label">Energy</div>
+            </div>
+          </div>
+          <div class="crono-energy-text">
+            <span class="crono-score-badge">Score <span id="cronoScoreVal">—</span>%</span>
+            <div class="crono-energy-val"><span id="cronoEnergyVal">0</span> / <span id="cronoEnergyTarget">0</span> kcal</div>
+            <div class="crono-energy-sub" id="cronoEnergySub">—</div>
+          </div>
+        </div>
+
+        <div class="crono-bars-title">Macros</div>
+        <div id="cronoMacros"></div>
+
+        <div class="crono-bars-title">Micros</div>
+        <div id="cronoMicros"></div>
+
+        <div id="cronoOtherWrap" style="display:none">
+          <div class="crono-bars-title">Other</div>
+          <div id="cronoOther"></div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- Cronometer target/weight settings modal -->
+  <div class="modal-bg" id="cronoModalBg">
+    <div class="modal">
+      <h3>Nutrition targets &amp; scoring</h3>
+      <div class="modal-sub">Set your min/max range and point weight per metric. Weights should sum to 100. Add your own nutrients too — match them to a column in your CSV by any text that appears in that column's header.</div>
+
+      <div id="cronoWeightTotal" class="crono-weight-total">
+        <span>Total weight</span>
+        <span id="cronoWeightTotalVal">0 / 100</span>
+      </div>
+
+      <div id="cronoMetricTable" class="crono-metric-table"></div>
+
+      <button type="button" id="cronoAddMetricBtn" class="crono-btn-add">+ Add nutrient / mineral</button>
+
+      <div class="crono-modal-actions">
+        <button type="button" id="cronoSaveTargetsBtn" class="crono-btn-primary">Save</button>
+        <button type="button" id="cronoResetTargetsBtn" class="crono-btn-ghost">Reset to defaults</button>
+        <button type="button" id="cronoCloseModalBtn" class="crono-btn-ghost">Cancel</button>
+      </div>
+    </div>
+  </div>
+
   <section id="water" class="water-embed">
     <div class="section-title">Water Tracker</div>
     <iframe src="po-water.html" class="water-iframe" loading="lazy" title="Water Tracker"></iframe>
@@ -1208,6 +1461,231 @@ main {
   render();
   startTicker();
 })();
+</script>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  'use strict';
+  // Runs after DOMContentLoaded (not immediately) because this script
+  // depends on cronometer-lib.js, which is loaded with `defer` and so
+  // only runs right before DOMContentLoaded itself — an inline script
+  // earlier in body execution order would see window.CronoLib as
+  // undefined.
+  if (typeof window.CronoLib === 'undefined') return;
+  const Crono = window.CronoLib;
+
+  const emptyEl   = document.getElementById('cronoEmpty');
+  const contentEl = document.getElementById('cronoContent');
+  const dateSel   = document.getElementById('cronoDateSelect');
+  const settingsBtn = document.getElementById('cronoSettingsBtn');
+
+  const ringFill = document.getElementById('cronoRingFill');
+  const ringPct  = document.getElementById('cronoRingPercent');
+  const scoreVal = document.getElementById('cronoScoreVal');
+  const energyVal = document.getElementById('cronoEnergyVal');
+  const energyTarget = document.getElementById('cronoEnergyTarget');
+  const energySub = document.getElementById('cronoEnergySub');
+  const macrosEl = document.getElementById('cronoMacros');
+  const microsEl = document.getElementById('cronoMicros');
+  const otherWrap = document.getElementById('cronoOtherWrap');
+  const otherEl = document.getElementById('cronoOther');
+
+  const RING_C = 2 * Math.PI * 52;
+  ringFill.setAttribute('stroke-dasharray', RING_C);
+  ringFill.setAttribute('stroke-dashoffset', RING_C);
+
+  let data = null;      // { rows, headers }
+  let targets = Crono.loadTargets();
+
+  function fmtNum(n) {
+    if (n == null) return '—';
+    return Math.round(n * 10) / 10;
+  }
+
+  function barRow(metric, value) {
+    const row = document.createElement('div');
+    row.className = 'crono-bar-row';
+    const ref = metric.kind === 'min' ? metric.min : metric.max;
+    let frac = 0, state = 'ok';
+    if (ref != null && ref > 0 && value != null) frac = Math.min(1, value / ref);
+    if (value == null) { state = 'ok'; frac = 0; }
+    else if (metric.kind === 'range' && metric.min != null && (value < metric.min)) state = 'under';
+    else if (metric.kind === 'range' && metric.max != null && (value > metric.max)) state = 'over';
+    else if (metric.kind === 'max' && metric.max != null && value > metric.max) state = 'over';
+    else if (metric.kind === 'min' && metric.min != null && value < metric.min) state = 'under';
+
+    const target = metric.kind === 'min'
+      ? (metric.min != null ? metric.min + '+' : '—')
+      : metric.kind === 'max'
+        ? (metric.max != null ? 'max ' + metric.max : '—')
+        : (metric.min != null && metric.max != null ? metric.min + '–' + metric.max : '—');
+
+    row.innerHTML =
+      '<div class="crono-bar-head">' +
+        '<span class="crono-bar-label">' + metric.label + '</span>' +
+        '<span class="crono-bar-value">' + fmtNum(value) + ' / ' + target + ' ' + metric.unit + '</span>' +
+      '</div>' +
+      '<div class="crono-bar-track"><div class="crono-bar-fill' + (state !== 'ok' ? ' is-' + state : '') + '" style="width:' + Math.round(frac * 100) + '%"></div></div>';
+    return row;
+  }
+
+  function renderForDate(dateKey) {
+    const totals = Crono.sumNutrientsForDate(data.rows, data.headers, dateKey, targets);
+    totals.supplements = Crono.getStackCompletionForDate(dateKey);
+    const { score } = Crono.computeScore(totals, targets);
+
+    scoreVal.textContent = score == null ? '—' : score;
+    if (score != null) Crono.saveScoreForDate(dateKey, score);
+
+    const energyMetric = targets.metrics.find((m) => m.id === 'energy') || Crono.DEFAULT_METRICS[0];
+    const energyVal_ = totals.energy;
+    const energyPct = energyMetric.max ? Math.min(100, Math.round(((energyVal_ || 0) / energyMetric.max) * 100)) : 0;
+    ringFill.setAttribute('stroke-dashoffset', RING_C * (1 - energyPct / 100));
+    ringFill.style.stroke = energyPct >= 100 ? '#FF6B6B' : (energyVal_ >= (energyMetric.min || 0) ? '#6BE3A4' : '#C4B5FD');
+    ringPct.textContent = energyPct + '%';
+    energyVal.textContent = fmtNum(energyVal_);
+    energyTarget.textContent = (energyMetric.min || '—') + '–' + (energyMetric.max || '—');
+    energySub.textContent = dateKey;
+
+    macrosEl.innerHTML = '';
+    microsEl.innerHTML = '';
+    otherEl.innerHTML = '';
+    let macroCount = 0, microCount = 0, otherCount = 0;
+
+    targets.metrics.forEach((m) => {
+      if (m.group === 'energy' || m.group === 'supplements') return;
+      const value = totals[m.id];
+      if (m.group === 'macro') { macrosEl.appendChild(barRow(m, value)); macroCount++; }
+      else if (m.group === 'micro') { microsEl.appendChild(barRow(m, value)); microCount++; }
+      else { otherEl.appendChild(barRow(m, value)); otherCount++; }
+    });
+    if (!macroCount) macrosEl.innerHTML = '<div class="crono-empty-metrics">No macro metrics configured</div>';
+    if (!microCount) microsEl.innerHTML = '<div class="crono-empty-metrics">No micro metrics configured</div>';
+    otherWrap.style.display = otherCount ? 'block' : 'none';
+  }
+
+  async function loadAndRender() {
+    const result = await Crono.fetchCronometerData();
+    if (!result.ok) {
+      emptyEl.style.display = 'block';
+      contentEl.style.display = 'none';
+      return;
+    }
+    data = { rows: result.rows, headers: result.headers };
+    const dates = Crono.listAvailableDates(data.rows, data.headers);
+    if (!dates.length) {
+      emptyEl.style.display = 'block';
+      contentEl.style.display = 'none';
+      return;
+    }
+    emptyEl.style.display = 'none';
+    contentEl.style.display = 'block';
+
+    dateSel.innerHTML = dates.map((d) => '<option value="' + d + '">' + d + '</option>').join('');
+    dateSel.value = dates[0];
+    renderForDate(dates[0]);
+  }
+
+  dateSel.addEventListener('change', () => renderForDate(dateSel.value));
+
+  // ---------- settings modal ----------
+  const modalBg = document.getElementById('cronoModalBg');
+  const metricTable = document.getElementById('cronoMetricTable');
+  const weightTotalWrap = document.getElementById('cronoWeightTotal');
+  const weightTotalVal = document.getElementById('cronoWeightTotalVal');
+
+  function metricRowEl(metric) {
+    const row = document.createElement('div');
+    row.className = 'crono-metric-row';
+    row.dataset.kind = metric.kind;
+    row.dataset.group = metric.group || 'other';
+    row.dataset.id = metric.id;
+    row.dataset.builtin = metric.patterns ? '1' : '0';
+    row.innerHTML =
+      '<div><span class="crono-field-label">Label</span><input type="text" class="f-label" value="' + (metric.label || '') + '"></div>' +
+      '<div><span class="crono-field-label">Unit</span><input type="text" class="f-unit" value="' + (metric.unit || '') + '"></div>' +
+      '<div><span class="crono-field-label">Min</span><input type="number" class="f-min" value="' + (metric.min == null ? '' : metric.min) + '" placeholder="—"></div>' +
+      '<div><span class="crono-field-label">Max</span><input type="number" class="f-max" value="' + (metric.max == null ? '' : metric.max) + '" placeholder="—"></div>' +
+      '<div><span class="crono-field-label">Points</span><input type="number" class="f-weight" value="' + (metric.weight || 0) + '"></div>' +
+      '<button type="button" class="crono-metric-del" aria-label="Remove">×</button>';
+    if (!metric.patterns && metric.group === 'other') {
+      const matchWrap = document.createElement('div');
+      matchWrap.style.gridColumn = '1 / -1';
+      matchWrap.innerHTML = '<span class="crono-field-label">CSV column contains</span><input type="text" class="f-match" value="' + (metric.matchText || '') + '" placeholder="e.g. vitamin d">';
+      row.appendChild(matchWrap);
+    }
+    row.querySelector('.crono-metric-del').addEventListener('click', () => {
+      row.remove();
+      updateWeightTotal();
+    });
+    row.querySelectorAll('.f-weight').forEach((el) => el.addEventListener('input', updateWeightTotal));
+    return row;
+  }
+
+  function updateWeightTotal() {
+    let sum = 0;
+    metricTable.querySelectorAll('.f-weight').forEach((el) => { sum += Number(el.value) || 0; });
+    weightTotalVal.textContent = sum + ' / 100';
+    weightTotalWrap.classList.toggle('is-ok', sum === 100);
+    weightTotalWrap.classList.toggle('is-off', sum !== 100);
+  }
+
+  function openModal() {
+    metricTable.innerHTML = '';
+    targets.metrics.forEach((m) => metricTable.appendChild(metricRowEl(m)));
+    updateWeightTotal();
+    modalBg.classList.add('show');
+  }
+  function closeModal() { modalBg.classList.remove('show'); }
+
+  settingsBtn.addEventListener('click', openModal);
+  document.getElementById('cronoCloseModalBtn').addEventListener('click', closeModal);
+  modalBg.addEventListener('click', (e) => { if (e.target === modalBg) closeModal(); });
+
+  document.getElementById('cronoAddMetricBtn').addEventListener('click', () => {
+    const blank = Crono.makeCustomMetric({ label: '', unit: 'g', kind: 'range', min: '', max: '', weight: 0, matchText: '' });
+    metricTable.appendChild(metricRowEl(blank));
+    updateWeightTotal();
+  });
+
+  document.getElementById('cronoResetTargetsBtn').addEventListener('click', () => {
+    targets = Crono.resetTargets();
+    openModal();
+  });
+
+  document.getElementById('cronoSaveTargetsBtn').addEventListener('click', () => {
+    const rows = Array.from(metricTable.querySelectorAll('.crono-metric-row'));
+    const metrics = [];
+    rows.forEach((row) => {
+      const label = row.querySelector('.f-label').value.trim();
+      if (!label) return; // skip empty rows
+      const unit = row.querySelector('.f-unit').value.trim();
+      const minRaw = row.querySelector('.f-min').value;
+      const maxRaw = row.querySelector('.f-max').value;
+      const weight = Number(row.querySelector('.f-weight').value) || 0;
+      const min = minRaw === '' ? null : Number(minRaw);
+      const max = maxRaw === '' ? null : Number(maxRaw);
+      const kind = min != null && max != null ? 'range' : (max != null ? 'max' : 'min');
+      const isBuiltin = row.dataset.builtin === '1';
+      const matchInput = row.querySelector('.f-match');
+
+      if (isBuiltin) {
+        const original = Crono.DEFAULT_METRICS.find((m) => m.id === row.dataset.id);
+        metrics.push(Object.assign({}, original, { label, unit, min, max, weight, kind: original.kind }));
+      } else {
+        metrics.push(Crono.makeCustomMetric({
+          label, unit, kind, min, max, weight,
+          matchText: matchInput ? matchInput.value.trim() : label,
+        }));
+      }
+    });
+    targets = { metrics };
+    Crono.saveTargets(targets);
+    closeModal();
+    if (data && dateSel.value) renderForDate(dateSel.value);
+  });
+
+  loadAndRender();
+});
 </script>
 <script>
 document.addEventListener('DOMContentLoaded', function () {

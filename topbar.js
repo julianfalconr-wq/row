@@ -160,9 +160,6 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
   <a href="finance.html" class="topbar-icon-btn" id="topbarFinance" aria-label="Finance">
     <span class="topbar-icon">📊</span>
   </a>
-  <a href="cronometer.html" class="topbar-icon-btn" id="topbarCronometer" aria-label="Cronometer">
-    <span class="topbar-icon">🍽️</span>
-  </a>
 </header>`;
 
   const bottombarHtml = `
