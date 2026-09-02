@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#050506">
+<title>Cronometer · Dashboard</title>
+<script src="topbar.js" defer></script>
+<style>
+:root {
+  --text-primary: #FAFAFA;
+  --text-secondary: #B8B6B0;
+  --text-tertiary: #76746E;
+  --success: #6BE3A4;
+  --warning: #F2C063;
+  --danger:  #FF6B6B;
+  --font: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; padding: 0;
+  background: #050506;
+  color: var(--text-secondary);
+  font-family: var(--font);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-text-size-adjust: 100%;
+}
+body {
+  min-height: 100vh;
+  position: relative;
+  overflow-x: hidden;
+  padding: max(28px, env(safe-area-inset-top)) 20px 60px;
+}
+body::before {
+  content: '';
+  position: fixed; inset: 0;
+  background:
+    radial-gradient(circle at 82% 14%, rgba(224, 118, 88, 0.16), transparent 45%),
+    radial-gradient(circle at 18% 90%, rgba(180, 180, 200, 0.06), transparent 50%);
+  filter: blur(40px);
+  pointer-events: none;
+  z-index: -2;
+  animation: drift 36s ease-in-out infinite alternate;
+}
+body::after {
+  content: '';
+  position: fixed; inset: 0;
+  background-image: radial-gradient(rgba(255,255,255,0.014) 1px, transparent 1px);
+  background-size: 3px 3px;
+  pointer-events: none;
+  z-index: -1;
+}
+@keyframes drift {
+  0%   { transform: translate3d(0,0,0); }
+  100% { transform: translate3d(-22px, 14px, 0); }
+}
+
+.page { max-width: 1100px; margin: 0 auto; }
+
+.dash-title {
+  margin: 0 0 14px;
+  font-size: 28px; font-weight: 700;
+  letter-spacing: -0.025em;
+  background: linear-gradient(180deg, #FFFFFF 0%, #C7C4BC 120%);
+  -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent; color: transparent;
+}
+@media (max-width: 480px) { .dash-title { font-size: 22px; } }
+
+.section { margin-top: 8px; }
+.section-title {
+  font-size: 10.5px; font-weight: 700;
+  letter-spacing: 0.18em; text-transform: uppercase;
+  color: var(--text-tertiary);
+  display: flex; align-items: center; gap: 12px;
+  margin-bottom: 12px;
+}
+.section-title::before {
+  content: ''; width: 18px; height: 1px;
+  background: var(--text-tertiary); opacity: 0.6;
+}
+.section-title::after {
+  content: ''; flex: 1; height: 1px;
+  background: linear-gradient(90deg, rgba(255,255,255,0.08), transparent);
+}
+
+.gm-card {
+  position: relative;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 16px;
+  padding: 20px;
+  margin-bottom: 14px;
+  backdrop-filter: blur(24px) saturate(1.2);
+  -webkit-backdrop-filter: blur(24px) saturate(1.2);
+  box-shadow: 0 12px 40px rgba(0,0,0,0.45);
+  overflow: hidden;
+}
+
+.gm-eyebrow {
+  font-size: 10.5px; font-weight: 700;
+  letter-spacing: 0.18em; text-transform: uppercase;
+  color: var(--text-tertiary); margin-bottom: 10px;
+}
+
+.gm-input-wrap {
+  display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+}
+.gm-input {
+  flex: 1; min-width: 160px;
+  padding: 11px 14px;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 12px; background: rgba(0,0,0,0.28);
+  color: var(--text-primary);
+  font-family: inherit; font-size: 14px; outline: none;
+  transition: border-color 0.2s, background 0.2s;
+}
+.gm-input::placeholder { color: var(--text-tertiary); }
+.gm-input:focus { border-color: rgba(255,255,255,0.28); background: rgba(0,0,0,0.36); }
+
+.gm-add {
+  padding: 11px 20px; border: 0; border-radius: 12px;
+  background: linear-gradient(180deg, #FFFFFF 0%, #E8E5DD 100%);
+  color: #0A0A0B; font-family: inherit; font-size: 13px; font-weight: 700;
+  cursor: pointer; white-space: nowrap;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.9),
+    0 2px 8px rgba(0,0,0,0.35),
+    0 8px 22px rgba(0,0,0,0.25);
+  transition: transform 0.1s, filter 0.15s, opacity 0.15s;
+}
+.gm-add:hover { filter: brightness(1.06); transform: translateY(-1px); }
+.gm-add:active { transform: translateY(0); }
+.gm-add:disabled { opacity: 0.4; cursor: not-allowed; filter: none; transform: none; }
+
+.gm-ghost {
+  padding: 11px 18px;
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 12px; background: rgba(255,255,255,0.04);
+  color: var(--text-primary);
+  font-family: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.gm-ghost:hover { background: rgba(255,255,255,0.07); border-color: rgba(255,255,255,0.18); }
+
+.secret-status {
+  margin-top: 8px;
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+}
+.secret-status.is-set { color: var(--success); }
+
+/* Dropzone */
+.dropzone {
+  border: 1.5px dashed rgba(255,255,255,0.16);
+  border-radius: 14px;
+  padding: 34px 20px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.dropzone:hover, .dropzone.is-drag {
+  border-color: rgba(107,227,164,0.5);
+  background: rgba(107,227,164,0.04);
+}
+.dropzone-icon { font-size: 26px; margin-bottom: 8px; }
+.dropzone-title { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+.dropzone-sub { font-size: 12px; color: var(--text-tertiary); margin-top: 4px; }
+.dropzone input[type="file"] { display: none; }
+
+.file-chip {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; margin-top: 12px;
+  padding: 10px 14px;
+  background: rgba(255,255,255,0.035);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 12px;
+  font-size: 13px; color: var(--text-primary);
+}
+.file-chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-chip-clear {
+  border: 0; background: transparent; color: var(--text-tertiary);
+  font-size: 16px; cursor: pointer; padding: 0 4px; flex-shrink: 0;
+}
+.file-chip-clear:hover { color: var(--danger); }
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+.stat {
+  background: rgba(255,255,255,0.035);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 12px; padding: 14px;
+}
+.stat-num {
+  font-size: 22px; font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em; color: var(--text-primary); line-height: 1;
+}
+.stat-label {
+  margin-top: 6px;
+  font-size: 10.5px; font-weight: 600;
+  letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.preview-wrap {
+  margin-top: 14px;
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 12px;
+  overflow: auto;
+  max-height: 320px;
+}
+table.preview {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+table.preview th, table.preview td {
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+table.preview th {
+  position: sticky; top: 0;
+  background: #0f0f11;
+  color: var(--text-tertiary);
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+}
+table.preview td { color: var(--text-secondary); }
+
+.gm-status {
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  min-height: 16px;
+}
+.gm-status.is-error { color: var(--danger); }
+.gm-status.is-ok { color: var(--success); }
+
+.empty-state {
+  text-align: center; font-size: 12px; font-style: italic;
+  color: var(--text-tertiary); padding: 14px 0;
+}
+
+@media (max-width: 480px) {
+  body { padding: max(20px, env(safe-area-inset-top)) 14px 50px; }
+  .gm-card { padding: 16px; }
+}
+</style>
+</head>
+<body>
+<div class="page">
+
+  <h1 class="dash-title">Cronometer</h1>
+
+  <div class="section">
+    <div class="section-title">Dashboard Secret</div>
+    <div class="gm-card">
+      <div class="gm-eyebrow">Required to sync</div>
+      <div class="gm-input-wrap">
+        <input id="secretInput" class="gm-input" type="password"
+               placeholder="Paste your DASHBOARD_SECRET…" autocomplete="off">
+        <button id="secretSaveBtn" class="gm-add" type="button">Save</button>
+      </div>
+      <div id="secretStatus" class="secret-status">Not set — saved only in this browser.</div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Import Diary Export</div>
+    <div class="gm-card">
+      <div class="gm-eyebrow">
+        In Cronometer: Settings → Export Data → download your diary CSV, then drop it below.
+      </div>
+
+      <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="Choose or drop a CSV file">
+        <div class="dropzone-icon">📄</div>
+        <div class="dropzone-title">Drop your Cronometer CSV here</div>
+        <div class="dropzone-sub">or click to browse — .csv only</div>
+        <input id="fileInput" type="file" accept=".csv,text/csv">
+      </div>
+
+      <div id="fileChip" class="file-chip" style="display:none">
+        <span class="file-chip-name" id="fileChipName"></span>
+        <button class="file-chip-clear" id="fileClearBtn" type="button" aria-label="Remove file">×</button>
+      </div>
+
+      <div id="statGrid" class="stat-grid" style="display:none">
+        <div class="stat"><div class="stat-num" id="statRows">0</div><div class="stat-label">Rows</div></div>
+        <div class="stat"><div class="stat-num" id="statCols">0</div><div class="stat-label">Columns</div></div>
+        <div class="stat"><div class="stat-num" id="statRange">—</div><div class="stat-label">Date range (best-effort)</div></div>
+      </div>
+
+      <div id="previewWrap" class="preview-wrap" style="display:none">
+        <table class="preview" id="previewTable"></table>
+      </div>
+
+      <div class="gm-input-wrap" style="margin-top:16px">
+        <button id="syncBtn" class="gm-add" type="button" disabled>Sync now</button>
+        <button id="lastSyncBtn" class="gm-ghost" type="button">Check last sync</button>
+      </div>
+      <div id="status" class="gm-status"></div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  const SECRET_KEY = 'dashboard:secret';
+  const API = '/api/cronometer-data';
+
+  const secretInput  = document.getElementById('secretInput');
+  const secretSaveBtn = document.getElementById('secretSaveBtn');
+  const secretStatus = document.getElementById('secretStatus');
+
+  const dropzone   = document.getElementById('dropzone');
+  const fileInput  = document.getElementById('fileInput');
+  const fileChip   = document.getElementById('fileChip');
+  const fileChipName = document.getElementById('fileChipName');
+  const fileClearBtn = document.getElementById('fileClearBtn');
+
+  const statGrid  = document.getElementById('statGrid');
+  const statRows  = document.getElementById('statRows');
+  const statCols  = document.getElementById('statCols');
+  const statRange = document.getElementById('statRange');
+
+  const previewWrap  = document.getElementById('previewWrap');
+  const previewTable = document.getElementById('previewTable');
+
+  const syncBtn     = document.getElementById('syncBtn');
+  const lastSyncBtn = document.getElementById('lastSyncBtn');
+  const statusEl    = document.getElementById('status');
+
+  let parsed = null; // { headers, rows, source }
+
+  // ---------- secret ----------
+  function getSecret() {
+    try { return localStorage.getItem(SECRET_KEY) || ''; } catch (e) { return ''; }
+  }
+  function renderSecretStatus() {
+    const s = getSecret();
+    if (s) {
+      secretStatus.textContent = 'Saved in this browser (' + s.length + ' chars).';
+      secretStatus.classList.add('is-set');
+    } else {
+      secretStatus.textContent = 'Not set — saved only in this browser.';
+      secretStatus.classList.remove('is-set');
+    }
+    updateSyncEnabled();
+  }
+  secretInput.addEventListener('input', () => {}); // no-op, just for clarity
+  secretSaveBtn.addEventListener('click', () => {
+    const v = secretInput.value.trim();
+    try { localStorage.setItem(SECRET_KEY, v); } catch (e) {}
+    secretInput.value = '';
+    renderSecretStatus();
+  });
+  const existingSecret = getSecret();
+  if (existingSecret) secretInput.placeholder = 'Saved — paste a new value to replace it';
+  renderSecretStatus();
+
+  // ---------- CSV parsing (generic, RFC4180-ish) ----------
+  function parseCSV(text) {
+    const rows = [];
+    let row = [], field = '', inQuotes = false;
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (inQuotes) {
+        if (c === '"') {
+          if (text[i + 1] === '"') { field += '"'; i++; }
+          else inQuotes = false;
+        } else field += c;
+      } else if (c === '"') {
+        inQuotes = true;
+      } else if (c === ',') {
+        row.push(field); field = '';
+      } else if (c === '\n' || c === '\r') {
+        if (c === '\r' && text[i + 1] === '\n') i++;
+        row.push(field); field = '';
+        if (row.length > 1 || row[0] !== '') rows.push(row);
+        row = [];
+      } else {
+        field += c;
+      }
+    }
+    if (field !== '' || row.length) { row.push(field); rows.push(row); }
+    if (!rows.length) return { headers: [], objects: [] };
+    const headers = rows[0].map((h) => h.trim());
+    const objects = rows.slice(1)
+      .filter((r) => r.length > 1 || (r[0] !== undefined && r[0] !== ''))
+      .map((r) => {
+        const obj = {};
+        headers.forEach((h, i) => { obj[h || ('col_' + i)] = r[i] !== undefined ? r[i] : ''; });
+        return obj;
+      });
+    return { headers, objects };
+  }
+
+  function detectDateRange(headers, objects) {
+    const dateKey = headers.find((h) => /date|day/i.test(h));
+    if (!dateKey) return '—';
+    let min = null, max = null;
+    objects.forEach((o) => {
+      const d = new Date(o[dateKey]);
+      if (isNaN(d)) return;
+      if (!min || d < min) min = d;
+      if (!max || d > max) max = d;
+    });
+    if (!min || !max) return '—';
+    const fmt = (d) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    return fmt(min) + ' – ' + fmt(max);
+  }
+
+  function renderPreview(headers, objects) {
+    const maxRows = 25;
+    const thead = '<thead><tr>' + headers.map((h) => '<th>' + escapeHtml(h) + '</th>').join('') + '</tr></thead>';
+    const tbody = '<tbody>' + objects.slice(0, maxRows).map((o) =>
+      '<tr>' + headers.map((h) => '<td>' + escapeHtml(String(o[h] == null ? '' : o[h])) + '</td>').join('') + '</tr>'
+    ).join('') + '</tbody>';
+    previewTable.innerHTML = thead + tbody;
+    previewWrap.style.display = objects.length ? 'block' : 'none';
+  }
+
+  function escapeHtml(s) {
+    return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  function handleFile(file) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const text = String(e.target.result || '');
+      const { headers, objects } = parseCSV(text);
+      if (!headers.length || !objects.length) {
+        showStatus('Could not find any rows in that file — is it a CSV?', true);
+        return;
+      }
+      parsed = { headers, rows: objects, source: file.name };
+
+      fileChipName.textContent = file.name;
+      fileChip.style.display = 'flex';
+
+      statRows.textContent = objects.length;
+      statCols.textContent = headers.length;
+      statRange.textContent = detectDateRange(headers, objects);
+      statGrid.style.display = 'grid';
+
+      renderPreview(headers, objects);
+      showStatus('Parsed ' + objects.length + ' row' + (objects.length === 1 ? '' : 's') + ' from ' + file.name + '. Ready to sync.', false, true);
+      updateSyncEnabled();
+    };
+    reader.onerror = () => showStatus('Could not read that file.', true);
+    reader.readAsText(file);
+  }
+
+  dropzone.addEventListener('click', () => fileInput.click());
+  dropzone.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); }
+  });
+  fileInput.addEventListener('change', () => handleFile(fileInput.files[0]));
+  ['dragenter', 'dragover'].forEach((ev) => {
+    dropzone.addEventListener(ev, (e) => { e.preventDefault(); dropzone.classList.add('is-drag'); });
+  });
+  ['dragleave', 'drop'].forEach((ev) => {
+    dropzone.addEventListener(ev, (e) => { e.preventDefault(); dropzone.classList.remove('is-drag'); });
+  });
+  dropzone.addEventListener('drop', (e) => {
+    const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if (file) handleFile(file);
+  });
+  fileClearBtn.addEventListener('click', () => {
+    parsed = null;
+    fileInput.value = '';
+    fileChip.style.display = 'none';
+    statGrid.style.display = 'none';
+    previewWrap.style.display = 'none';
+    showStatus('');
+    updateSyncEnabled();
+  });
+
+  function updateSyncEnabled() {
+    syncBtn.disabled = !(parsed && getSecret());
+  }
+
+  function showStatus(msg, isError, isOk) {
+    statusEl.textContent = msg || '';
+    statusEl.classList.toggle('is-error', !!isError);
+    statusEl.classList.toggle('is-ok', !!isOk);
+  }
+
+  syncBtn.addEventListener('click', async () => {
+    const secret = getSecret();
+    if (!parsed || !secret) return;
+    syncBtn.disabled = true;
+    showStatus('Syncing…');
+    try {
+      const res = await fetch(API, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-dashboard-secret': secret },
+        body: JSON.stringify({ rows: parsed.rows, headers: parsed.headers, source: parsed.source }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json && json.error ? json.error : ('HTTP ' + res.status));
+      showStatus('Synced ' + json.count + ' rows to the dashboard.', false, true);
+    } catch (e) {
+      showStatus('Sync failed: ' + (e.message || String(e)), true);
+    } finally {
+      updateSyncEnabled();
+    }
+  });
+
+  lastSyncBtn.addEventListener('click', async () => {
+    const secret = getSecret();
+    if (!secret) { showStatus('Set your dashboard secret first.', true); return; }
+    showStatus('Checking…');
+    try {
+      const res = await fetch(API, { headers: { 'x-dashboard-secret': secret } });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json && json.error ? json.error : ('HTTP ' + res.status));
+      if (!json.data) { showStatus('No data synced yet.'); return; }
+      const when = json.updated_at ? new Date(json.updated_at).toLocaleString() : 'unknown time';
+      const count = json.data.rows ? json.data.rows.length : 0;
+      showStatus('Last synced: ' + count + ' rows from "' + (json.data.source || 'unknown file') + '" at ' + when + '.', false, true);
+    } catch (e) {
+      showStatus('Check failed: ' + (e.message || String(e)), true);
+    }
+  });
+})();
+</script>
+</body>
+</html>
