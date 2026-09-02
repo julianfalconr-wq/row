@@ -103,7 +103,7 @@ html, body {
   -webkit-font-smoothing: antialiased;
   min-height: 100vh;
 }
-.shell { max-width: 720px; margin: 0 auto; padding: 24px 16px 80px; }
+.shell { max-width: 720px; margin: 0 auto; padding: max(24px, env(safe-area-inset-top)) 16px 80px; }
 
 /* ----- Top day pill + header ----- */
 .day-pill {
@@ -472,7 +472,7 @@ html, body {
 .modal-actions .btn-primary { flex: 1; }
 
 @media (max-width: 480px) {
-  .shell { padding: 16px 12px 60px; }
+  .shell { padding: max(16px, env(safe-area-inset-top)) 12px 60px; }
   .water-num { font-size: 48px; }
 }
 </style>
@@ -1123,7 +1123,7 @@ html, body {
 }
 .modal-bg {
   padding-bottom: max(20px, env(safe-area-inset-bottom));
-  padding-top: max(20px, env(safe-area-inset-top));
+  padding-top: max(24px, env(safe-area-inset-top));
 }
 .modal {
   max-height: calc(88vh - env(safe-area-inset-bottom));

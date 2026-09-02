@@ -110,7 +110,7 @@ body::after {
 .shell {
   max-width: 880px;
   margin: 0 auto;
-  padding: 24px 16px 100px;   /* extra bottom padding so tab bar doesn't cover content */
+  padding: max(24px, env(safe-area-inset-top)) 16px 100px;   /* extra bottom padding so tab bar doesn't cover content */
 }
 
 /* ===== Back to dashboard ===== */

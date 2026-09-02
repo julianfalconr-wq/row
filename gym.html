@@ -144,7 +144,7 @@ html, body {
 .po-shell {
   width: 100%; max-width: min(720px, 100vw);
   margin: 0 auto;
-  padding: 24px 16px calc(40px + env(safe-area-inset-bottom));
+  padding: max(24px, env(safe-area-inset-top)) 16px calc(40px + env(safe-area-inset-bottom));
   box-sizing: border-box;
 }
 /* Defeat the default `min-width: auto` on flex/grid items — without
@@ -697,7 +697,7 @@ img, video, canvas, svg { max-width: 100%; }
 
 @media (max-width: 480px) {
   /* === Mobile / iPhone polish === */
-  .po-shell { padding: 14px 10px calc(32px + env(safe-area-inset-bottom)); }
+  .po-shell { padding: max(14px, env(safe-area-inset-top)) 10px calc(32px + env(safe-area-inset-bottom)); }
 
   /* Header — smaller title so the gear button never gets clipped */
   .po-title { font-size: 18px; letter-spacing: -0.01em; }
