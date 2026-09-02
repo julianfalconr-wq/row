@@ -113,6 +113,10 @@ body::after {
 /* ===== Header ===== */
 .dash-header {
   margin-bottom: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 .dash-title {
   margin: 0;
@@ -127,6 +131,132 @@ body::after {
   color: transparent;
 }
 @media (max-width: 480px) { .dash-title { font-size: 23px; } }
+
+.gear-btn {
+  flex-shrink: 0;
+  width: 42px; height: 42px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  box-shadow: var(--shadow-card);
+  color: var(--text-primary);
+  font-size: 18px;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s, transform 0.12s;
+}
+.gear-btn:hover { filter: brightness(1.15); }
+.gear-btn:active { transform: scale(0.94) rotate(18deg); }
+
+/* ===== Settings modal ===== */
+.modal-bg {
+  display: none; position: fixed; inset: 0;
+  background: rgba(0,0,0,0.65); backdrop-filter: blur(6px);
+  z-index: 200; align-items: center; justify-content: center; padding: 20px;
+}
+.modal-bg.show { display: flex; }
+.modal {
+  width: 100%; max-width: 480px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 22px; max-height: 88vh; overflow-y: auto;
+  box-shadow: var(--shadow-card);
+}
+.modal-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 16px;
+}
+.modal-head h3 { margin: 0; font-size: 17px; font-weight: 700; color: var(--text-primary); }
+.modal-close {
+  width: 30px; height: 30px; border-radius: 50%;
+  border: 1px solid var(--line); background: transparent;
+  color: var(--text-tertiary); font-size: 16px; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.modal-close:hover { color: var(--text-primary); border-color: var(--text-tertiary); }
+
+.set-section { margin-bottom: 20px; }
+.set-section h4 {
+  margin: 0 0 10px; font-size: 10.5px; font-weight: 800;
+  letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-tertiary);
+}
+.field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+.field label { font-size: 11px; color: var(--text-tertiary); font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; }
+.field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.field input[type="number"] {
+  width: 100%;
+  background: var(--inset-bg);
+  border: 1px solid var(--line);
+  color: var(--text-primary);
+  font-family: inherit; font-size: 14px;
+  padding: 10px 12px; border-radius: 10px; outline: none;
+  -moz-appearance: textfield;
+}
+.field input[type="number"]::-webkit-outer-spin-button,
+.field input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.field input:focus { border-color: var(--text-tertiary); }
+
+.seg {
+  display: flex; gap: 4px;
+  background: var(--inset-bg);
+  border: 1px solid var(--line);
+  border-radius: 10px; padding: 3px;
+}
+.seg button {
+  flex: 1; padding: 9px; border: none; background: transparent;
+  color: var(--text-tertiary); border-radius: 7px;
+  font-family: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.seg button.active {
+  background: linear-gradient(180deg, var(--btn-primary-a) 0%, var(--btn-primary-b) 100%);
+  color: var(--btn-primary-text);
+}
+.height-ftin { display: flex; gap: 8px; }
+.height-ftin input { flex: 1; }
+
+.save-btn-row { display: flex; align-items: center; gap: 12px; margin-top: 4px; }
+.save-btn {
+  padding: 11px 22px; border: 0; border-radius: 12px;
+  background: linear-gradient(180deg, var(--btn-primary-a) 0%, var(--btn-primary-b) 100%);
+  color: var(--btn-primary-text);
+  font-family: inherit; font-size: 13px; font-weight: 700; cursor: pointer;
+  transition: transform 0.1s, filter 0.15s;
+}
+.save-btn:hover { filter: brightness(1.06); transform: translateY(-1px); }
+.save-btn:active { transform: translateY(0); }
+.save-confirm {
+  font-size: 12.5px; font-weight: 700; color: var(--success);
+  opacity: 0; transition: opacity 0.3s ease;
+}
+.save-confirm.show { opacity: 1; }
+
+.set-divider {
+  height: 1px; margin: 20px 0;
+  background: linear-gradient(90deg, transparent, var(--line), transparent);
+}
+
+.whoop-mini-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.whoop-mini-status { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.whoop-mini-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-tertiary); }
+.whoop-mini-dot.is-on { background: var(--success); box-shadow: 0 0 8px rgba(23,232,143,0.6); }
+.whoop-mini-sync-note { font-size: 11px; color: var(--text-tertiary); margin-bottom: 10px; }
+.whoop-mini-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px; }
+.whoop-mini-cell {
+  background: var(--inset-bg); border: 1px solid var(--line);
+  border-radius: 10px; padding: 10px; text-align: center;
+}
+.whoop-mini-val { font-size: 18px; font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.whoop-mini-label { margin-top: 4px; font-size: 9px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-tertiary); }
+.whoop-mini-btn {
+  width: 100%; padding: 10px; border-radius: 10px;
+  border: 1px solid var(--line); background: var(--inset-bg);
+  color: var(--text-primary); text-decoration: none; text-align: center; display: block;
+  font-family: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
+}
+.whoop-mini-btn:hover { filter: brightness(1.2); }
+.whoop-mini-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* ===== Bento grid ===== */
 .bento-grid {
@@ -222,6 +352,7 @@ body::after {
 
   <div class="dash-header">
     <h1 class="dash-title">Dashboard</h1>
+    <button type="button" class="gear-btn" id="settingsGearBtn" aria-label="Settings">⚙</button>
   </div>
 
   <div class="bento-grid">
@@ -292,6 +423,391 @@ body::after {
     </a>
   </div>
 
+  <div class="modal-bg" id="settingsModalBg">
+    <div class="modal">
+      <div class="modal-head">
+        <h3>Your Data</h3>
+        <button type="button" class="modal-close" id="settingsModalClose" aria-label="Close">×</button>
+      </div>
+
+      <div class="set-section">
+        <h4>Body</h4>
+
+        <div class="field">
+          <label>Height</label>
+          <div class="field-row">
+            <input type="number" id="setHeightCm" placeholder="cm" step="0.1">
+            <div class="height-ftin" id="setHeightFtIn" style="display:none">
+              <input type="number" id="setHeightFt" placeholder="ft" step="1">
+              <input type="number" id="setHeightIn" placeholder="in" step="0.1">
+            </div>
+            <div class="seg" id="setHeightUnit">
+              <button type="button" data-u="cm">cm</button>
+              <button type="button" data-u="ftin">ft/in</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>Weight</label>
+          <div class="field-row">
+            <input type="number" id="setWeight" placeholder="weight" step="0.1">
+            <div class="seg" id="setWeightUnit">
+              <button type="button" data-u="kg">kg</button>
+              <button type="button" data-u="lb">lb</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="field-row">
+          <div class="field">
+            <label>Age</label>
+            <input type="number" id="setAge" min="1" max="120">
+          </div>
+          <div class="field">
+            <label>Sex</label>
+            <div class="seg" id="setSex">
+              <button type="button" data-s="m">Male</button>
+              <button type="button" data-s="f">Female</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>Active hours / week</label>
+          <input type="number" id="setActivity" min="0" max="80" step="0.5">
+        </div>
+
+        <div class="save-btn-row">
+          <button type="button" class="save-btn" id="settingsSaveBtn">Save</button>
+          <span class="save-confirm" id="settingsSaveConfirm">Saved ✓</span>
+        </div>
+      </div>
+
+      <div class="set-divider"></div>
+
+      <div class="set-section">
+        <h4>Whoop</h4>
+        <div class="whoop-mini-head">
+          <span class="whoop-mini-status">
+            <span class="whoop-mini-dot" id="settingsWhoopDot"></span>
+            <span id="settingsWhoopStatus">Not connected</span>
+          </span>
+        </div>
+        <div class="whoop-mini-sync-note" id="settingsWhoopSyncNote" style="display:none">Last synced —</div>
+        <div class="whoop-mini-grid" id="settingsWhoopGrid" style="display:none">
+          <div class="whoop-mini-cell"><div class="whoop-mini-val" id="settingsWhoopRecovery">—</div><div class="whoop-mini-label">Recovery</div></div>
+          <div class="whoop-mini-cell"><div class="whoop-mini-val" id="settingsWhoopSleep">—</div><div class="whoop-mini-label">Sleep</div></div>
+          <div class="whoop-mini-cell"><div class="whoop-mini-val" id="settingsWhoopRhr">—</div><div class="whoop-mini-label">Rest HR</div></div>
+        </div>
+        <button type="button" class="whoop-mini-btn" id="settingsWhoopSyncBtn">Sync now</button>
+        <a href="health.html" class="whoop-mini-btn" id="settingsWhoopConnectLink" style="display:none">Connect on Health page</a>
+      </div>
+    </div>
+  </div>
+
 </div>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  'use strict';
+
+  // ---------- shared water/profile state (po_water_v1) ----------
+  const WATER_KEY = 'po_water_v1';
+  function defaultWaterState() {
+    return {
+      unit: 'bottle', bottleMl: 500, glassMl: 250, weightUnit: 'kg',
+      profile: { weightKg: 75, age: 25, sex: 'm', activityHrsPerWeek: 5 },
+      caffeineMgPerDay: 200, substances: [], logs: {}
+    };
+  }
+  function loadWaterState() {
+    let s = null;
+    try { s = JSON.parse(localStorage.getItem(WATER_KEY)); } catch (e) {}
+    if (!s || typeof s !== 'object') s = defaultWaterState();
+    s.profile = s.profile || {};
+    return s;
+  }
+  function saveWaterState(s) {
+    try { localStorage.setItem(WATER_KEY, JSON.stringify(s)); } catch (e) {}
+  }
+
+  // ---------- unit conversions ----------
+  const KG_PER_LB = 1 / 2.20462;
+  function kgToLb(kg) { return kg * 2.20462; }
+  function lbToKg(lb) { return lb * KG_PER_LB; }
+  function cmToFtIn(cm) {
+    const totalIn = cm / 2.54;
+    const ft = Math.floor(totalIn / 12);
+    const inch = totalIn - ft * 12;
+    return { ft, inch };
+  }
+  function ftInToCm(ft, inch) { return ((ft || 0) * 12 + (inch || 0)) * 2.54; }
+
+  // ---------- elements ----------
+  const gearBtn   = document.getElementById('settingsGearBtn');
+  const modalBg   = document.getElementById('settingsModalBg');
+  const closeBtn  = document.getElementById('settingsModalClose');
+
+  const heightCmInput = document.getElementById('setHeightCm');
+  const heightFtInWrap = document.getElementById('setHeightFtIn');
+  const heightFtInput = document.getElementById('setHeightFt');
+  const heightInInput = document.getElementById('setHeightIn');
+  const heightUnitSeg = document.getElementById('setHeightUnit');
+
+  const weightInput = document.getElementById('setWeight');
+  const weightUnitSeg = document.getElementById('setWeightUnit');
+
+  const ageInput = document.getElementById('setAge');
+  const sexSeg = document.getElementById('setSex');
+  const activityInput = document.getElementById('setActivity');
+
+  const saveBtn = document.getElementById('settingsSaveBtn');
+  const saveConfirm = document.getElementById('settingsSaveConfirm');
+
+  let heightUnit = 'cm';
+  let weightUnit = 'kg';
+  let sex = 'm';
+
+  function setSegActive(segEl, dataAttr, value) {
+    segEl.querySelectorAll('button').forEach((b) => {
+      b.classList.toggle('active', b.getAttribute(dataAttr) === value);
+    });
+  }
+
+  // ---------- height unit toggle (converts shown value in place) ----------
+  heightUnitSeg.addEventListener('click', (e) => {
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    const next = btn.dataset.u;
+    if (next === heightUnit) return;
+    if (next === 'ftin') {
+      const cm = parseFloat(heightCmInput.value) || 0;
+      const { ft, inch } = cmToFtIn(cm);
+      heightFtInput.value = ft || '';
+      heightInInput.value = inch ? (Math.round(inch * 10) / 10) : '';
+      heightCmInput.style.display = 'none';
+      heightFtInWrap.style.display = 'flex';
+    } else {
+      const ft = parseFloat(heightFtInput.value) || 0;
+      const inch = parseFloat(heightInInput.value) || 0;
+      const cm = ftInToCm(ft, inch);
+      heightCmInput.value = cm ? (Math.round(cm * 10) / 10) : '';
+      heightCmInput.style.display = 'block';
+      heightFtInWrap.style.display = 'none';
+    }
+    heightUnit = next;
+    setSegActive(heightUnitSeg, 'data-u', heightUnit);
+  });
+
+  // ---------- weight unit toggle (converts shown value in place) ----------
+  weightUnitSeg.addEventListener('click', (e) => {
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    const next = btn.dataset.u;
+    if (next === weightUnit) return;
+    const v = parseFloat(weightInput.value);
+    if (!isNaN(v)) {
+      const converted = next === 'lb' ? kgToLb(v) : lbToKg(v);
+      weightInput.value = Math.round(converted * 10) / 10;
+    }
+    weightUnit = next;
+    setSegActive(weightUnitSeg, 'data-u', weightUnit);
+  });
+
+  sexSeg.addEventListener('click', (e) => {
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    sex = btn.dataset.s;
+    setSegActive(sexSeg, 'data-s', sex);
+  });
+
+  // ---------- prefill on open ----------
+  function prefillFromState() {
+    const s = loadWaterState();
+    const p = s.profile || {};
+
+    weightUnit = s.weightUnit === 'lb' ? 'lb' : 'kg';
+    const weightKg = p.weightKg != null ? p.weightKg : 75;
+    weightInput.value = Math.round((weightUnit === 'lb' ? kgToLb(weightKg) : weightKg) * 10) / 10;
+    setSegActive(weightUnitSeg, 'data-u', weightUnit);
+
+    heightUnit = p.heightUnit === 'ftin' ? 'ftin' : 'cm';
+    const heightCm = p.heightCm != null ? p.heightCm : 170;
+    if (heightUnit === 'ftin') {
+      const { ft, inch } = cmToFtIn(heightCm);
+      heightFtInput.value = ft || '';
+      heightInInput.value = inch ? (Math.round(inch * 10) / 10) : '';
+      heightCmInput.style.display = 'none';
+      heightFtInWrap.style.display = 'flex';
+    } else {
+      heightCmInput.value = Math.round(heightCm * 10) / 10;
+      heightCmInput.style.display = 'block';
+      heightFtInWrap.style.display = 'none';
+    }
+    setSegActive(heightUnitSeg, 'data-u', heightUnit);
+
+    ageInput.value = p.age != null ? p.age : 25;
+    sex = (p.sex === 'f') ? 'f' : 'm';
+    setSegActive(sexSeg, 'data-s', sex);
+    activityInput.value = p.activityHrsPerWeek != null ? p.activityHrsPerWeek : 5;
+  }
+
+  // ---------- save (merge into po_water_v1, never touch logs) ----------
+  saveBtn.addEventListener('click', () => {
+    const s = loadWaterState();
+    s.profile = s.profile || {};
+
+    const weightRaw = parseFloat(weightInput.value) || 0;
+    s.profile.weightKg = weightUnit === 'lb' ? lbToKg(weightRaw) : weightRaw;
+    s.weightUnit = weightUnit;
+
+    let heightCm;
+    if (heightUnit === 'ftin') {
+      heightCm = ftInToCm(parseFloat(heightFtInput.value) || 0, parseFloat(heightInInput.value) || 0);
+    } else {
+      heightCm = parseFloat(heightCmInput.value) || 0;
+    }
+    s.profile.heightCm = heightCm;
+    s.profile.heightUnit = heightUnit;
+
+    s.profile.age = parseFloat(ageInput.value) || 0;
+    s.profile.sex = sex;
+    s.profile.activityHrsPerWeek = parseFloat(activityInput.value) || 0;
+
+    saveWaterState(s);
+
+    saveConfirm.classList.add('show');
+    clearTimeout(saveConfirm._t);
+    saveConfirm._t = setTimeout(() => saveConfirm.classList.remove('show'), 1800);
+  });
+
+  // ---------- Whoop mini panel ----------
+  const WHOOP_KEY = 'whoop_tokens_v1';
+  const WHOOP_LAST_SYNC_KEY = 'whoop_last_sync';
+  const whoopDot = document.getElementById('settingsWhoopDot');
+  const whoopStatus = document.getElementById('settingsWhoopStatus');
+  const whoopSyncNote = document.getElementById('settingsWhoopSyncNote');
+  const whoopGrid = document.getElementById('settingsWhoopGrid');
+  const whoopRecovery = document.getElementById('settingsWhoopRecovery');
+  const whoopSleep = document.getElementById('settingsWhoopSleep');
+  const whoopRhr = document.getElementById('settingsWhoopRhr');
+  const whoopSyncBtn = document.getElementById('settingsWhoopSyncBtn');
+  const whoopConnectLink = document.getElementById('settingsWhoopConnectLink');
+
+  function loadWhoopTokens() {
+    try { return JSON.parse(localStorage.getItem(WHOOP_KEY)); } catch (e) { return null; }
+  }
+  function saveWhoopTokens(t) {
+    try { localStorage.setItem(WHOOP_KEY, JSON.stringify(t)); } catch (e) {}
+  }
+  function relativeTime(ts) {
+    if (!ts) return '—';
+    const mins = Math.round((Date.now() - ts) / 60000);
+    if (mins < 1) return 'just now';
+    if (mins < 60) return mins + ' min ago';
+    const hrs = Math.round(mins / 60);
+    if (hrs < 24) return hrs + ' hr ago';
+    return Math.round(hrs / 24) + ' d ago';
+  }
+
+  async function refreshWhoopToken(t) {
+    if (!t.refresh) return null;
+    try {
+      const r = await fetch('/api/whoop-refresh', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: t.refresh }),
+      });
+      const j = await r.json();
+      if (j.access_token) {
+        const next = { access: j.access_token, refresh: j.refresh_token || t.refresh, expires: Date.now() + (j.expires_in || 3500) * 1000 };
+        saveWhoopTokens(next);
+        return next;
+      }
+    } catch (e) {}
+    return null;
+  }
+  async function whoopFetch(path, t) {
+    const [p, qs] = path.split('?');
+    const params = new URLSearchParams(qs || '');
+    params.set('path', p);
+    const r = await fetch('/api/whoop-data?' + params.toString(), {
+      headers: { 'Authorization': 'Bearer ' + t.access, 'Accept': 'application/json' },
+    });
+    if (r.status === 401) {
+      const n = await refreshWhoopToken(t);
+      if (n) return whoopFetch(path, n);
+      throw new Error('unauthorized');
+    }
+    if (!r.ok) throw new Error('WHOOP ' + r.status);
+    return await r.json();
+  }
+
+  function renderWhoopConnectionState() {
+    const t = loadWhoopTokens();
+    const connected = !!(t && t.access);
+    whoopDot.classList.toggle('is-on', connected);
+    whoopStatus.textContent = connected ? 'Connected' : 'Not connected';
+    whoopSyncNote.style.display = connected ? 'block' : 'none';
+    whoopGrid.style.display = connected ? 'grid' : 'none';
+    whoopSyncBtn.style.display = connected ? 'block' : 'none';
+    whoopConnectLink.style.display = connected ? 'none' : 'block';
+    if (connected) {
+      let lastSync = null;
+      try { lastSync = Number(localStorage.getItem(WHOOP_LAST_SYNC_KEY)) || null; } catch (e) {}
+      whoopSyncNote.textContent = 'Last synced ' + relativeTime(lastSync);
+    }
+    return connected;
+  }
+
+  async function syncWhoop() {
+    const t = loadWhoopTokens();
+    if (!t || !t.access) return;
+    whoopSyncBtn.disabled = true;
+    whoopSyncBtn.textContent = 'Syncing…';
+    try {
+      const [rec, sleep] = await Promise.all([
+        whoopFetch('/recovery?limit=1', t).catch(() => null),
+        whoopFetch('/activity/sleep?limit=1', t).catch(() => null),
+      ]);
+      const r = rec && rec.records && rec.records[0] && rec.records[0].score;
+      if (r) {
+        whoopRecovery.textContent = Math.round(r.recovery_score || 0) + '%';
+        whoopRhr.textContent = Math.round(r.resting_heart_rate || 0);
+      }
+      const s = sleep && sleep.records && sleep.records[0] && sleep.records[0].score;
+      if (s) {
+        whoopSleep.textContent = Math.round(s.sleep_performance_percentage || 0) + '%';
+      }
+      try { localStorage.setItem(WHOOP_LAST_SYNC_KEY, String(Date.now())); } catch (e) {}
+      whoopSyncNote.textContent = 'Last synced just now';
+    } catch (e) {
+      whoopSyncNote.textContent = 'Sync failed — try again';
+    } finally {
+      whoopSyncBtn.disabled = false;
+      whoopSyncBtn.textContent = 'Sync now';
+    }
+  }
+  whoopSyncBtn.addEventListener('click', syncWhoop);
+
+  // ---------- modal open/close ----------
+  function openModal() {
+    prefillFromState();
+    const connected = renderWhoopConnectionState();
+    modalBg.classList.add('show');
+    document.body.classList.add('topbar-modal-open');
+    if (connected) syncWhoop();
+  }
+  function closeModal() {
+    modalBg.classList.remove('show');
+    document.body.classList.remove('topbar-modal-open');
+  }
+  gearBtn.addEventListener('click', openModal);
+  closeBtn.addEventListener('click', closeModal);
+  modalBg.addEventListener('click', (e) => { if (e.target === modalBg) closeModal(); });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && modalBg.classList.contains('show')) closeModal();
+  });
+});
+</script>
 </body>
 </html>
