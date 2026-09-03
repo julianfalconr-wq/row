@@ -303,6 +303,81 @@ main {
 }
 .crono-btn-add:hover { color: var(--text-primary); border-color: var(--text-tertiary); }
 
+/* ===== Scan Food with AI ===== */
+.foodscan-embed { margin-top: 56px; }
+@media (max-width: 480px) { .foodscan-embed { margin-top: 40px; } }
+
+.foodscan-picker { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.foodscan-upload-btn {
+  padding: 10px 16px; border-radius: 10px;
+  border: 1px dashed var(--border-strong); background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.foodscan-upload-btn:hover { color: var(--text-primary); border-color: var(--text-tertiary); }
+.foodscan-upload-btn input[type="file"] { display: none; }
+.foodscan-thumb {
+  width: 56px; height: 56px; border-radius: 10px; object-fit: cover;
+  border: 1px solid var(--border-strong); display: none;
+}
+.foodscan-filename {
+  font-size: 12px; color: var(--text-tertiary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 180px;
+}
+
+.foodscan-disclaimer {
+  font-size: 11px; color: var(--text-tertiary); line-height: 1.5;
+  background: var(--bg-secondary); border: 1px solid var(--border);
+  border-radius: 10px; padding: 9px 12px; margin-top: 14px;
+}
+
+.foodscan-status {
+  margin-top: 12px; font-size: 12px; color: var(--text-tertiary); min-height: 16px;
+}
+.foodscan-status.is-error { color: #FF6B6B; }
+.foodscan-status.is-loading { color: var(--accent); }
+
+.foodscan-result {
+  margin-top: 14px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 16px;
+}
+.foodscan-result-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: 10px; margin-bottom: 6px; cursor: pointer;
+}
+.foodscan-result-time {
+  font-family: var(--font-mono); font-size: 10.5px; color: var(--text-tertiary); white-space: nowrap;
+}
+.foodscan-desc { font-size: 13px; color: var(--text-primary); line-height: 1.45; margin-bottom: 12px; }
+.foodscan-nutrient-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(108px, 1fr));
+  gap: 8px;
+}
+.foodscan-result.is-collapsed .foodscan-desc,
+.foodscan-result.is-collapsed .foodscan-nutrient-grid { display: none; }
+.foodscan-nutrient-cell {
+  background: var(--bg-input); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 10px;
+}
+.foodscan-nutrient-val {
+  font-size: 14px; font-weight: 700; color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+.foodscan-nutrient-val.is-empty { color: var(--text-quaternary); font-weight: 500; }
+.foodscan-nutrient-label {
+  margin-top: 3px; font-size: 9px; font-weight: 700;
+  letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-tertiary);
+}
+
+.foodscan-history-title {
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--text-tertiary); margin: 18px 0 10px;
+}
+.foodscan-empty { text-align: center; font-size: 12px; font-style: italic; color: var(--text-tertiary); padding: 10px 0; }
+
 .stack-card {
   background: var(--bg-card);
   border-radius: 16px;
@@ -938,6 +1013,35 @@ main {
       </div>
     </div>
   </div>
+
+  <section id="foodscan" class="foodscan-embed">
+    <div class="section-title">Scan Food with AI</div>
+    <div class="crono-card">
+
+      <div class="foodscan-picker">
+        <label class="foodscan-upload-btn">
+          📷 Take / choose photo
+          <input type="file" id="foodscanFileInput" accept="image/*" capture="environment">
+        </label>
+        <img id="foodscanThumb" class="foodscan-thumb" alt="">
+        <span id="foodscanFilename" class="foodscan-filename"></span>
+        <button type="button" id="foodscanAnalyzeBtn" class="crono-btn-primary" style="display:none">Analyze</button>
+      </div>
+
+      <div class="foodscan-disclaimer">
+        ⚠️ AI estimate from a photo — can have large errors, especially for micros like iodine, manganese, or omega-3. Not added to your Cronometer totals above; this is a separate log.
+      </div>
+
+      <div id="foodscanStatus" class="foodscan-status"></div>
+
+      <div id="foodscanLatest"></div>
+
+      <div id="foodscanHistoryWrap">
+        <div class="foodscan-history-title">History</div>
+        <div id="foodscanHistory"></div>
+      </div>
+    </div>
+  </section>
 
   <section id="water" class="water-embed">
     <div class="section-title">Water Tracker</div>
@@ -1685,6 +1789,213 @@ document.addEventListener('DOMContentLoaded', function () {
   });
 
   loadAndRender();
+});
+</script>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  'use strict';
+
+  const HISTORY_KEY = 'foodscan_history_v1'; // separate from every Cronometer key on purpose
+  const MAX_HISTORY = 20;
+
+  // Fixed 29-nutrient list, in the exact order/spelling requested. Kept as
+  // one source of truth so the rendered grid always shows all of them
+  // (with "—" for anything the model returned null for) in a stable order.
+  const NUTRIENTS = [
+    { id: 'energy',              label: 'Energy',              unit: 'kcal' },
+    { id: 'totalFat',            label: 'Total Fat',           unit: 'g' },
+    { id: 'saturatedFat',        label: 'Saturated Fat',       unit: 'g' },
+    { id: 'transFat',            label: 'Trans Fat',           unit: 'g' },
+    { id: 'cholesterol',         label: 'Cholesterol',         unit: 'mg' },
+    { id: 'sodium',              label: 'Sodium',               unit: 'mg' },
+    { id: 'totalCarbohydrates',  label: 'Total Carbohydrates', unit: 'g' },
+    { id: 'fiber',               label: 'Fiber',               unit: 'g' },
+    { id: 'sugars',              label: 'Sugars',               unit: 'g' },
+    { id: 'addedSugars',         label: 'Added Sugars',        unit: 'g' },
+    { id: 'netCarbs',            label: 'Net Carbs',           unit: 'g' },
+    { id: 'starch',              label: 'Starch',               unit: 'g' },
+    { id: 'fructose',            label: 'Fructose',            unit: 'g' },
+    { id: 'protein',             label: 'Protein',             unit: 'g' },
+    { id: 'water',               label: 'Water',                unit: 'g' },
+    { id: 'vitaminA',            label: 'Vitamin A',           unit: 'mcg' },
+    { id: 'vitaminC',            label: 'Vitamin C',           unit: 'mg' },
+    { id: 'vitaminD',            label: 'Vitamin D',           unit: 'mcg' },
+    { id: 'vitaminE',            label: 'Vitamin E',           unit: 'mg' },
+    { id: 'vitaminK',            label: 'Vitamin K',           unit: 'mcg' },
+    { id: 'calcium',             label: 'Calcium',              unit: 'mg' },
+    { id: 'iron',                label: 'Iron',                 unit: 'mg' },
+    { id: 'potassium',           label: 'Potassium',           unit: 'mg' },
+    { id: 'magnesium',           label: 'Magnesium',           unit: 'mg' },
+    { id: 'manganese',           label: 'Manganese',           unit: 'mg' },
+    { id: 'copper',              label: 'Copper',                unit: 'mg' },
+    { id: 'iodine',              label: 'Iodine',               unit: 'mcg' },
+    { id: 'zinc',                label: 'Zinc',                  unit: 'mg' },
+    { id: 'omega3',              label: 'Omega-3',              unit: 'g' },
+  ];
+
+  const fileInput   = document.getElementById('foodscanFileInput');
+  const thumbEl     = document.getElementById('foodscanThumb');
+  const filenameEl  = document.getElementById('foodscanFilename');
+  const analyzeBtn  = document.getElementById('foodscanAnalyzeBtn');
+  const statusEl    = document.getElementById('foodscanStatus');
+  const latestEl    = document.getElementById('foodscanLatest');
+  const historyEl   = document.getElementById('foodscanHistory');
+
+  let pendingDataUrl = null;
+
+  function loadHistory() {
+    try { return JSON.parse(localStorage.getItem(HISTORY_KEY)) || []; } catch (e) { return []; }
+  }
+  function saveScan(entry) {
+    const h = loadHistory();
+    h.unshift(entry);
+    while (h.length > MAX_HISTORY) h.pop();
+    try { localStorage.setItem(HISTORY_KEY, JSON.stringify(h)); } catch (e) {}
+    return h;
+  }
+
+  function setStatus(msg, kind) {
+    statusEl.textContent = msg || '';
+    statusEl.classList.toggle('is-error', kind === 'error');
+    statusEl.classList.toggle('is-loading', kind === 'loading');
+  }
+
+  // Downscale + re-encode as JPEG before upload — keeps the request small
+  // and reliable (Vercel functions cap request body size) regardless of
+  // how large the original camera photo is.
+  function compressImage(dataUrl, maxDim, quality) {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        let w = img.naturalWidth || img.width;
+        let h = img.naturalHeight || img.height;
+        if (w > maxDim || h > maxDim) {
+          if (w >= h) { h = Math.round(h * (maxDim / w)); w = maxDim; }
+          else { w = Math.round(w * (maxDim / h)); h = maxDim; }
+        }
+        const c = document.createElement('canvas');
+        c.width = w; c.height = h;
+        c.getContext('2d').drawImage(img, 0, 0, w, h);
+        try { resolve(c.toDataURL('image/jpeg', quality)); }
+        catch (e) { resolve(dataUrl); }
+      };
+      img.onerror = () => resolve(dataUrl);
+      img.src = dataUrl;
+    });
+  }
+
+  fileInput.addEventListener('change', () => {
+    const file = fileInput.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      pendingDataUrl = String(e.target.result || '');
+      thumbEl.src = pendingDataUrl;
+      thumbEl.style.display = 'block';
+      filenameEl.textContent = file.name;
+      analyzeBtn.style.display = 'inline-block';
+      setStatus('');
+    };
+    reader.onerror = () => setStatus('Could not read that photo.', 'error');
+    reader.readAsDataURL(file);
+  });
+
+  function fmtVal(v) {
+    if (v == null || v === '') return '—';
+    const n = Number(v);
+    if (isNaN(n)) return String(v);
+    return Math.round(n * 10) / 10;
+  }
+
+  function nutrientGridHtml(nutrients) {
+    return '<div class="foodscan-nutrient-grid">' + NUTRIENTS.map((n) => {
+      const raw = nutrients ? nutrients[n.id] : null;
+      const empty = raw == null || raw === '';
+      return '<div class="foodscan-nutrient-cell">' +
+        '<div class="foodscan-nutrient-val' + (empty ? ' is-empty' : '') + '">' + fmtVal(raw) + (empty ? '' : ' ' + n.unit) + '</div>' +
+        '<div class="foodscan-nutrient-label">' + n.label + '</div>' +
+      '</div>';
+    }).join('') + '</div>';
+  }
+
+  function resultCardHtml(entry, collapsed) {
+    const when = new Date(entry.ts).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    return '<div class="foodscan-result' + (collapsed ? ' is-collapsed' : '') + '">' +
+      '<div class="foodscan-result-head">' +
+        '<strong>' + (collapsed ? '▸' : '▾') + ' ' + escapeHtml(entry.description || 'Scan') + '</strong>' +
+        '<span class="foodscan-result-time">' + when + '</span>' +
+      '</div>' +
+      '<div class="foodscan-desc">' + escapeHtml(entry.description || '') + '</div>' +
+      nutrientGridHtml(entry.nutrients) +
+    '</div>';
+  }
+
+  function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  function renderHistory() {
+    const h = loadHistory();
+    if (!h.length) {
+      latestEl.innerHTML = '';
+      historyEl.innerHTML = '<div class="foodscan-empty">No scans yet — take a photo above to try it.</div>';
+      return;
+    }
+    latestEl.innerHTML = resultCardHtml(h[0], false);
+    latestEl.querySelector('.foodscan-result-head').addEventListener('click', () => {
+      latestEl.querySelector('.foodscan-result').classList.toggle('is-collapsed');
+      const arrow = latestEl.querySelector('.foodscan-result-head strong');
+      arrow.textContent = arrow.textContent.replace(/^./, latestEl.querySelector('.foodscan-result').classList.contains('is-collapsed') ? '▸' : '▾');
+    });
+
+    const rest = h.slice(1);
+    if (!rest.length) { historyEl.innerHTML = ''; return; }
+    historyEl.innerHTML = rest.map((e) => resultCardHtml(e, true)).join('');
+    historyEl.querySelectorAll('.foodscan-result').forEach((card) => {
+      const head = card.querySelector('.foodscan-result-head');
+      head.addEventListener('click', () => {
+        card.classList.toggle('is-collapsed');
+        const arrow = head.querySelector('strong');
+        arrow.textContent = arrow.textContent.replace(/^./, card.classList.contains('is-collapsed') ? '▸' : '▾');
+      });
+    });
+  }
+
+  analyzeBtn.addEventListener('click', async () => {
+    if (!pendingDataUrl) return;
+    analyzeBtn.disabled = true;
+    fileInput.disabled = true;
+    setStatus('Compressing photo…', 'loading');
+    try {
+      const compressed = await compressImage(pendingDataUrl, 1024, 0.8);
+      setStatus('Analyzing photo — this can take a few seconds…', 'loading');
+      const res = await fetch('/api/food-scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: compressed }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.ok) throw new Error((json && json.error) || ('HTTP ' + res.status));
+
+      const entry = { ts: Date.now(), description: json.description || '', nutrients: json.nutrients || {} };
+      saveScan(entry);
+      renderHistory();
+      setStatus('Done.', null);
+
+      pendingDataUrl = null;
+      thumbEl.style.display = 'none';
+      filenameEl.textContent = '';
+      analyzeBtn.style.display = 'none';
+      fileInput.value = '';
+    } catch (e) {
+      setStatus('Scan failed: ' + (e.message || String(e)), 'error');
+    } finally {
+      analyzeBtn.disabled = false;
+      fileInput.disabled = false;
+    }
+  });
+
+  renderHistory();
 });
 </script>
 <script>
