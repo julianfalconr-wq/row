@@ -244,6 +244,110 @@ main {
 .modal h3 { margin: 0 0 4px; font-size: 17px; font-weight: 700; color: var(--text-primary); }
 .modal .modal-sub { font-size: 12px; color: var(--text-tertiary); margin-bottom: 16px; }
 
+/* ----- AI chat FAB + panel -----
+   NOTE: gatherTodayContext() (used below) currently only exists in this
+   file. If the chat button ever needs to appear on other pages too, that
+   function has to move into a shared script (like cronometer-lib.js)
+   first — this button intentionally lives only in health.html for now. */
+.chat-fab {
+  position: fixed;
+  left: 16px;
+  bottom: calc(84px + env(safe-area-inset-bottom));
+  z-index: 200;
+  width: 52px; height: 52px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #08110D;
+  border: none;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.40), inset 0 1px 0 rgba(255,255,255,0.18);
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  transition: transform 0.15s, box-shadow 0.15s, filter 0.15s;
+}
+.chat-fab:hover { filter: brightness(1.08); box-shadow: 0 10px 28px rgba(0,0,0,0.45); }
+.chat-fab:active { transform: scale(0.92); }
+.chat-fab.is-open { display: none; }
+@media (max-width: 480px) {
+  .chat-fab { width: 48px; height: 48px; left: 14px; bottom: calc(80px + env(safe-area-inset-bottom)); }
+}
+
+.modal.chat-modal {
+  display: flex; flex-direction: column;
+  padding: 0;
+  width: 100%; max-width: 480px;
+  height: min(640px, 88vh);
+}
+.chat-modal-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; padding: 16px 18px;
+  border-bottom: 1px solid var(--border-soft);
+  flex-shrink: 0;
+}
+.chat-modal-head h3 { margin: 0; }
+.chat-close-btn {
+  flex-shrink: 0; width: 30px; height: 30px; border-radius: 50%;
+  background: transparent; border: 1px solid var(--border-strong);
+  color: var(--text-tertiary); font-size: 16px; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: color 0.15s, border-color 0.15s;
+}
+.chat-close-btn:hover { color: var(--text-primary); border-color: var(--text-tertiary); }
+
+.chat-messages {
+  flex: 1; overflow-y: auto; min-height: 0;
+  padding: 16px 18px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.chat-empty { text-align: center; font-size: 12px; font-style: italic; color: var(--text-tertiary); padding: 20px 10px; }
+.chat-bubble {
+  max-width: 82%;
+  padding: 10px 14px;
+  border-radius: 14px;
+  font-size: 13.5px; line-height: 1.5;
+  white-space: pre-wrap; word-break: break-word;
+}
+.chat-bubble.user {
+  align-self: flex-end;
+  background: var(--accent); color: #08110D;
+  border-bottom-right-radius: 4px;
+}
+.chat-bubble.assistant {
+  align-self: flex-start;
+  background: var(--bg-secondary); border: 1px solid var(--border);
+  color: var(--text-primary);
+  border-bottom-left-radius: 4px;
+}
+.chat-bubble.error {
+  align-self: center;
+  background: rgba(255,107,107,0.08); border: 1px solid rgba(255,107,107,0.28);
+  color: #FF8A8A; font-size: 12px; max-width: 90%;
+}
+.chat-bubble.typing { align-self: flex-start; color: var(--text-tertiary); font-style: italic; }
+
+.chat-input-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 12px 14px;
+  border-top: 1px solid var(--border-soft);
+  flex-shrink: 0;
+}
+.chat-input {
+  flex: 1; min-width: 0;
+  background: var(--bg-input); border: 1px solid var(--border);
+  border-radius: 20px; padding: 10px 16px;
+  color: var(--text-primary); font-family: inherit; font-size: 13.5px;
+  outline: none;
+}
+.chat-input:focus { border-color: var(--accent); }
+.chat-send-btn {
+  flex-shrink: 0; width: 40px; height: 40px; border-radius: 50%;
+  background: var(--accent); color: #08110D; border: none;
+  cursor: pointer; font-size: 16px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  transition: transform 0.1s, opacity 0.15s;
+}
+.chat-send-btn:active { transform: scale(0.92); }
+.chat-send-btn:disabled { opacity: 0.4; cursor: default; }
+
 .crono-weight-total {
   display: flex; align-items: center; justify-content: space-between;
   padding: 10px 14px; border-radius: 10px; margin-bottom: 14px;
@@ -1054,6 +1158,31 @@ main {
   </section>
 
   <div class="attribution">// editable template · all data stays in your browser</div>
+
+  <!-- AI chat FAB — see gatherTodayContext() near the end of this file's
+       scripts for the data it sends, and /api/chat.js for the endpoint. -->
+  <button type="button" class="chat-fab" id="chatFab" aria-label="Ask the assistant about today">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <path d="M12 2.5c.4 0 .74.27.85.65l1.2 4.2 4.2 1.2c.38.11.65.45.65.85s-.27.74-.65.85l-4.2 1.2-1.2 4.2c-.11.38-.45.65-.85.65s-.74-.27-.85-.65l-1.2-4.2-4.2-1.2A.9.9 0 0 1 5 9.4c0-.4.27-.74.65-.85l4.2-1.2 1.2-4.2c.11-.38.45-.65.85-.65Z"/>
+      <path d="M19 14.5c.32 0 .6.22.68.53l.42 1.62 1.62.42a.7.7 0 0 1 0 1.36l-1.62.42-.42 1.62a.7.7 0 0 1-1.36 0l-.42-1.62-1.62-.42a.7.7 0 0 1 0-1.36l1.62-.42.42-1.62a.7.7 0 0 1 .68-.53Z"/>
+    </svg>
+  </button>
+
+  <div class="modal-bg" id="chatModalBg">
+    <div class="modal chat-modal">
+      <div class="chat-modal-head">
+        <h3>Ask about today</h3>
+        <button type="button" class="chat-close-btn" id="chatCloseBtn" aria-label="Close">×</button>
+      </div>
+      <div class="chat-messages" id="chatMessages">
+        <div class="chat-empty" id="chatEmpty">Ask about your nutrition, workouts, recovery, or anything else tracked on this dashboard today.</div>
+      </div>
+      <div class="chat-input-row">
+        <input type="text" id="chatInput" class="chat-input" placeholder="Ask a question…" autocomplete="off">
+        <button type="button" id="chatSendBtn" class="chat-send-btn" aria-label="Send">↑</button>
+      </div>
+    </div>
+  </div>
 </main>
 
 <script>
@@ -2236,6 +2365,160 @@ window.gatherTodayContext = async function gatherTodayContext() {
     dailyStack,
   };
 };
+</script>
+
+<script>
+// =============================================================
+// AI chat FAB + panel. Talks to /api/chat.js (not modified here —
+// see that file's own header comment for the exact contract this
+// mirrors). Depends on window.gatherTodayContext(), defined just
+// above in this same file — see the note on .chat-fab in <style>
+// if this ever needs to move to a page without that function.
+// =============================================================
+document.addEventListener('DOMContentLoaded', function () {
+  'use strict';
+
+  const HISTORY_KEY = 'chat_history_v1'; // { date: 'YYYY-MM-DD', history: [...] }
+  const SECRET_KEY = 'dashboard:secret'; // same key cronometer-lib.js already uses
+
+  const fab = document.getElementById('chatFab');
+  const modalBg = document.getElementById('chatModalBg');
+  const closeBtn = document.getElementById('chatCloseBtn');
+  const messagesEl = document.getElementById('chatMessages');
+  const emptyEl = document.getElementById('chatEmpty');
+  const input = document.getElementById('chatInput');
+  const sendBtn = document.getElementById('chatSendBtn');
+
+  function todayKey() {
+    const d = new Date();
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+
+  // Reset whenever the stored date doesn't match today, so history never
+  // grows across days — cross-day memory is handled server-side by
+  // /api/chat.js's own memory tool, not by this conversation history.
+  function loadHistory() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(HISTORY_KEY));
+      if (raw && raw.date === todayKey() && Array.isArray(raw.history)) return raw.history;
+    } catch (e) {}
+    return [];
+  }
+  function saveHistory(history) {
+    try { localStorage.setItem(HISTORY_KEY, JSON.stringify({ date: todayKey(), history })); } catch (e) {}
+  }
+
+  let history = loadHistory();
+
+  // Assistant turns store the raw Anthropic content array (text blocks,
+  // and sometimes tool_use blocks from the memory tool) — extract just
+  // the text for display. User turns we construct ourselves as a plain
+  // string. Tool-result turns (role:'user', content: an array) are
+  // internal plumbing from the memory-tool loop, not real messages, so
+  // they render nothing.
+  function contentToText(content) {
+    if (typeof content === 'string') return content;
+    if (Array.isArray(content)) {
+      const textBlock = content.find((b) => b && b.type === 'text');
+      return textBlock ? textBlock.text : '';
+    }
+    return '';
+  }
+
+  function addBubble(role, text) {
+    emptyEl.style.display = 'none';
+    const el = document.createElement('div');
+    el.className = 'chat-bubble ' + role;
+    el.textContent = text;
+    messagesEl.appendChild(el);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    return el;
+  }
+
+  function renderHistory() {
+    messagesEl.innerHTML = '';
+    messagesEl.appendChild(emptyEl);
+    let shown = 0;
+    history.forEach((turn) => {
+      if (turn.role === 'user' && typeof turn.content === 'string') {
+        addBubble('user', turn.content); shown++;
+      } else if (turn.role === 'assistant') {
+        const text = contentToText(turn.content);
+        if (text) { addBubble('assistant', text); shown++; }
+      }
+    });
+    emptyEl.style.display = shown ? 'none' : 'block';
+  }
+
+  function openPanel() {
+    modalBg.classList.add('show');
+    fab.classList.add('is-open');
+    renderHistory();
+    setTimeout(() => input.focus(), 50);
+  }
+  function closePanel() {
+    modalBg.classList.remove('show');
+    fab.classList.remove('is-open');
+  }
+
+  fab.addEventListener('click', openPanel);
+  closeBtn.addEventListener('click', closePanel);
+  modalBg.addEventListener('click', (e) => { if (e.target === modalBg) closePanel(); });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && modalBg.classList.contains('show')) closePanel();
+  });
+
+  async function sendMessage() {
+    const text = input.value.trim();
+    if (!text) return;
+
+    // If the stored day rolled over since this panel was last opened,
+    // start fresh rather than silently mixing yesterday's turns in.
+    if (history.length && loadHistory().length === 0) history = [];
+
+    addBubble('user', text);
+    input.value = '';
+    input.disabled = true;
+    sendBtn.disabled = true;
+
+    const typingEl = addBubble('assistant typing', 'Thinking…');
+
+    let secret = '';
+    try { secret = localStorage.getItem(SECRET_KEY) || ''; } catch (e) {}
+
+    try {
+      const todayContext = typeof window.gatherTodayContext === 'function'
+        ? await window.gatherTodayContext()
+        : null;
+
+      const res = await fetch('/api/chat?secret=' + encodeURIComponent(secret), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: text, history, todayContext }),
+      });
+      const json = await res.json();
+      typingEl.remove();
+
+      if (!res.ok) throw new Error(json && json.error ? json.error : ('HTTP ' + res.status));
+
+      history = Array.isArray(json.history) ? json.history : history;
+      saveHistory(history);
+      addBubble('assistant', json.reply || '(no reply)');
+    } catch (e) {
+      typingEl.remove();
+      addBubble('error', "Couldn't reach the assistant, try again. (" + (e.message || String(e)) + ')');
+    } finally {
+      input.disabled = false;
+      sendBtn.disabled = false;
+      input.focus();
+    }
+  }
+
+  sendBtn.addEventListener('click', sendMessage);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); sendMessage(); }
+  });
+});
 </script>
 
 </body>
