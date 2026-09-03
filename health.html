@@ -176,9 +176,11 @@ main {
   color: var(--text-tertiary);
   font-size: 15px; cursor: pointer;
   display: inline-flex; align-items: center; justify-content: center;
+  text-decoration: none;
   transition: color 0.15s, border-color 0.15s;
 }
 .crono-settings-btn:hover { color: var(--text-primary); border-color: var(--text-tertiary); }
+.crono-header-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 
 .crono-energy-row {
   display: flex; align-items: center; gap: 20px;
@@ -949,7 +951,10 @@ main {
       <div id="cronoContent" style="display:none">
         <div class="crono-header">
           <select id="cronoDateSelect" class="crono-date-select"></select>
-          <button id="cronoSettingsBtn" class="crono-settings-btn" type="button" aria-label="Configure targets">⚙</button>
+          <div class="crono-header-actions">
+            <a href="cronometer.html" class="crono-settings-btn" aria-label="Sync Cronometer data">⟳</a>
+            <button id="cronoSettingsBtn" class="crono-settings-btn" type="button" aria-label="Configure targets">⚙</button>
+          </div>
         </div>
 
         <div class="crono-energy-row">
