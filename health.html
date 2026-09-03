@@ -2015,5 +2015,228 @@ document.addEventListener('DOMContentLoaded', function () {
 });
 </script>
 
+<script>
+// =============================================================
+// gatherTodayContext() — collects a compact snapshot of today's
+// data from every area of the app and returns it as one object,
+// meant to be sent as "todayContext" on every /api/chat call.
+//
+// Reads localStorage directly (all pages share one origin, so
+// health.html can read keys "owned" by gym.html/finance.html/etc.
+// without those pages being open). Every top-level section key is
+// always present — sections with nothing to report use null/empty
+// values rather than being omitted, so the assistant knows the
+// section exists even when there's no data yet.
+//
+// Every key/shape here was confirmed against the actual current
+// code in gym.html, finance.html, cronometer-lib.js, and health.html
+// itself — not assumed. See the inline comments for exactly where
+// each one comes from.
+// =============================================================
+window.gatherTodayContext = async function gatherTodayContext() {
+  // ---------- shared date helpers ----------
+  // Cronometer + Daily Stack use a 6am rollover (matches getActiveDate()
+  // in this file's own Daily Stack script + cronometer-lib.js).
+  function activeDateKey() {
+    const now = new Date();
+    if (now.getHours() < 6) now.setDate(now.getDate() - 1);
+    return now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
+  }
+  // gym.html's wtDateKey() uses a plain calendar date, no rollover.
+  function calendarDateKey(d) {
+    d = d || new Date();
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+  function safeParse(key, fallback) {
+    try { const v = JSON.parse(localStorage.getItem(key)); return v == null ? fallback : v; }
+    catch (e) { return fallback; }
+  }
+  function round1(n) { return n == null ? null : Math.round(n * 10) / 10; }
+
+  const todayKey = activeDateKey();
+  const gymTodayKey = calendarDateKey();
+
+  // ---------- 1 & 2. Nutrition + goals/targets (Cronometer section) ----------
+  // Reuses window.CronoLib exactly as the Cronometer section itself does
+  // (see cronoLib usage around line ~1580 in this file).
+  let nutrition = { connected: false, date: null, totals: null, score: null };
+  let goals = { metrics: null };
+  if (window.CronoLib) {
+    const targets = window.CronoLib.loadTargets();
+    goals.metrics = (targets.metrics || []).map((m) => ({
+      id: m.id, label: m.label, unit: m.unit, kind: m.kind, min: m.min, max: m.max, weight: m.weight,
+    }));
+    try {
+      const result = await window.CronoLib.fetchCronometerData();
+      if (result && result.ok && result.rows && result.rows.length) {
+        const dates = window.CronoLib.listAvailableDates(result.rows, result.headers) || [];
+        // Prefer an exact match for today; otherwise the most recent synced date.
+        const dateKey = dates.includes(todayKey) ? todayKey : (dates[0] || null);
+        if (dateKey) {
+          const totals = window.CronoLib.sumNutrientsForDate(result.rows, result.headers, dateKey, targets);
+          totals.supplements = window.CronoLib.getStackCompletionForDate(dateKey);
+          const scored = window.CronoLib.computeScore(totals, targets);
+          nutrition = {
+            connected: true,
+            date: dateKey,
+            totals: Object.keys(totals).reduce((o, k) => { o[k] = round1(totals[k]); return o; }, {}),
+            score: scored ? scored.score : null,
+          };
+        }
+      }
+    } catch (e) { /* leave nutrition at its not-connected default */ }
+  }
+
+  // ---------- 3. Recent AI food scans ----------
+  // Same key + shape as the Scan Food with AI section above:
+  // foodscan_history_v1 = [{ ts, description, nutrients }, ...], newest first.
+  const scanHistory = safeParse('foodscan_history_v1', []);
+  const foodScans = {
+    count: Array.isArray(scanHistory) ? scanHistory.length : 0,
+    recent: (Array.isArray(scanHistory) ? scanHistory.slice(0, 3) : []).map((s) => ({
+      ts: s.ts, description: s.description || '', nutrients: s.nutrients || {},
+    })),
+  };
+
+  // ---------- 4. Gym / workouts ----------
+  // po_coach_v1: { exercises:[{id,name,...}], logs:{ [exId]: [{weight,reps,date}] } }
+  // po_coach_workout_done: { [dateKey]: isoTimestamp }
+  // po_coach_weights: [{ dateKey, weight }]
+  // po_coach_photos: [{ id, url|dataUrl, dateKey, weight }] — photo data itself is never read here.
+  const pcState = safeParse('po_coach_v1', null);
+  const doneDays = safeParse('po_coach_workout_done', {});
+  const bodyWeights = safeParse('po_coach_weights', []);
+  const photos = safeParse('po_coach_photos', []);
+
+  const exById = {};
+  if (pcState && Array.isArray(pcState.exercises)) {
+    pcState.exercises.forEach((ex) => { exById[ex.id] = ex.name; });
+  }
+
+  const todaysSets = [];
+  const recentWorkoutsByDay = {}; // dateKey -> { sets, exercises: Set }
+  if (pcState && pcState.logs) {
+    const sevenDaysAgo = new Date(); sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    Object.keys(pcState.logs).forEach((exId) => {
+      (pcState.logs[exId] || []).forEach((log) => {
+        const dk = String(log.date || '').slice(0, 10);
+        if (!dk) return;
+        if (dk === gymTodayKey) {
+          todaysSets.push({ exercise: exById[exId] || exId, weight: log.weight, reps: log.reps });
+        }
+        if (new Date(dk) >= sevenDaysAgo) {
+          if (!recentWorkoutsByDay[dk]) recentWorkoutsByDay[dk] = { sets: 0, exercises: new Set() };
+          recentWorkoutsByDay[dk].sets++;
+          recentWorkoutsByDay[dk].exercises.add(exById[exId] || exId);
+        }
+      });
+    });
+  }
+  const recentWorkouts = Object.keys(recentWorkoutsByDay).sort().reverse().map((dk) => ({
+    date: dk,
+    done: !!doneDays[dk],
+    totalSets: recentWorkoutsByDay[dk].sets,
+    exerciseCount: recentWorkoutsByDay[dk].exercises.size,
+  }));
+
+  const latestBodyWeight = Array.isArray(bodyWeights) && bodyWeights.length
+    ? bodyWeights.slice().sort((a, b) => (a.dateKey < b.dateKey ? 1 : -1))[0]
+    : null;
+  const latestPhoto = Array.isArray(photos) && photos.length
+    ? { dateKey: photos[0].dateKey, weight: photos[0].weight } // metadata only, never the image
+    : null;
+
+  const gym = {
+    todayWorkoutDone: !!doneDays[gymTodayKey],
+    todaysSets,
+    recentWorkouts,
+    latestBodyWeight: latestBodyWeight ? { dateKey: latestBodyWeight.dateKey, weight: latestBodyWeight.weight, unit: (pcState && pcState.units) || null } : null,
+    latestProgressPhoto: latestPhoto,
+  };
+
+  // ---------- 5. Whoop ----------
+  // whoop_tokens_v1 / whoop_last_sync are the only two localStorage keys
+  // this app persists for Whoop (see index.html's settings panel + this
+  // file's own Whoop card) — the actual readings are never cached to
+  // localStorage, only rendered into this page's own Whoop card DOM after
+  // a live fetch. Reading that DOM avoids a redundant fetch/refresh here.
+  const whoopTokens = safeParse('whoop_tokens_v1', null);
+  const whoopLastSync = Number(localStorage.getItem('whoop_last_sync')) || null;
+  function domNum(id) {
+    const el = document.getElementById(id);
+    if (!el) return null;
+    const n = parseFloat(el.textContent);
+    return isNaN(n) ? null : n;
+  }
+  function domText(id) {
+    const el = document.getElementById(id);
+    if (!el) return null;
+    const t = el.textContent.trim();
+    return (!t || t === '—') ? null : t;
+  }
+  const whoop = {
+    connected: !!(whoopTokens && whoopTokens.access),
+    lastSyncedMinutesAgo: whoopLastSync ? Math.round((Date.now() - whoopLastSync) / 60000) : null,
+    recoveryPct: domNum('whoopRecovery'),        // '#whoopRecovery' textContent is e.g. "87%"
+    sleepDuration: domText('whoopSleep'),         // '#whoopSleep' textContent is e.g. "7h 32m" (fmtMins), not a %
+    sleepPct: domNum('whoopSleepSub'),            // '#whoopSleepSub' textContent is e.g. "91% perf"
+    hrv: domNum('whoopHrv'),
+    rhr: domNum('whoopRhr'),
+    strain: domNum('whoopStrain'),
+  };
+
+  // ---------- 6. Finance ----------
+  // nw:bank / nw:stocks / nw:crypto / nw:other = [{ name, amount }], amount
+  // stored in CHF (finance.html's base currency) regardless of display
+  // currency. subs = [{ name, amount, period }], amount also CHF-based.
+  const nwCats = ['bank', 'stocks', 'crypto', 'other'];
+  const netWorthByCategory = {};
+  let netWorthTotal = 0;
+  nwCats.forEach((cat) => {
+    const items = safeParse('nw:' + cat, []);
+    const sum = (Array.isArray(items) ? items : []).reduce((s, it) => s + (Number(it.amount) || 0), 0);
+    netWorthByCategory[cat] = round1(sum);
+    netWorthTotal += sum;
+  });
+  const subs = safeParse('subs', []);
+  const subsMonthlyTotal = (Array.isArray(subs) ? subs : []).reduce((s, it) => {
+    const a = Number(it.amount) || 0;
+    if (it.period === 'yearly') return s + a / 12;
+    if (it.period === 'weekly') return s + a * 4.345;
+    return s + a;
+  }, 0);
+  const finance = {
+    currency: localStorage.getItem('nw_currency') || 'CHF',
+    netWorthByCategoryCHF: netWorthByCategory,
+    netWorthTotalCHF: round1(netWorthTotal),
+    subscriptions: { count: Array.isArray(subs) ? subs.length : 0, monthlyTotalCHF: round1(subsMonthlyTotal) },
+  };
+
+  // ---------- 7. Daily Stack (supplements) ----------
+  // Exact same keys the Daily Stack section itself reads: stack:items
+  // (the configured list) + stack:taken:<dateKey> (today's checked-off map).
+  const stackItems = safeParse('stack:items', []);
+  const stackTaken = safeParse('stack:taken:' + todayKey, {});
+  const stackTotal = Array.isArray(stackItems) ? stackItems.length : 0;
+  const stackDone = Array.isArray(stackItems) ? stackItems.filter((i) => i && stackTaken[i.id]).length : 0;
+  const dailyStack = {
+    total: stackTotal,
+    done: stackDone,
+    completionPct: stackTotal ? Math.round((stackDone / stackTotal) * 100) : null,
+  };
+
+  return {
+    date: todayKey,
+    nutrition,
+    goals,
+    foodScans,
+    gym,
+    whoop,
+    finance,
+    dailyStack,
+  };
+};
+</script>
+
 </body>
 </html>
