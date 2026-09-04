@@ -228,7 +228,16 @@ function buildSystemPrompt(todayContext) {
     JSON.stringify(todayContext || {}, null, 2) +
     '\n\nYou also have a memory tool. Use it to remember durable facts about the user across ' +
     'conversations (preferences, recurring patterns, things they\'ve told you before) — not the ' +
-    'raw numbers above, those change daily and are already provided fresh each time.'
+    'raw numbers above, those change daily and are already provided fresh again next time.\n\n' +
+    'CHARTS: when a chart would clearly help — trends over time, comparisons between days or ' +
+    'metrics — you may include, inside your normal reply text, exactly one fenced block like this:\n' +
+    '```chart\n' +
+    '{ "type": "line", "labels": ["Mon", "Tue", "Wed"], "datasets": [{ "label": "Strain", "data": [8.2, 10.1, 6.4] }] }\n' +
+    '```\n' +
+    'Only "line" or "bar" for "type". Only chart data you can actually ground in the data provided ' +
+    'above (or in what the user just told you) — never invent numbers to fill a chart. Put any ' +
+    'explanation in the surrounding text, not inside the JSON. Most replies won\'t need a chart at ' +
+    'all — use one only when it\'s clearly more useful than a sentence.'
   );
 }
 
