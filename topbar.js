@@ -188,9 +188,9 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
   transition: transform 0.15s, box-shadow 0.15s, filter 0.15s;
 }
 .chat-fab-img {
-  width: 100%; height: 100%;
-  object-fit: cover;
-  border-radius: 50%;
+  width: 68%; height: 68%;
+  object-fit: contain;
+  object-position: center;
   display: block;
   pointer-events: none;
 }
