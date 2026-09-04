@@ -222,19 +222,56 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
   flex-shrink: 0;
 }
 .chat-modal-head h3 { margin: 0; font-size: 17px; font-weight: 700; color: #FAFAFA; }
-.chat-close-btn {
+.chat-head-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.chat-close-btn, .chat-history-btn, .chat-back-btn {
   flex-shrink: 0; width: 30px; height: 30px; border-radius: 50%;
   background: transparent; border: 1px solid rgba(255, 255, 255, 0.12);
-  color: #76746E; font-size: 16px; cursor: pointer;
+  color: #76746E; font-size: 15px; cursor: pointer;
   display: inline-flex; align-items: center; justify-content: center;
   transition: color 0.15s, border-color 0.15s;
 }
-.chat-close-btn:hover { color: #FAFAFA; border-color: #76746E; }
+.chat-close-btn:hover, .chat-history-btn:hover, .chat-back-btn:hover { color: #FAFAFA; border-color: #76746E; }
 .chat-messages {
   flex: 1; overflow-y: auto; min-height: 0;
   padding: 16px 18px;
   display: flex; flex-direction: column; gap: 10px;
 }
+.chat-day-list {
+  flex: 1; overflow-y: auto; min-height: 0;
+  padding: 8px 10px;
+}
+.chat-day-row {
+  display: block; width: 100%; text-align: left;
+  background: transparent; border: 0; border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 12px 8px; cursor: pointer; font-family: inherit;
+}
+.chat-day-row:hover { background: rgba(255, 255, 255, 0.035); border-radius: 8px; }
+.chat-day-date { font-size: 12.5px; font-weight: 700; color: #FAFAFA; }
+.chat-day-count {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 10.5px; color: #76746E; margin-left: 8px;
+}
+.chat-day-preview {
+  margin-top: 3px; font-size: 12px; color: #A5A3A0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.chat-history-empty, .chat-history-loading, .chat-history-error {
+  text-align: center; font-size: 12px; color: #76746E; padding: 24px 12px;
+}
+.chat-history-error { color: #FF8A8A; }
+.chat-ios-banner {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 14px;
+  background: rgba(29, 158, 117, 0.10);
+  border-bottom: 1px solid rgba(29, 158, 117, 0.25);
+  font-size: 11.5px; line-height: 1.4; color: #A5A3A0;
+  flex-shrink: 0;
+}
+.chat-ios-banner button {
+  flex-shrink: 0; border: 0; background: transparent; color: #76746E;
+  font-size: 16px; cursor: pointer; padding: 0 2px;
+}
+.chat-ios-banner button:hover { color: #FAFAFA; }
 .chat-empty { text-align: center; font-size: 12px; font-style: italic; color: #76746E; padding: 20px 10px; }
 .chat-bubble {
   max-width: 82%;
@@ -260,6 +297,10 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
   color: #FF8A8A; font-size: 12px; max-width: 90%;
 }
 .chat-bubble.typing { align-self: flex-start; color: #76746E; font-style: italic; }
+.chat-bubble.has-chart { max-width: 100%; width: 100%; }
+.chat-chart-wrap { position: relative; width: 100%; height: 200px; margin: 6px 0; }
+.chat-chart-text { white-space: pre-wrap; word-break: break-word; }
+.chat-chart-fallback { font-size: 11px; color: #76746E; font-style: italic; margin-top: 4px; }
 .chat-input-row {
   display: flex; align-items: center; gap: 8px;
   padding: 12px 14px;
@@ -321,13 +362,22 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
 <div class="chat-modal-bg" id="chatModalBg">
   <div class="chat-modal">
     <div class="chat-modal-head">
-      <h3>Ask about today</h3>
-      <button type="button" class="chat-close-btn" id="chatCloseBtn" aria-label="Close">×</button>
+      <h3 id="chatHeadTitle">Ask about today</h3>
+      <div class="chat-head-actions">
+        <button type="button" class="chat-back-btn" id="chatBackBtn" aria-label="Back to today" style="display:none">←</button>
+        <button type="button" class="chat-history-btn" id="chatHistoryBtn" aria-label="History">🕘</button>
+        <button type="button" class="chat-close-btn" id="chatCloseBtn" aria-label="Close">×</button>
+      </div>
+    </div>
+    <div class="chat-ios-banner" id="chatIosBanner" style="display:none">
+      <span>Add Row to your Home Screen to get daily check-in notifications — Safari tabs can't receive them in the background on iOS.</span>
+      <button type="button" id="chatIosBannerDismiss" aria-label="Dismiss">×</button>
     </div>
     <div class="chat-messages" id="chatMessages">
       <div class="chat-empty" id="chatEmpty">Ask about your nutrition, workouts, recovery, or anything else tracked on this dashboard today.</div>
     </div>
-    <div class="chat-input-row">
+    <div class="chat-day-list" id="chatDayList" style="display:none"></div>
+    <div class="chat-input-row" id="chatInputRow">
       <input type="text" id="chatInput" class="chat-input" placeholder="Ask a question…" autocomplete="off">
       <button type="button" id="chatSendBtn" class="chat-send-btn" aria-label="Send">↑</button>
     </div>
@@ -748,14 +798,19 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
   // mirrors). Wired up once, from injectChat() in boot().
   // =============================================================
   function wireChat() {
-    const HISTORY_KEY = 'chat_history_v1'; // { date: 'YYYY-MM-DD', history: [...] }
+    const HISTORY_KEY = 'chat_history_v1'; // { date: 'YYYY-MM-DD', history: [...] } — today's fast local cache
     const SECRET_KEY = 'dashboard:secret'; // same key cronometer-lib.js already uses
 
     const fab = document.getElementById('chatFab');
     const modalBg = document.getElementById('chatModalBg');
     const closeBtn = document.getElementById('chatCloseBtn');
+    const historyBtn = document.getElementById('chatHistoryBtn');
+    const backBtn = document.getElementById('chatBackBtn');
+    const headTitle = document.getElementById('chatHeadTitle');
     const messagesEl = document.getElementById('chatMessages');
     const emptyEl = document.getElementById('chatEmpty');
+    const dayListEl = document.getElementById('chatDayList');
+    const inputRow = document.getElementById('chatInputRow');
     const input = document.getElementById('chatInput');
     const sendBtn = document.getElementById('chatSendBtn');
     if (!fab || !modalBg) return;
@@ -764,22 +819,45 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
       const d = new Date();
       return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
     }
+    function getSecret() {
+      try { return localStorage.getItem(SECRET_KEY) || ''; } catch (e) { return ''; }
+    }
 
-    // Reset whenever the stored date doesn't match today, so history never
-    // grows across days — cross-day memory is handled server-side by
-    // /api/chat.js's own memory tool, not by this conversation history.
-    function loadChatHistory() {
-      try {
-        const raw = JSON.parse(localStorage.getItem(HISTORY_KEY));
-        if (raw && raw.date === chatTodayKey() && Array.isArray(raw.history)) return raw.history;
-      } catch (e) {}
-      return [];
+    // Reset whenever the stored date doesn't match today, so today's local
+    // cache never grows across days — Supabase (via api/chat-history.js)
+    // is the durable archive; localStorage is just today's fast copy.
+    function loadStoredHistory() {
+      try { return JSON.parse(localStorage.getItem(HISTORY_KEY)); } catch (e) { return null; }
     }
     function saveChatHistory(h) {
       try { localStorage.setItem(HISTORY_KEY, JSON.stringify({ date: chatTodayKey(), history: h })); } catch (e) {}
     }
+    async function archiveToServer(date, messages) {
+      if (!date || !messages || !messages.length) return;
+      const secret = getSecret();
+      if (!secret) return;
+      try {
+        await fetch('/api/chat-history?secret=' + encodeURIComponent(secret), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ date, messages }),
+        });
+      } catch (e) { /* best-effort — today's localStorage copy is unaffected either way */ }
+    }
 
-    let chatHistory = loadChatHistory();
+    let chatHistory = [];
+    (function initHistory() {
+      const stored = loadStoredHistory();
+      if (!stored || !Array.isArray(stored.history)) return;
+      if (stored.date === chatTodayKey()) {
+        chatHistory = stored.history;
+      } else if (stored.history.length) {
+        // A day boundary passed since this was last saved (e.g. the tab
+        // was left open, or it's just a new visit the next day) — archive
+        // the stale day to Supabase before starting today empty.
+        archiveToServer(stored.date, stored.history);
+      }
+    })();
 
     // Assistant turns store the raw Anthropic content array (text blocks,
     // and sometimes tool_use blocks from the memory tool) — extract just
@@ -796,11 +874,106 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
       return '';
     }
 
+    // ---------- charts ----------
+    // Detects a ```chart fenced JSON block in assistant text (see
+    // api/chat.js's system prompt for the exact format it's told to use)
+    // and renders it as a Chart.js canvas in place, keeping any text
+    // before/after as normal bubble content. Chart.js is lazy-loaded from
+    // a CDN only the first time a chart actually appears, not on every
+    // page load. Falls back to the raw text if parsing fails for any
+    // reason — never silently drops content.
+    const CHART_BLOCK_RE = /```chart\s*\n([\s\S]*?)```/;
+    let chartJsPromise = null;
+    function loadChartJs() {
+      if (window.Chart) return Promise.resolve();
+      if (chartJsPromise) return chartJsPromise;
+      chartJsPromise = new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js';
+        s.onload = () => resolve();
+        s.onerror = () => reject(new Error('Chart.js failed to load'));
+        document.head.appendChild(s);
+      });
+      return chartJsPromise;
+    }
+
+    function renderChartCanvas(container, spec) {
+      const canvas = document.createElement('canvas');
+      container.appendChild(canvas);
+      loadChartJs().then(() => {
+        const type = spec.type === 'bar' ? 'bar' : 'line';
+        const datasets = (Array.isArray(spec.datasets) ? spec.datasets : []).map((ds, i) => ({
+          label: (ds && ds.label) || ('Series ' + (i + 1)),
+          data: (ds && ds.data) || [],
+          borderColor: '#1D9E75',
+          backgroundColor: type === 'bar' ? 'rgba(29, 158, 117, 0.55)' : 'rgba(29, 158, 117, 0.15)',
+          pointBackgroundColor: '#1D9E75',
+          borderWidth: 2,
+          tension: 0.3,
+          fill: type === 'line',
+        }));
+        new window.Chart(canvas.getContext('2d'), {
+          type,
+          data: { labels: Array.isArray(spec.labels) ? spec.labels : [], datasets },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: { display: datasets.length > 1, labels: { color: '#A5A3A0', font: { size: 10 }, boxWidth: 10 } },
+            },
+            scales: {
+              x: { ticks: { color: '#76746E', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.06)' } },
+              y: { ticks: { color: '#76746E', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.06)' } },
+            },
+          },
+        });
+      }).catch(() => {
+        container.innerHTML = '';
+        const msg = document.createElement('div');
+        msg.className = 'chat-chart-fallback';
+        msg.textContent = '(chart failed to load)';
+        container.appendChild(msg);
+      });
+    }
+
+    function renderBubbleContent(el, text) {
+      const match = CHART_BLOCK_RE.exec(text || '');
+      if (!match) { el.textContent = text; return; }
+
+      let spec = null;
+      try { spec = JSON.parse(match[1]); } catch (e) { spec = null; }
+      if (!spec || (spec.type !== 'line' && spec.type !== 'bar') || !Array.isArray(spec.datasets)) {
+        el.textContent = text; // malformed — show the raw reply rather than lose it
+        return;
+      }
+
+      el.classList.add('has-chart');
+      const before = text.slice(0, match.index).trim();
+      const after = text.slice(match.index + match[0].length).trim();
+      if (before) {
+        const p = document.createElement('div');
+        p.className = 'chat-chart-text';
+        p.textContent = before;
+        el.appendChild(p);
+      }
+      const chartWrap = document.createElement('div');
+      chartWrap.className = 'chat-chart-wrap';
+      el.appendChild(chartWrap);
+      renderChartCanvas(chartWrap, spec);
+      if (after) {
+        const p = document.createElement('div');
+        p.className = 'chat-chart-text';
+        p.style.marginTop = '6px';
+        p.textContent = after;
+        el.appendChild(p);
+      }
+    }
+
     function addBubble(role, text) {
       emptyEl.style.display = 'none';
       const el = document.createElement('div');
       el.className = 'chat-bubble ' + role;
-      el.textContent = text;
+      renderBubbleContent(el, text);
       messagesEl.appendChild(el);
       messagesEl.scrollTop = messagesEl.scrollHeight;
       return el;
@@ -821,10 +994,193 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
       emptyEl.style.display = shown ? 'none' : 'block';
     }
 
+    // ---------- view switching: live chat / history list / read-only day ----------
+    function showView(view) {
+      if (view === 'live') {
+        messagesEl.style.display = 'flex';
+        dayListEl.style.display = 'none';
+        inputRow.style.display = 'flex';
+        backBtn.style.display = 'none';
+        historyBtn.style.display = 'inline-flex';
+        headTitle.textContent = 'Ask about today';
+      } else if (view === 'list') {
+        messagesEl.style.display = 'none';
+        dayListEl.style.display = 'block';
+        inputRow.style.display = 'none';
+        backBtn.style.display = 'inline-flex';
+        historyBtn.style.display = 'none';
+        headTitle.textContent = 'History';
+      } else if (view === 'day') {
+        messagesEl.style.display = 'flex';
+        dayListEl.style.display = 'none';
+        inputRow.style.display = 'none';
+        backBtn.style.display = 'inline-flex';
+        historyBtn.style.display = 'none';
+      }
+    }
+
+    async function openHistoryList() {
+      showView('list');
+      dayListEl.innerHTML = '<div class="chat-history-loading">Loading…</div>';
+      const secret = getSecret();
+      if (!secret) { dayListEl.innerHTML = '<div class="chat-history-error">Set your dashboard secret first.</div>'; return; }
+      try {
+        const res = await fetch('/api/chat-history?secret=' + encodeURIComponent(secret));
+        const json = await res.json();
+        if (!res.ok) throw new Error((json && json.error) || ('HTTP ' + res.status));
+        const days = Array.isArray(json.days) ? json.days : [];
+        if (!days.length) { dayListEl.innerHTML = '<div class="chat-history-empty">No past conversations yet.</div>'; return; }
+        dayListEl.innerHTML = '';
+        days.forEach((d) => {
+          const row = document.createElement('button');
+          row.type = 'button';
+          row.className = 'chat-day-row';
+          row.innerHTML =
+            '<span class="chat-day-date">' + escapeHtml(d.date) + '</span>' +
+            '<span class="chat-day-count">' + d.messageCount + ' msg' + (d.messageCount === 1 ? '' : 's') + '</span>' +
+            '<div class="chat-day-preview">' + escapeHtml(d.preview || '(no preview)') + '</div>';
+          row.addEventListener('click', () => openDay(d.date));
+          dayListEl.appendChild(row);
+        });
+      } catch (e) {
+        dayListEl.innerHTML = '<div class="chat-history-error">Couldn\'t load history: ' + escapeHtml(e.message || String(e)) + '</div>';
+      }
+    }
+
+    async function openDay(date) {
+      showView('day');
+      headTitle.textContent = date;
+      messagesEl.innerHTML = '<div class="chat-history-loading">Loading…</div>';
+      const secret = getSecret();
+      try {
+        const res = await fetch('/api/chat-history?secret=' + encodeURIComponent(secret) + '&date=' + encodeURIComponent(date));
+        const json = await res.json();
+        if (!res.ok) throw new Error((json && json.error) || ('HTTP ' + res.status));
+        messagesEl.innerHTML = '';
+        const messages = Array.isArray(json.messages) ? json.messages : [];
+        let shown = 0;
+        messages.forEach((turn) => {
+          if (turn.role === 'user' && typeof turn.content === 'string') {
+            addBubble('user', turn.content); shown++;
+          } else if (turn.role === 'assistant') {
+            const text = contentToText(turn.content);
+            if (text) { addBubble('assistant', text); shown++; }
+          }
+        });
+        if (!shown) messagesEl.innerHTML = '<div class="chat-history-empty">Nothing to show for this day.</div>';
+      } catch (e) {
+        messagesEl.innerHTML = '<div class="chat-history-error">Couldn\'t load that day: ' + escapeHtml(e.message || String(e)) + '</div>';
+      }
+    }
+
+    function backToLive() {
+      showView('live');
+      renderChatHistory();
+    }
+
+    function escapeHtml(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
+    // ---------- push notifications (daily check-in) ----------
+    // Fails silently at every step: no VAPID key yet, no service worker
+    // support, permission denied, offline — none of it should ever
+    // interrupt a normal chat session. See api/push-subscribe.js,
+    // api/send-notification.js, api/daily-checkin.js, and sw.js.
+    const PUSH_ASKED_KEY = 'push_permission_asked_v1';
+    const IOS_BANNER_DISMISSED_KEY = 'ios_pwa_banner_dismissed_v1';
+
+    function urlBase64ToUint8Array(base64String) {
+      const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+      const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+      const raw = atob(base64);
+      const arr = new Uint8Array(raw.length);
+      for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+      return arr;
+    }
+
+    function isIosSafari() {
+      const ua = navigator.userAgent || '';
+      const isIos = /iPad|iPhone|iPod/.test(ua) || (ua.includes('Macintosh') && 'ontouchend' in document);
+      return isIos;
+    }
+    function isStandalone() {
+      return window.navigator.standalone === true || window.matchMedia('(display-mode: standalone)').matches;
+    }
+
+    function maybeShowIosBanner() {
+      const banner = document.getElementById('chatIosBanner');
+      const dismissBtn = document.getElementById('chatIosBannerDismiss');
+      if (!banner) return;
+      let dismissed = false;
+      try { dismissed = localStorage.getItem(IOS_BANNER_DISMISSED_KEY) === '1'; } catch (e) {}
+      if (isIosSafari() && !isStandalone() && !dismissed) {
+        banner.style.display = 'flex';
+      }
+      if (dismissBtn) {
+        dismissBtn.addEventListener('click', () => {
+          banner.style.display = 'none';
+          try { localStorage.setItem(IOS_BANNER_DISMISSED_KEY, '1'); } catch (e) {}
+        });
+      }
+    }
+
+    async function subscribeForPush() {
+      try {
+        if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) return;
+        const secret = getSecret();
+        if (!secret) return;
+
+        const reg = await navigator.serviceWorker.register('/sw.js');
+
+        const keyRes = await fetch('/api/push-subscribe?secret=' + encodeURIComponent(secret));
+        const keyJson = await keyRes.json();
+        const publicKey = keyJson && keyJson.publicKey;
+        if (!publicKey) return; // VAPID keys not configured yet — nothing to do
+
+        let existing = await reg.pushManager.getSubscription();
+        if (!existing) {
+          existing = await reg.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlBase64ToUint8Array(publicKey),
+          });
+        }
+
+        await fetch('/api/push-subscribe?secret=' + encodeURIComponent(secret), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(existing.toJSON()),
+        });
+      } catch (e) { /* fail silently — push is a nice-to-have, never blocks chat */ }
+    }
+
+    let pushSetupAttempted = false;
+    function maybeSetupPush() {
+      if (pushSetupAttempted) return;
+      if (!('Notification' in window)) return;
+      if (Notification.permission === 'granted') { pushSetupAttempted = true; subscribeForPush(); return; }
+      if (Notification.permission === 'denied') return;
+
+      // 'default' — ask once, the first time the panel is opened, not on
+      // page load (a permission prompt before the user has done anything
+      // gets reflexively denied and can't be re-asked).
+      let asked = false;
+      try { asked = localStorage.getItem(PUSH_ASKED_KEY) === '1'; } catch (e) {}
+      if (asked) return;
+      pushSetupAttempted = true;
+      try { localStorage.setItem(PUSH_ASKED_KEY, '1'); } catch (e) {}
+      Notification.requestPermission().then((perm) => {
+        if (perm === 'granted') subscribeForPush();
+      }).catch(() => {});
+    }
+
     function openChatPanel() {
       modalBg.classList.add('show');
       fab.classList.add('is-open');
+      showView('live');
       renderChatHistory();
+      maybeShowIosBanner();
+      maybeSetupPush();
       setTimeout(() => input.focus(), 50);
     }
     function closeChatPanel() {
@@ -834,16 +1190,32 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
 
     fab.addEventListener('click', openChatPanel);
     closeBtn.addEventListener('click', closeChatPanel);
+    historyBtn.addEventListener('click', openHistoryList);
+    backBtn.addEventListener('click', backToLive);
     modalBg.addEventListener('click', (e) => { if (e.target === modalBg) closeChatPanel(); });
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape' && modalBg.classList.contains('show')) closeChatPanel();
     });
 
+    // Clicking a push notification (via sw.js) opens the page at
+    // ?openChat=1 — auto-open the panel so the tap actually lands
+    // somewhere useful instead of just the bare dashboard.
+    try {
+      if (new URLSearchParams(window.location.search).get('openChat') === '1') {
+        openChatPanel();
+      }
+    } catch (e) {}
+
     async function sendChatMessage() {
       const text = input.value.trim();
       if (!text) return;
 
-      if (chatHistory.length && loadChatHistory().length === 0) chatHistory = [];
+      const stored = loadStoredHistory();
+      if (chatHistory.length && (!stored || stored.date !== chatTodayKey())) {
+        // Day rolled over while the panel sat open on an older message set.
+        archiveToServer(chatHistory.length && stored ? stored.date : null, chatHistory);
+        chatHistory = [];
+      }
 
       addBubble('user', text);
       input.value = '';
@@ -852,8 +1224,7 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
 
       const typingEl = addBubble('assistant typing', 'Thinking…');
 
-      let secret = '';
-      try { secret = localStorage.getItem(SECRET_KEY) || ''; } catch (e) {}
+      const secret = getSecret();
 
       try {
         const todayContext = typeof window.gatherTodayContext === 'function'
@@ -873,6 +1244,7 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
         chatHistory = Array.isArray(json.history) ? json.history : chatHistory;
         saveChatHistory(chatHistory);
         addBubble('assistant', json.reply || '(no reply)');
+        archiveToServer(chatTodayKey(), chatHistory); // best-effort, doesn't block the UI
       } catch (e) {
         typingEl.remove();
         addBubble('error', "Couldn't reach the assistant, try again. (" + (e.message || String(e)) + ')');
