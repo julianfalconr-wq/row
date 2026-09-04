@@ -183,8 +183,16 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
   border: none;
   box-shadow: 0 8px 24px rgba(0,0,0,0.40), inset 0 1px 0 rgba(255,255,255,0.18);
   display: flex; align-items: center; justify-content: center;
+  overflow: hidden;
   cursor: pointer;
   transition: transform 0.15s, box-shadow 0.15s, filter 0.15s;
+}
+.chat-fab-img {
+  width: 100%; height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+  display: block;
+  pointer-events: none;
 }
 .chat-fab:hover { filter: brightness(1.08); box-shadow: 0 10px 28px rgba(0,0,0,0.45); }
 .chat-fab:active { transform: scale(0.92); }
@@ -306,10 +314,7 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
 
   const chatFabHtml = `
 <button type="button" class="chat-fab" id="chatFab" aria-label="Ask the assistant about today">
-  <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-    <path d="M12 2.5c.4 0 .74.27.85.65l1.2 4.2 4.2 1.2c.38.11.65.45.65.85s-.27.74-.65.85l-4.2 1.2-1.2 4.2c-.11.38-.45.65-.85.65s-.74-.27-.85-.65l-1.2-4.2-4.2-1.2A.9.9 0 0 1 5 9.4c0-.4.27-.74.65-.85l4.2-1.2 1.2-4.2c.11-.38.45-.65.85-.65Z"/>
-    <path d="M19 14.5c.32 0 .6.22.68.53l.42 1.62 1.62.42a.7.7 0 0 1 0 1.36l-1.62.42-.42 1.62a.7.7 0 0 1-1.36 0l-.42-1.62-1.62-.42a.7.7 0 0 1 0-1.36l1.62-.42.42-1.62a.7.7 0 0 1 .68-.53Z"/>
-  </svg>
+  <img src="assets/chat-icon.png" alt="" class="chat-fab-img">
 </button>`;
 
   const chatModalHtml = `

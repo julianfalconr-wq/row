@@ -352,7 +352,6 @@ body::after {
 
   <div class="dash-header">
     <h1 class="dash-title">Dashboard</h1>
-    <button type="button" class="gear-btn" id="settingsGearBtn" aria-label="Settings">⚙</button>
   </div>
 
   <div class="bento-grid">
@@ -544,7 +543,27 @@ document.addEventListener('DOMContentLoaded', function () {
   function ftInToCm(ft, inch) { return ((ft || 0) * 12 + (inch || 0)) * 2.54; }
 
   // ---------- elements ----------
-  const gearBtn   = document.getElementById('settingsGearBtn');
+  // The gear button lives in the sticky top bar (next to the water pill
+  // and finance icon), not in .dash-header, so it's created here and
+  // appended into #topbar rather than sitting in this page's static
+  // HTML. This only works because topbar.js's own DOMContentLoaded-time
+  // boot() (which injects #topbar) runs as a *deferred* script — deferred
+  // scripts execute after the document is parsed but before
+  // DOMContentLoaded fires, so by the time this handler (registered from
+  // a plain inline <script> lower in the body) runs, #topbar is already
+  // in the DOM. topbar-icon-btn/topbar-icon give it the same chrome as
+  // its topbar siblings; gear-btn keeps its own distinct rotate-on-press.
+  const gearBtn = (function () {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'topbar-icon-btn gear-btn';
+    btn.id = 'settingsGearBtn';
+    btn.setAttribute('aria-label', 'Settings');
+    btn.innerHTML = '<span class="topbar-icon">⚙</span>';
+    const topbarEl = document.getElementById('topbar');
+    (topbarEl || document.querySelector('.dash-header')).appendChild(btn);
+    return btn;
+  })();
   const modalBg   = document.getElementById('settingsModalBg');
   const closeBtn  = document.getElementById('settingsModalClose');
 
