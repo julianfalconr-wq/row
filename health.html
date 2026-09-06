@@ -870,12 +870,37 @@ main {
       let t = loadTokens(); if (!t) return;
       if (t.expires && Date.now() > t.expires - 60000) { const n = await refreshToken(t); if (n) t = n; }
       showErr('');
+      // A rejection whose message is exactly 'unauthorized' means whoopFetch
+      // already tried refreshing the token and that refresh itself failed
+      // (see whoopFetch above) — i.e. the token is unrecoverable, not just
+      // a transient network blip. Track that specifically (rather than
+      // swallowing every failure to console only) so a dead connection
+      // surfaces to the user instead of silently showing "connected" with
+      // every field stuck on "—" forever.
+      let authFailed = false;
+      function onFail(label) {
+        return (e) => {
+          console.error('[whoop] ' + label + ':', e.message);
+          if (e.message === 'unauthorized') authFailed = true;
+          return null;
+        };
+      }
       try {
         const [rec, sleep, cycle] = await Promise.all([
-          whoopFetch('/recovery?limit=1', t).catch((e)=>{console.error('[whoop] /recovery:', e.message); return null;}),
-          whoopFetch('/activity/sleep?limit=1', t).catch((e)=>{console.error('[whoop] /sleep:', e.message); return null;}),
-          whoopFetch('/cycle?limit=1', t).catch((e)=>{console.error('[whoop] /cycle:', e.message); return null;}),
+          whoopFetch('/recovery?limit=1', t).catch(onFail('recovery')),
+          whoopFetch('/activity/sleep?limit=1', t).catch(onFail('sleep')),
+          whoopFetch('/cycle?limit=1', t).catch(onFail('cycle')),
         ]);
+        if (authFailed) {
+          clearTokens();
+          render();
+          // whoopErr lives inside #whoopConnected, which render() just
+          // hid — so the honest "reconnect" explanation has to go on the
+          // disconnected view's sub-text instead, or it'd be invisible.
+          const sub = dEl.querySelector('.whoop-disconnected-sub');
+          if (sub) sub.textContent = 'Your WHOOP session expired and could not be refreshed automatically — reconnect below.';
+          return;
+        }
         const r = rec && rec.records && rec.records[0] && rec.records[0].score;
         if (r) {
           document.getElementById('whoopRecovery').textContent = Math.round(r.recovery_score||0) + '%';
