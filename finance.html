@@ -1945,6 +1945,57 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   }
   function storeSet(key, value) {
     try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) {}
+    if (key === 'subs' || key.indexOf('nw:') === 0) scheduleFinanceStateSync();
+  }
+
+  // ------------------------------------------------------------
+  // Compact summary sync to api/sync-state.js (key: 'finance'),
+  // separate from sync.js's initCloudSync (which mirrors this page's
+  // RAW localStorage under app_state key='finance' for cross-device
+  // use — a different purpose, see api/sync-state.js's header comment
+  // for how the two are kept from colliding). This one feeds
+  // api/daily-checkin.js, which has no browser and can't read
+  // localStorage — same summarized shape gatherTodayContext() already
+  // builds for the live chat's finance section.
+  // ------------------------------------------------------------
+  function buildFinanceSummary() {
+    const nwCats = ['bank', 'stocks', 'crypto', 'other'];
+    const netWorthByCategory = {};
+    let netWorthTotal = 0;
+    nwCats.forEach((cat) => {
+      const items = storeGet('nw:' + cat) || [];
+      const sum = (Array.isArray(items) ? items : []).reduce((s, it) => s + (Number(it.amount) || 0), 0);
+      netWorthByCategory[cat] = Math.round(sum * 10) / 10;
+      netWorthTotal += sum;
+    });
+    const subs = storeGet('subs') || [];
+    const subsMonthlyTotal = (Array.isArray(subs) ? subs : []).reduce((s, it) => {
+      const a = Number(it.amount) || 0;
+      if (it.period === 'yearly') return s + a / 12;
+      if (it.period === 'weekly') return s + a * 4.345;
+      return s + a;
+    }, 0);
+    return {
+      currency: localStorage.getItem('nw_currency') || 'CHF',
+      netWorthByCategoryCHF: netWorthByCategory,
+      netWorthTotalCHF: Math.round(netWorthTotal * 10) / 10,
+      subscriptions: { count: Array.isArray(subs) ? subs.length : 0, monthlyTotalCHF: Math.round(subsMonthlyTotal * 10) / 10 },
+    };
+  }
+
+  let financeStateSyncTimer = null;
+  function scheduleFinanceStateSync() {
+    clearTimeout(financeStateSyncTimer);
+    financeStateSyncTimer = setTimeout(() => {
+      let secret = '';
+      try { secret = localStorage.getItem('dashboard:secret') || ''; } catch (e) {}
+      if (!secret) return;
+      fetch('/api/sync-state?secret=' + encodeURIComponent(secret), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: 'finance', data: buildFinanceSummary() }),
+      }).catch(() => {});
+    }, 2500);
   }
 
   // ============================================================

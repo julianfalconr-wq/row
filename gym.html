@@ -3343,9 +3343,76 @@ img, video, canvas, svg { max-width: 100%; }
   localStorage.setItem = function(k, v) {
     _pcOrigSet(k, v);
     try {
-      if (!pcSuppressSync && PC_SYNCED_KEYS.indexOf(k) !== -1) pcSchedulePush();
+      if (!pcSuppressSync && PC_SYNCED_KEYS.indexOf(k) !== -1) { pcSchedulePush(); scheduleGymStateSync(); }
     } catch (e) {}
   };
+
+  // ------------------------------------------------------------
+  // Compact summary sync to api/sync-state.js (key: 'gym'), separate
+  // from the raw cross-device mirror above (APP_KEY='po-coach'). This
+  // one feeds api/daily-checkin.js, which has no browser and can't
+  // read localStorage — same summarized shape gatherTodayContext()
+  // already builds for the live chat's gym section, just computed
+  // here directly against the in-memory `state`/`doneDays` instead of
+  // re-parsing localStorage from a different page.
+  // ------------------------------------------------------------
+  function buildGymSummary() {
+    const gymTodayKey = wtDateKey(new Date());
+    const exById = {};
+    (state.exercises || []).forEach((ex) => { exById[ex.id] = ex.name; });
+
+    const todaysSets = [];
+    const recentWorkoutsByDay = {};
+    const sevenDaysAgo = new Date(); sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    Object.keys(state.logs || {}).forEach((exId) => {
+      (state.logs[exId] || []).forEach((log) => {
+        const dk = String(log.date || '').slice(0, 10);
+        if (!dk) return;
+        if (dk === gymTodayKey) todaysSets.push({ exercise: exById[exId] || exId, weight: log.weight, reps: log.reps });
+        if (new Date(dk) >= sevenDaysAgo) {
+          if (!recentWorkoutsByDay[dk]) recentWorkoutsByDay[dk] = { sets: 0, exercises: new Set() };
+          recentWorkoutsByDay[dk].sets++;
+          recentWorkoutsByDay[dk].exercises.add(exById[exId] || exId);
+        }
+      });
+    });
+    const recentWorkouts = Object.keys(recentWorkoutsByDay).sort().reverse().map((dk) => ({
+      date: dk, done: !!doneDays[dk], totalSets: recentWorkoutsByDay[dk].sets, exerciseCount: recentWorkoutsByDay[dk].exercises.size,
+    }));
+
+    let bodyWeights = [];
+    try { bodyWeights = JSON.parse(localStorage.getItem('po_coach_weights')) || []; } catch (e) { bodyWeights = []; }
+    const latestBodyWeight = bodyWeights.length
+      ? bodyWeights.slice().sort((a, b) => (a.dateKey < b.dateKey ? 1 : -1))[0]
+      : null;
+
+    let photos = [];
+    try { photos = JSON.parse(localStorage.getItem('po_coach_photos')) || []; } catch (e) { photos = []; }
+    const latestPhoto = photos.length ? { dateKey: photos[0].dateKey, weight: photos[0].weight } : null;
+
+    return {
+      todayWorkoutDone: !!doneDays[gymTodayKey],
+      todaysSets,
+      recentWorkouts,
+      latestBodyWeight: latestBodyWeight ? { dateKey: latestBodyWeight.dateKey, weight: latestBodyWeight.weight, unit: state.units || null } : null,
+      latestProgressPhoto: latestPhoto,
+    };
+  }
+
+  let gymStateSyncTimer = null;
+  function scheduleGymStateSync() {
+    clearTimeout(gymStateSyncTimer);
+    gymStateSyncTimer = setTimeout(() => {
+      let secret = '';
+      try { secret = localStorage.getItem('dashboard:secret') || ''; } catch (e) {}
+      if (!secret) return;
+      fetch('/api/sync-state?secret=' + encodeURIComponent(secret), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: 'gym', data: buildGymSummary() }),
+      }).catch(() => {});
+    }, 2500);
+  }
   localStorage.removeItem = function(k) {
     _pcOrigRemove(k);
     try {

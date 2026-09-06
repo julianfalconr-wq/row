@@ -6,22 +6,25 @@
 //
 // IMPORTANT CONSTRAINT: there is no browser in a cron job, so this
 // cannot call the client-side window.gatherTodayContext() (topbar.js)
-// that the chat panel uses — that function reads localStorage (gym
-// logs, finance, Daily Stack, WHOOP tokens) which only exists on the
-// user's own device and is never synced to a server anywhere in this
-// app. The only data this function can actually see is whatever has
-// been synced to Supabase:
+// that the chat panel uses — that function reads localStorage directly,
+// which only exists on the user's own device. The only data this
+// function can actually see is whatever has been synced to Supabase:
 //   - app_state (key='cronometer') — the Cronometer nutrition cache
 //     (via api/cronometer-data.js's manual "Sync now").
+//   - app_state (key='gym'/'finance'/'dailystack') — compact daily
+//     summaries pushed by gym.html/finance.html/health.html's Daily
+//     Stack section via api/sync-state.js, read here from each row's
+//     data.dailyCheckinSummary sub-field (see api/sync-state.js's
+//     header comment for why it's a sub-field and not the whole row).
 //   - chat_history — past conversations (via api/chat-history.js,
 //     Part 1), used here only for light continuity, not as a data
 //     source.
-// Workouts, body weight, net worth, and today's Daily Stack
-// completion are NOT visible here — they live only in the browser.
-// If you want the daily check-in to reason about those too, the fix
-// is upstream: sync them to Supabase from their respective pages the
-// same way Cronometer/chat history already are, not something this
-// file can work around on its own.
+// WHOOP data is still NOT visible here — WHOOP tokens/stats are never
+// written to Supabase anywhere in this app (see topbar.js's
+// gatherTodayContext(), which does a live fetch instead of reading a
+// cache). If you want the daily check-in to reason about WHOOP too,
+// the fix is upstream: sync a compact summary to Supabase the same
+// way gym/finance/dailystack now are.
 //
 // Auth: Vercel automatically sends `Authorization: Bearer
 // <CRON_SECRET>` on cron-triggered requests when a CRON_SECRET env
@@ -65,6 +68,17 @@ async function loadCronometerCache() {
     if (!r.ok) return null;
     const rows = await r.json();
     return Array.isArray(rows) && rows[0] ? rows[0] : null;
+  } catch (e) { return null; }
+}
+
+async function loadDailyCheckinSummary(key) {
+  try {
+    const r = await fetch(supabaseUrl('app_state?key=eq.' + key + '&select=data,updated_at'), { headers: supabaseHeaders() });
+    if (!r.ok) return null;
+    const rows = await r.json();
+    const row = Array.isArray(rows) && rows[0] ? rows[0] : null;
+    if (!row || !row.data || !row.data.dailyCheckinSummary) return null;
+    return { summary: row.data.dailyCheckinSummary, updatedAt: row.data.dailyCheckinSummaryUpdatedAt || row.updated_at };
   } catch (e) { return null; }
 }
 
@@ -125,7 +139,13 @@ export default async function handler(req, res) {
   if (!process.env.DASHBOARD_SECRET) return res.status(500).json({ error: 'missing DASHBOARD_SECRET' });
 
   try {
-    const [cronoRow, chatRow] = await Promise.all([loadCronometerCache(), loadRecentChatDay()]);
+    const [cronoRow, chatRow, gymSummary, financeSummary, dailyStackSummary] = await Promise.all([
+      loadCronometerCache(),
+      loadRecentChatDay(),
+      loadDailyCheckinSummary('gym'),
+      loadDailyCheckinSummary('finance'),
+      loadDailyCheckinSummary('dailystack'),
+    ]);
 
     const context = {
       cronometerLastSynced: cronoRow ? cronoRow.updated_at : null,
@@ -134,7 +154,13 @@ export default async function handler(req, res) {
       recentChatLastUserMessage: chatRow
         ? (chatRow.messages || []).filter((t) => t.role === 'user' && typeof t.content === 'string').slice(-1).map((t) => t.content)[0] || null
         : null,
-      note: 'Workouts, body weight, net worth, and Daily Stack completion are not available here — see this file\'s header comment.',
+      gym: gymSummary ? gymSummary.summary : null,
+      gymLastSynced: gymSummary ? gymSummary.updatedAt : null,
+      finance: financeSummary ? financeSummary.summary : null,
+      financeLastSynced: financeSummary ? financeSummary.updatedAt : null,
+      dailyStack: dailyStackSummary ? dailyStackSummary.summary : null,
+      dailyStackLastSynced: dailyStackSummary ? dailyStackSummary.updatedAt : null,
+      note: 'WHOOP data is not available here — see this file\'s header comment. gym/finance/dailyStack fields are null if that page hasn\'t synced yet.',
     };
 
     const message = await askClaudeForInsight(context);

@@ -1061,7 +1061,41 @@ main {
   'use strict';
 
   const storeGet = (k) => { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } };
-  const storeSet = (k, v) => localStorage.setItem(k, JSON.stringify(v));
+  const storeSet = (k, v) => {
+    localStorage.setItem(k, JSON.stringify(v));
+    if (k === 'stack:items' || k.indexOf('stack:taken:') === 0) scheduleDailyStackStateSync();
+  };
+
+  // Compact summary sync to api/sync-state.js (key: 'dailystack'), for
+  // api/daily-checkin.js (no browser, can't read localStorage). Separate
+  // from initCloudSync's raw mirror under app_state key='health' below.
+  function buildDailyStackSummary() {
+    const items = getItems() || [];
+    const taken = storeGet(`stack:taken:${getActiveDate()}`) || {};
+    const takenCount = items.filter((it) => !!taken[it.id]).length;
+    const pending = items.filter((it) => !taken[it.id]).map((it) => it.name);
+    return {
+      date: getActiveDate(),
+      totalItems: items.length,
+      takenCount,
+      pendingItems: pending,
+    };
+  }
+
+  let dailyStackStateSyncTimer = null;
+  function scheduleDailyStackStateSync() {
+    clearTimeout(dailyStackStateSyncTimer);
+    dailyStackStateSyncTimer = setTimeout(() => {
+      let secret = '';
+      try { secret = localStorage.getItem('dashboard:secret') || ''; } catch (e) {}
+      if (!secret) return;
+      fetch('/api/sync-state?secret=' + encodeURIComponent(secret), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: 'dailystack', data: buildDailyStackSummary() }),
+      }).catch(() => {});
+    }, 2500);
+  }
 
   function getActiveDate() {
     const now = new Date();
