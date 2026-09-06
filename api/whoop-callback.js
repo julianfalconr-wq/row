@@ -11,14 +11,11 @@ export default async function handler(req, res) {
   try {
     const body = new URLSearchParams({
       grant_type: 'authorization_code', code, redirect_uri: redirectUri,
+      client_id: clientId, client_secret: clientSecret,
     });
-    const basicAuth = Buffer.from(clientId + ':' + clientSecret).toString('base64');
     const tokenRes = await fetch('https://api.prod.whoop.com/oauth/oauth2/token', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Authorization': 'Basic ' + basicAuth,
-      },
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body,
     });
     const text = await tokenRes.text();
