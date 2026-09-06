@@ -89,6 +89,7 @@
   transition: background 0.15s;
 }
 .topbar-icon-btn:hover { background: rgba(255, 255, 255, 0.08); }
+.topbar-back-btn { margin-right: auto; }
 .topbar-icon {
   font-size: 20px; line-height: 1;
   filter: grayscale(100%) brightness(1.4); opacity: 0.85;
@@ -414,6 +415,31 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
     document.head.appendChild(style);
   }
 
+  // -------------------------------------------------------------
+  // Back button for sub-pages reached from somewhere other than the
+  // bottom tab bar (e.g. health.html -> cronometer.html). A sub-page
+  // opts in by setting a global BEFORE topbar.js runs:
+  //   <script>window.ROW_BACK_TO = 'health.html';</script>
+  //   <script src="topbar.js" defer></script>
+  // topbar.js then prepends a small "<-" icon button to the shared
+  // topbar, styled like the other topbar-icon-btn buttons, linking
+  // back to that specific page (not just browser history). Pages that
+  // don't set window.ROW_BACK_TO get no button, same as today.
+  // -------------------------------------------------------------
+  function injectBackButton() {
+    const target = window.ROW_BACK_TO;
+    if (typeof target !== 'string' || !target) return;
+    const topbarEl = document.getElementById('topbar');
+    if (!topbarEl || document.getElementById('topbarBackBtn')) return;
+    const back = document.createElement('a');
+    back.href = target;
+    back.className = 'topbar-icon-btn topbar-back-btn';
+    back.id = 'topbarBackBtn';
+    back.setAttribute('aria-label', 'Back');
+    back.innerHTML = '<span class="topbar-icon">←</span>';
+    topbarEl.insertBefore(back, topbarEl.firstChild);
+  }
+
   function injectChrome() {
     if (document.getElementById('topbar') || document.getElementById('bottombar')) return;
     if (!shouldShowChrome()) return;
@@ -428,6 +454,7 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
       t.classList.toggle('active', t.getAttribute('data-page') === active);
     });
     document.body.classList.add('has-bottombar');
+    injectBackButton();
   }
 
   function injectChat() {

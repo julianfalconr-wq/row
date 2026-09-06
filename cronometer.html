@@ -19,6 +19,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+<script>window.ROW_BACK_TO = 'health.html';</script>
 <script src="sync.js" defer></script>
 <script src="topbar.js" defer></script>
 <style>
@@ -159,7 +160,7 @@ td.num { font-family: var(--font-mono); color: var(--text-primary); text-align: 
 (function () {
   'use strict';
   const STORAGE_KEY = 'cronometer:dailySummary';
-  const SECRET_KEY = 'cronometer:secret';
+  const SECRET_KEY = 'dashboard:secret'; // same key every other page reads (cronometer-lib.js, topbar.js, gym.html, finance.html)
 
   const secretInput = document.getElementById('secretInput');
   const rangeSelect = document.getElementById('rangeSelect');
@@ -169,6 +170,19 @@ td.num { font-family: var(--font-mono); color: var(--text-primary); text-align: 
   const importStatus = document.getElementById('importStatus');
   const dataCard = document.getElementById('dataCard');
   const dataTableBody = document.querySelector('#dataTable tbody');
+
+  // One-time migration: this page used to save the secret under its own
+  // 'cronometer:secret' key, out of step with every other page's
+  // 'dashboard:secret'. That's why a secret entered here never made
+  // health.html's Cronometer section see synced data. Carry over an
+  // already-saved old-key value so existing setups keep working.
+  try {
+    const oldSecret = localStorage.getItem('cronometer:secret');
+    if (oldSecret && !localStorage.getItem(SECRET_KEY)) {
+      localStorage.setItem(SECRET_KEY, oldSecret);
+    }
+    localStorage.removeItem('cronometer:secret');
+  } catch (e) {}
 
   try {
     const savedSecret = localStorage.getItem(SECRET_KEY);
