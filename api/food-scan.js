@@ -1,8 +1,14 @@
 // =============================================================
 // AI food photo scanner. Takes a base64 photo of a plate of food,
 // asks Claude (vision) to estimate its nutritional content, and
-// returns a description + a fixed set of 29 nutrients (null where
-// the model can't reasonably estimate a value).
+// returns a description + a fixed set of 30 nutrients (null where
+// the model can't reasonably estimate a value) — 29 nutrition facts
+// plus a leading estimatedWeightG for the total plate weight.
+//
+// Optional body.userContext (free text, e.g. "made with olive oil" or
+// "this is half a portion") is passed to the model as an extra text
+// block alongside the photo, to help it factor in things a photo
+// alone can't show.
 //
 // This is a rough visual ESTIMATE only — it is never merged into
 // the Cronometer-synced totals shown elsewhere on the Health page.
@@ -16,12 +22,15 @@
 
 const MAX_BASE64_CHARS = 8 * 1024 * 1024; // ~6MB decoded image, generous for a compressed JPEG
 const ALLOWED_MIME = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+const MAX_USER_CONTEXT_CHARS = 500;
 
-// Single source of truth for the 29 nutrients this endpoint asks the
-// model for. Keep this in sync with the identical list in health.html's
-// Scan Food with AI script (duplicated rather than shared, same as the
-// rest of this repo's small per-file config).
+// Single source of truth for the 30 fields (estimatedWeightG + 29
+// nutrients) this endpoint asks the model for. Keep this in sync with
+// the identical list in health.html's Scan Food with AI script
+// (duplicated rather than shared, same as the rest of this repo's
+// small per-file config).
 const NUTRIENTS = [
+  { id: 'estimatedWeightG',   label: 'estimated total weight', unit: 'g' },
   { id: 'energy',             label: 'Energy',              unit: 'kcal' },
   { id: 'totalFat',           label: 'total fat',           unit: 'g' },
   { id: 'saturatedFat',       label: 'saturated fat',       unit: 'g' },
@@ -67,7 +76,12 @@ function buildSystemPrompt() {
     '\n\nEvery nutrient key listed above MUST be present in "nutrients". If you cannot ' +
     'reasonably estimate a value for a nutrient from the photo, use null for it instead ' +
     'of guessing a number you have no visual basis for — this is especially likely for ' +
-    'micronutrients like iodine, manganese, vitamin K, and omega-3.'
+    'micronutrients like iodine, manganese, vitamin K, and omega-3.\n\n' +
+    'For "estimatedWeightG", estimate the total weight in grams of everything visible on ' +
+    'the plate/in the bowl combined, the same way you estimate portion size for the other ' +
+    'nutrients — using plate/bowl size, depth, and any familiar reference objects in the ' +
+    'photo as visual cues. Use null only if the photo genuinely gives you no basis to judge ' +
+    'scale (e.g. too zoomed in, no visible container or reference).'
   );
 }
 
@@ -128,6 +142,9 @@ export default async function handler(req, res) {
     return res.status(400).json({ ok: false, error: 'Unsupported image type: ' + parsed.mimeType });
   }
 
+  let userContext = body && body.userContext;
+  userContext = typeof userContext === 'string' ? userContext.trim().slice(0, MAX_USER_CONTEXT_CHARS) : '';
+
   try {
     const anthropicRes = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -145,6 +162,7 @@ export default async function handler(req, res) {
           content: [
             { type: 'image', source: { type: 'base64', media_type: parsed.mimeType, data: parsed.base64 } },
             { type: 'text', text: 'Analyze this plate of food and return the JSON described in your instructions.' },
+            ...(userContext ? [{ type: 'text', text: 'Additional context from the user: ' + userContext }] : []),
           ],
         }],
       }),

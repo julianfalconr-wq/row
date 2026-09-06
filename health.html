@@ -326,6 +326,14 @@ main {
   font-size: 12px; color: var(--text-tertiary);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 180px;
 }
+.foodscan-context-input {
+  display: block; width: 100%; margin-top: 12px;
+  padding: 9px 12px; border-radius: 10px;
+  border: 1px solid var(--border-strong); background: var(--bg-input);
+  color: var(--text-primary); font-family: inherit; font-size: 12.5px;
+}
+.foodscan-context-input::placeholder { color: var(--text-quaternary); }
+.foodscan-context-input:focus { outline: none; border-color: var(--accent); }
 
 .foodscan-disclaimer {
   font-size: 11px; color: var(--text-tertiary); line-height: 1.5;
@@ -1025,13 +1033,19 @@ main {
 
       <div class="foodscan-picker">
         <label class="foodscan-upload-btn">
-          📷 Take / choose photo
-          <input type="file" id="foodscanFileInput" accept="image/*" capture="environment">
+          📷 Take photo
+          <input type="file" id="foodscanCameraInput" accept="image/*" capture="environment">
+        </label>
+        <label class="foodscan-upload-btn">
+          🖼️ Choose from library
+          <input type="file" id="foodscanGalleryInput" accept="image/*">
         </label>
         <img id="foodscanThumb" class="foodscan-thumb" alt="">
         <span id="foodscanFilename" class="foodscan-filename"></span>
         <button type="button" id="foodscanAnalyzeBtn" class="crono-btn-primary" style="display:none">Analyze</button>
       </div>
+
+      <input type="text" id="foodscanContextInput" class="foodscan-context-input" style="display:none" placeholder="Anything I should know? (e.g. 'made with olive oil', 'this is half a portion')">
 
       <div class="foodscan-disclaimer">
         ⚠️ AI estimate from a photo — can have large errors, especially for micros like iodine, manganese, or omega-3. Not added to your Cronometer totals above; this is a separate log.
@@ -1841,6 +1855,7 @@ document.addEventListener('DOMContentLoaded', function () {
   // one source of truth so the rendered grid always shows all of them
   // (with "—" for anything the model returned null for) in a stable order.
   const NUTRIENTS = [
+    { id: 'estimatedWeightG',    label: 'Estimated Weight',    unit: 'g' },
     { id: 'energy',              label: 'Energy',              unit: 'kcal' },
     { id: 'totalFat',            label: 'Total Fat',           unit: 'g' },
     { id: 'saturatedFat',        label: 'Saturated Fat',       unit: 'g' },
@@ -1872,13 +1887,15 @@ document.addEventListener('DOMContentLoaded', function () {
     { id: 'omega3',              label: 'Omega-3',              unit: 'g' },
   ];
 
-  const fileInput   = document.getElementById('foodscanFileInput');
-  const thumbEl     = document.getElementById('foodscanThumb');
-  const filenameEl  = document.getElementById('foodscanFilename');
-  const analyzeBtn  = document.getElementById('foodscanAnalyzeBtn');
-  const statusEl    = document.getElementById('foodscanStatus');
-  const latestEl    = document.getElementById('foodscanLatest');
-  const historyEl   = document.getElementById('foodscanHistory');
+  const cameraInput  = document.getElementById('foodscanCameraInput');
+  const galleryInput = document.getElementById('foodscanGalleryInput');
+  const thumbEl      = document.getElementById('foodscanThumb');
+  const filenameEl   = document.getElementById('foodscanFilename');
+  const analyzeBtn   = document.getElementById('foodscanAnalyzeBtn');
+  const contextInput = document.getElementById('foodscanContextInput');
+  const statusEl     = document.getElementById('foodscanStatus');
+  const latestEl     = document.getElementById('foodscanLatest');
+  const historyEl    = document.getElementById('foodscanHistory');
 
   let pendingDataUrl = null;
 
@@ -1923,8 +1940,7 @@ document.addEventListener('DOMContentLoaded', function () {
     });
   }
 
-  fileInput.addEventListener('change', () => {
-    const file = fileInput.files[0];
+  function handleFileSelected(file) {
     if (!file) return;
     const reader = new FileReader();
     reader.onload = (e) => {
@@ -1933,11 +1949,15 @@ document.addEventListener('DOMContentLoaded', function () {
       thumbEl.style.display = 'block';
       filenameEl.textContent = file.name;
       analyzeBtn.style.display = 'inline-block';
+      contextInput.style.display = 'block';
       setStatus('');
     };
     reader.onerror = () => setStatus('Could not read that photo.', 'error');
     reader.readAsDataURL(file);
-  });
+  }
+
+  cameraInput.addEventListener('change', () => handleFileSelected(cameraInput.files[0]));
+  galleryInput.addEventListener('change', () => handleFileSelected(galleryInput.files[0]));
 
   function fmtVal(v) {
     if (v == null || v === '') return '—';
@@ -2003,15 +2023,18 @@ document.addEventListener('DOMContentLoaded', function () {
   analyzeBtn.addEventListener('click', async () => {
     if (!pendingDataUrl) return;
     analyzeBtn.disabled = true;
-    fileInput.disabled = true;
+    cameraInput.disabled = true;
+    galleryInput.disabled = true;
+    contextInput.disabled = true;
     setStatus('Compressing photo…', 'loading');
     try {
       const compressed = await compressImage(pendingDataUrl, 1024, 0.8);
+      const userContext = contextInput.value.trim();
       setStatus('Analyzing photo — this can take a few seconds…', 'loading');
       const res = await fetch('/api/food-scan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image: compressed }),
+        body: JSON.stringify({ image: compressed, userContext: userContext || undefined }),
       });
       const json = await res.json();
       if (!res.ok || !json.ok) throw new Error((json && json.error) || ('HTTP ' + res.status));
@@ -2025,12 +2048,17 @@ document.addEventListener('DOMContentLoaded', function () {
       thumbEl.style.display = 'none';
       filenameEl.textContent = '';
       analyzeBtn.style.display = 'none';
-      fileInput.value = '';
+      contextInput.style.display = 'none';
+      contextInput.value = '';
+      cameraInput.value = '';
+      galleryInput.value = '';
     } catch (e) {
       setStatus('Scan failed: ' + (e.message || String(e)), 'error');
     } finally {
       analyzeBtn.disabled = false;
-      fileInput.disabled = false;
+      cameraInput.disabled = false;
+      galleryInput.disabled = false;
+      contextInput.disabled = false;
     }
   });
 
