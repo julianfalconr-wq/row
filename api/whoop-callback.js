@@ -2,9 +2,9 @@ export default async function handler(req, res) {
   const code = req.query && req.query.code;
   if (req.query && req.query.error) return res.status(400).send('WHOOP auth error: ' + req.query.error);
   if (!code) return res.status(400).send('Missing code parameter.');
-  const clientId     = process.env.WHOOP_CLIENT_ID;
-  const clientSecret = process.env.WHOOP_CLIENT_SECRET;
-  const redirectUri  = process.env.WHOOP_REDIRECT_URI;
+  const clientId     = (process.env.WHOOP_CLIENT_ID || '').trim();
+  const clientSecret = (process.env.WHOOP_CLIENT_SECRET || '').trim();
+  const redirectUri  = (process.env.WHOOP_REDIRECT_URI || '').trim();
   if (!clientId || !clientSecret || !redirectUri) {
     return res.status(500).send('Server not configured (missing WHOOP_* env vars).');
   }
@@ -13,12 +13,6 @@ export default async function handler(req, res) {
       grant_type: 'authorization_code', code, redirect_uri: redirectUri,
     });
     const basicAuth = Buffer.from(clientId + ':' + clientSecret).toString('base64');
-    // TEMPORARY DEBUG LOGGING -- remove once invalid_client is resolved.
-    // Never logs the secret itself, only its length + the auth header's length.
-    console.log('CLIENT_ID:[' + clientId + ']');
-    console.log('CLIENT_SECRET length:', clientSecret.length);
-    console.log('REDIRECT_URI:[' + redirectUri + ']');
-    console.log('Authorization header length:', ('Basic ' + basicAuth).length);
     const tokenRes = await fetch('https://api.prod.whoop.com/oauth/oauth2/token', {
       method: 'POST',
       headers: {
