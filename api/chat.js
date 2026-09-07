@@ -112,6 +112,11 @@ const PROPOSE_OBJECTIVES_TOOL = {
     },
     required: ['strength', 'running', 'rationale'],
   },
+  // Last tool in the tools array -> caches every tool definition up to
+  // and including this one (see the prompt-caching note in the handler
+  // below). Tool definitions never change between requests, so this is
+  // a pure win with no behavior difference.
+  cache_control: { type: 'ephemeral' },
 };
 
 // Same defensive normalization api/training.js's normalizePlan() applies
@@ -334,23 +339,38 @@ async function handleMemoryCommand(input) {
 
 // ---------- System prompt ----------
 
-function buildSystemPrompt(todayContext) {
+// Split into a STATIC part (identical on every call, regardless of
+// todayContext) and a DYNAMIC part (today's actual numbers) so the
+// request can cache_control the static part separately — see the
+// "system" array built in the handler below. Order matters for
+// caching: cacheable content must come first in the prefix, so the
+// static instructions are block 1 and todayContext is block 2, not
+// interleaved the way the single-string version used to read.
+function buildStaticSystemPrompt() {
   return (
     'You are a nutrition and health assistant embedded in the user\'s personal dashboard (Row). ' +
-    'Give practical, specific advice based on the data below. Keep answers concise and actionable. ' +
-    'You are not a doctor; for medical concerns, suggest they consult a professional.\n\n' +
-    'TODAY\'S DATA (from Cronometer sync + goals + recent AI food scans):\n' +
-    JSON.stringify(todayContext || {}, null, 2) +
-    '\n\nYou also have a memory tool. Use it to remember durable facts about the user across ' +
-    'conversations (preferences, recurring patterns, things they\'ve told you before) — not the ' +
-    'raw numbers above, those change daily and are already provided fresh again next time.\n\n' +
+    'Give practical, specific advice based on the data provided below (after these instructions). ' +
+    'Keep answers concise and actionable. You are not a doctor; for medical concerns, suggest they ' +
+    'consult a professional.\n\n' +
+    'MEMORY TOOL — use it sparingly, not as a routine first step. Only VIEW/check memory when the ' +
+    'conversation itself gives you a reason to — the user references something from a past ' +
+    'conversation, asks whether you remember something, or you are about to give advice that would ' +
+    'genuinely benefit from a preference they may have told you before. Do not open or list memory ' +
+    'on ordinary questions just to check. Only WRITE to memory when the user states something ' +
+    'actually durable and worth keeping across days — an explicit preference ("I don\'t do barbell ' +
+    'work", "I prefer running in the mornings") or a pattern you\'ve now clearly seen repeat. Do NOT ' +
+    'write memory for routine or transactional exchanges — in particular, negotiating or adjusting ' +
+    'this week\'s training objectives is not itself memory-worthy (that plan already lives on the ' +
+    'Training page once saved; it doesn\'t need a duplicate memory entry). Never write the raw numbers ' +
+    'in TODAY\'S DATA either — those change daily and are already provided fresh next time. When in ' +
+    'doubt, skip the tool entirely; most messages need zero memory calls.\n\n' +
     'WEEKLY TRAINING OBJECTIVES: the user can also set up this week\'s training plan by talking it through ' +
     'with you, the way they used to negotiate a weekly plan back-and-forth with a coach — mentioning things ' +
     'like padel days, how recovery has been, or how much time they actually have this week. When the user ' +
     'brings up setting up or discussing this week\'s training, do NOT immediately propose a plan on the ' +
     'first message. Ask clarifying questions first if you don\'t already have enough to be specific — in ' +
     'particular: any padel or other commitments this week, how recovery/energy has felt lately, and any ' +
-    'time constraints. Use the gym/whoop data already in TODAY\'S DATA above as a starting point (it already ' +
+    'time constraints. Use the gym/whoop data already in TODAY\'S DATA as a starting point (it already ' +
     'covers recent strength sessions and recovery trend), but that data says nothing about padel or upcoming ' +
     'time constraints, so still ask about those. Only once you have enough to give concrete numbers should ' +
     'you call the propose_training_objectives tool — never call it speculatively or as a first response. ' +
@@ -362,11 +382,15 @@ function buildSystemPrompt(todayContext) {
     '```chart\n' +
     '{ "type": "line", "labels": ["Mon", "Tue", "Wed"], "datasets": [{ "label": "Strain", "data": [8.2, 10.1, 6.4] }] }\n' +
     '```\n' +
-    'Only "line" or "bar" for "type". Only chart data you can actually ground in the data provided ' +
-    'above (or in what the user just told you) — never invent numbers to fill a chart. Put any ' +
+    'Only "line" or "bar" for "type". Only chart data you can actually ground in TODAY\'S DATA ' +
+    '(or in what the user just told you) — never invent numbers to fill a chart. Put any ' +
     'explanation in the surrounding text, not inside the JSON. Most replies won\'t need a chart at ' +
     'all — use one only when it\'s clearly more useful than a sentence.'
   );
+}
+
+function buildTodayContextPrompt(todayContext) {
+  return 'TODAY\'S DATA (from Cronometer sync + goals + recent AI food scans):\n' + JSON.stringify(todayContext || {}, null, 2);
 }
 
 // ---------- Handler ----------
@@ -394,6 +418,20 @@ export default async function handler(req, res) {
 
   const messages = [...(Array.isArray(history) ? history : []), { role: 'user', content: message }];
 
+  // Built once per request (not once per loop iteration) — todayContext
+  // is fixed for the whole request, so this is byte-identical across
+  // every tool-loop iteration below. Two separate blocks, each with its
+  // own cache_control: the static instructions (block 1) are identical
+  // across every request regardless of todayContext, so they can also
+  // cache-hit across separate user messages within the TTL window; the
+  // todayContext block (block 2) only stays identical within this one
+  // request's tool loop, but caching it there still avoids re-billing
+  // it on every iteration when the loop runs more than once.
+  const systemBlocks = [
+    { type: 'text', text: buildStaticSystemPrompt(), cache_control: { type: 'ephemeral' } },
+    { type: 'text', text: buildTodayContextPrompt(todayContext), cache_control: { type: 'ephemeral' } },
+  ];
+
   try {
     let iterations = 0;
     while (iterations < MAX_TOOL_ITERATIONS) {
@@ -408,7 +446,7 @@ export default async function handler(req, res) {
         body: JSON.stringify({
           model: MODEL,
           max_tokens: 1024,
-          system: buildSystemPrompt(todayContext),
+          system: systemBlocks,
           messages,
           tools: [{ type: 'memory_20250818', name: 'memory' }, PROPOSE_OBJECTIVES_TOOL],
         }),
@@ -420,6 +458,11 @@ export default async function handler(req, res) {
       }
 
       const data = await anthropicRes.json();
+      // TEMPORARY — remove once caching savings are confirmed (task step
+      // "Verification"). Logs to Vercel's function logs, not the client.
+      if (data && data.usage) {
+        console.log('[chat usage] iter=' + iterations, JSON.stringify(data.usage));
+      }
       messages.push({ role: 'assistant', content: data.content });
 
       const toolUses = (data.content || []).filter((b) => b.type === 'tool_use');
