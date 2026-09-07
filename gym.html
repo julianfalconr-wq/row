@@ -12,7 +12,7 @@
 </script>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0a0a0b">
-<title>Progressive Overload Coach</title>
+<title>Training</title>
 <script src="topbar.js" defer></script>
 
 <!-- =============================================================
@@ -236,6 +236,136 @@ img, video, canvas, svg { max-width: 100%; }
 .po-day-sep { color: var(--text-4); }
 .po-day-split { color: var(--good); font-weight: 800; }
 .po-day-split.is-rest { color: #7DD3FC; }
+
+/* ----- Training page header + Strength/Running tabs ----- */
+.training-header { margin-bottom: 16px; }
+.training-title {
+  font-size: 26px; font-weight: 800; letter-spacing: -0.02em; margin: 0 0 14px;
+}
+.training-tabs {
+  display: flex; background: rgba(255,255,255,0.04);
+  border: 1px solid var(--border); border-radius: 12px; padding: 4px; gap: 3px;
+  margin-bottom: 16px;
+}
+.training-tab {
+  flex: 1; padding: 10px 8px; border: none; background: transparent;
+  color: var(--text-3); border-radius: 8px;
+  font-family: inherit; font-size: 13px; font-weight: 700;
+  cursor: pointer; transition: background 0.15s, color 0.15s;
+  -webkit-tap-highlight-color: transparent;
+}
+.training-tab:hover { color: var(--text-2); }
+.training-tab.active {
+  background: linear-gradient(180deg, #ffffff 0%, #e8e5dd 100%);
+  color: #0a0a0b;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.5), 0 4px 12px rgba(0,0,0,0.35);
+}
+.training-panel { display: none; }
+.training-panel.active { display: block; }
+
+/* ----- Weekly objectives + Today's session cards ----- */
+.tp-card-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px;
+}
+.tp-card-title { font-size: 15px; font-weight: 700; margin: 0; }
+.tp-refresh-btn {
+  width: 32px; height: 32px; display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border); background: rgba(255,255,255,0.04);
+  color: var(--text-2); border-radius: 50%; cursor: pointer; flex-shrink: 0;
+  transition: color 0.15s, border-color 0.15s, transform 0.4s;
+  -webkit-tap-highlight-color: transparent;
+}
+.tp-refresh-btn:hover { color: var(--text-1); border-color: var(--border-strong); }
+.tp-refresh-btn.is-spinning { transform: rotate(360deg); }
+.tp-refresh-btn:disabled { opacity: 0.5; cursor: default; }
+.tp-empty { font-size: 13px; color: var(--text-3); line-height: 1.5; margin-bottom: 12px; }
+.tp-rationale { font-size: 12.5px; color: var(--text-3); line-height: 1.5; margin-top: 12px; }
+.tp-progress-row { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+.tp-progress-label {
+  display: flex; justify-content: space-between; font-size: 11.5px; color: var(--text-2); font-weight: 600;
+}
+.tp-progress-track {
+  height: 8px; border-radius: 999px; background: rgba(255,255,255,0.06); overflow: hidden;
+}
+.tp-progress-fill {
+  height: 100%; border-radius: 999px;
+  background: linear-gradient(90deg, #6ee7b7, #7DD3FC);
+  transition: width 0.3s ease;
+}
+.tp-plan-grid { display: grid; grid-template-columns: 1fr; gap: 10px; }
+.tp-plan-item {
+  background: rgba(255,255,255,0.025); border: 1px solid var(--border);
+  border-radius: 12px; padding: 12px 14px;
+}
+.tp-plan-item-head {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 4px;
+}
+.tp-plan-item-label {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-3);
+}
+.tp-plan-item-value { font-size: 13.5px; font-weight: 700; color: var(--text-1); }
+.tp-plan-item-desc { font-size: 12px; color: var(--text-3); line-height: 1.4; }
+.tp-today-text { font-size: 15px; font-weight: 600; color: var(--text-1); line-height: 1.5; }
+.tp-today-sub { font-size: 11.5px; color: var(--text-3); margin-top: 8px; }
+
+/* ----- Running log ----- */
+.run-log-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
+.run-field { display: flex; flex-direction: column; gap: 8px; }
+.run-field > label {
+  font-size: 10.5px; color: var(--text-3); font-weight: 700;
+  letter-spacing: 0.14em; text-transform: uppercase;
+}
+.run-field input, .run-field textarea {
+  padding: 12px; border: 1px solid var(--border); background: rgba(0,0,0,0.28);
+  color: var(--text-1); border-radius: 12px; font-family: inherit; font-size: 15px; font-weight: 600;
+}
+.run-field textarea { font-size: 13px; font-weight: 400; resize: vertical; min-height: 56px; }
+.run-field input:focus, .run-field textarea:focus {
+  outline: none; border-color: rgba(255,255,255,0.40); box-shadow: 0 0 0 3px rgba(255,255,255,0.06);
+}
+.run-pace-preview {
+  font-size: 12.5px; color: var(--text-3); margin: -6px 0 14px; font-family: var(--font-mono);
+}
+.run-effort-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+.run-effort-pill {
+  padding: 10px 0; border: 1px solid var(--border); background: rgba(0,0,0,0.28); color: var(--text-2);
+  border-radius: 8px; cursor: pointer; font-family: inherit; font-size: 13px; font-weight: 700;
+  font-variant-numeric: tabular-nums; -webkit-tap-highlight-color: transparent;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.run-effort-pill:hover { background: rgba(255,255,255,0.06); color: var(--text-1); }
+.run-effort-pill.active {
+  background: linear-gradient(180deg, #ffffff 0%, #e8e5dd 100%); color: #0a0a0b;
+  border-color: transparent; font-weight: 800;
+}
+.run-history-title {
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--text-3); margin: 22px 0 10px;
+}
+.run-history-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 12px 4px; border-bottom: 1px solid var(--border);
+}
+.run-history-item:last-child { border-bottom: none; }
+.run-history-main { display: flex; flex-direction: column; gap: 2px; }
+.run-history-date { font-size: 11px; color: var(--text-3); font-family: var(--font-mono); }
+.run-history-stats { font-size: 14px; font-weight: 700; color: var(--text-1); }
+.run-history-notes { font-size: 11.5px; color: var(--text-3); margin-top: 2px; max-width: 220px; }
+.run-history-effort {
+  font-size: 11px; font-weight: 700; color: var(--text-2);
+  background: rgba(255,255,255,0.06); border-radius: 999px; padding: 4px 9px; flex-shrink: 0;
+}
+.run-history-del {
+  width: 28px; height: 28px; display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border); background: transparent; color: var(--text-3);
+  border-radius: 50%; cursor: pointer; flex-shrink: 0; font-size: 14px;
+}
+.run-history-del:hover { color: var(--bad); border-color: rgba(255,138,138,0.3); }
+.run-empty {
+  background: rgba(255,255,255,0.025); border: 1px dashed var(--border); border-radius: 12px;
+  padding: 16px; text-align: center; font-size: 13px; color: var(--text-3); margin-top: 10px;
+}
+@media (max-width: 380px) { .run-log-grid { grid-template-columns: 1fr; } }
 
 .po-header {
   display: flex; align-items: center; justify-content: space-between;
@@ -1288,6 +1418,67 @@ img, video, canvas, svg { max-width: 100%; }
 <body>
 
 <div class="po-shell">
+  <div class="training-header">
+    <h1 class="training-title">Training</h1>
+    <div class="training-tabs" id="trainingTabs" role="tablist">
+      <button type="button" class="training-tab active" data-panel="strengthPanel" role="tab" aria-selected="true">Strength</button>
+      <button type="button" class="training-tab" data-panel="runningPanel" role="tab" aria-selected="false">Running</button>
+    </div>
+  </div>
+
+  <!-- This week's objectives (AI-generated, see api/training-plan.js) -->
+  <div class="card" id="tpWeeklyCard">
+    <div class="tp-card-head">
+      <h2 class="tp-card-title">This week's objectives</h2>
+      <button type="button" class="tp-refresh-btn" id="tpGenerateBtn" aria-label="Generate objectives" title="Generate / regenerate">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M20.49 15A9 9 0 1 1 5.64 5.64L23 10"/></svg>
+      </button>
+    </div>
+    <div id="tpWeeklyEmpty" class="tp-empty">No objectives generated yet this week — tap the refresh icon to have Claude build a strength + running plan from your recent history.</div>
+    <div id="tpWeeklyBody" style="display:none">
+      <div class="tp-progress-row">
+        <div class="tp-progress-label"><span>Strength</span><span id="tpStrengthProgressText">0 of 0 sessions</span></div>
+        <div class="tp-progress-track"><div class="tp-progress-fill" id="tpStrengthProgressFill" style="width:0%"></div></div>
+      </div>
+      <div class="tp-progress-row">
+        <div class="tp-progress-label"><span>Running</span><span id="tpRunningProgressText">0 of 0 km</span></div>
+        <div class="tp-progress-track"><div class="tp-progress-fill" id="tpRunningProgressFill" style="width:0%"></div></div>
+      </div>
+      <div class="tp-plan-grid">
+        <div class="tp-plan-item">
+          <div class="tp-plan-item-head"><span class="tp-plan-item-label">Strength</span><span class="tp-plan-item-value" id="tpStrengthValue">—</span></div>
+          <div class="tp-plan-item-desc" id="tpStrengthDesc">—</div>
+        </div>
+        <div class="tp-plan-item">
+          <div class="tp-plan-item-head"><span class="tp-plan-item-label">Interval / VO2 max</span><span class="tp-plan-item-value" id="tpIntervalValue">—</span></div>
+          <div class="tp-plan-item-desc" id="tpIntervalDesc">—</div>
+        </div>
+        <div class="tp-plan-item">
+          <div class="tp-plan-item-head"><span class="tp-plan-item-label">Long run</span><span class="tp-plan-item-value" id="tpLongRunValue">—</span></div>
+          <div class="tp-plan-item-desc" id="tpLongRunDesc">—</div>
+        </div>
+        <div class="tp-plan-item">
+          <div class="tp-plan-item-head"><span class="tp-plan-item-label">Easy volume</span><span class="tp-plan-item-value" id="tpEasyValue">—</span></div>
+          <div class="tp-plan-item-desc" id="tpEasyDesc">—</div>
+        </div>
+      </div>
+      <div class="tp-rationale" id="tpRationale"></div>
+    </div>
+  </div>
+
+  <!-- Today's recommended session (Whoop-adjusted, see api/training-today.js) -->
+  <div class="card" id="ttCard">
+    <div class="tp-card-head">
+      <h2 class="tp-card-title">Today's session</h2>
+      <button type="button" class="tp-refresh-btn" id="ttRefreshBtn" aria-label="Refresh recommendation" title="Refresh">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M20.49 15A9 9 0 1 1 5.64 5.64L23 10"/></svg>
+      </button>
+    </div>
+    <div class="tp-today-text" id="ttText">Tap refresh for today's pick.</div>
+    <div class="tp-today-sub" id="ttSub"></div>
+  </div>
+
+  <div id="strengthPanel" class="training-panel active">
   <button class="po-day-pill" type="button" id="dayPill" title="Tap to switch the day filter to today's split">
     <span class="po-day-date" id="dayPillDate">—</span>
     <span class="po-day-sep">·</span>
@@ -1707,6 +1898,52 @@ img, video, canvas, svg { max-width: 100%; }
     </div>
   </div>
 </div>
+
+  </div><!-- /#strengthPanel -->
+
+  <div id="runningPanel" class="training-panel">
+    <div class="card">
+      <div class="po-sub-section" style="margin-top:0">
+        <div class="po-sub-title">Log a run</div>
+        <div class="run-log-grid">
+          <div class="run-field">
+            <label>Date</label>
+            <input type="date" id="runDateInput">
+          </div>
+          <div class="run-field">
+            <label>Distance (km)</label>
+            <input type="number" id="runDistanceInput" step="0.01" inputmode="decimal" placeholder="0">
+          </div>
+          <div class="run-field">
+            <label>Duration (min)</label>
+            <input type="number" id="runDurationInput" step="0.5" inputmode="decimal" placeholder="0">
+          </div>
+          <div class="run-field">
+            <label>Pace</label>
+            <input type="text" id="runPaceDisplay" placeholder="—" disabled>
+          </div>
+        </div>
+        <div class="run-field" style="margin-bottom:14px">
+          <label>Perceived effort (1–5)</label>
+          <div class="run-effort-row" id="runEffortRow">
+            <button type="button" class="run-effort-pill" data-effort="1">1</button>
+            <button type="button" class="run-effort-pill" data-effort="2">2</button>
+            <button type="button" class="run-effort-pill" data-effort="3">3</button>
+            <button type="button" class="run-effort-pill" data-effort="4">4</button>
+            <button type="button" class="run-effort-pill" data-effort="5">5</button>
+          </div>
+        </div>
+        <div class="run-field" style="margin-bottom:14px">
+          <label>Notes</label>
+          <textarea id="runNotesInput" placeholder="Optional — how it felt, route, weather, etc."></textarea>
+        </div>
+        <button type="button" class="po-btn-primary" id="runSaveBtn">Save run</button>
+      </div>
+
+      <div class="run-history-title">History</div>
+      <div id="runHistoryList"></div>
+    </div>
+  </div>
 
 <script>
 (function() {
@@ -3325,7 +3562,7 @@ img, video, canvas, svg { max-width: 100%; }
   const SUPABASE_URL = 'https://dfxjlneohhgfdussomou.supabase.co';
   const SUPABASE_KEY = 'sb_publishable_9a1GD4OaqszZSnXW80PFTA_JvHi533e';
   const APP_KEY = 'po-coach';
-  const PC_SYNCED_KEYS = ['po_coach_v1', 'po_coach_workout_done', 'po_coach_weights', 'po_coach_photos'];
+  const PC_SYNCED_KEYS = ['po_coach_v1', 'po_coach_workout_done', 'po_coach_weights', 'po_coach_photos', 'po_coach_runs'];
 
   let pcSupa = null;
   let pcPushTimer = null;
@@ -3390,12 +3627,30 @@ img, video, canvas, svg { max-width: 100%; }
     try { photos = JSON.parse(localStorage.getItem('po_coach_photos')) || []; } catch (e) { photos = []; }
     const latestPhoto = photos.length ? { dateKey: photos[0].dateKey, weight: photos[0].weight } : null;
 
+    // Nested under "strength"/"running" (single "gym" app_state key kept,
+    // per the Training restructure) rather than splitting into two
+    // separate sync-state.js keys — daily-checkin.js and any future
+    // server-side reader already treat this whole object as opaque
+    // context for Claude, so nesting is a pure shape change with no
+    // endpoint/allow-list changes needed anywhere else.
+    let runs = [];
+    try { runs = JSON.parse(localStorage.getItem('po_coach_runs')) || []; } catch (e) { runs = []; }
+    const recentRuns = runs.filter((r) => r && r.dateKey && new Date(r.dateKey) >= sevenDaysAgo);
+    const latestRun = runs.length ? runs.slice().sort((a, b) => (a.dateKey < b.dateKey ? 1 : -1))[0] : null;
+
     return {
-      todayWorkoutDone: !!doneDays[gymTodayKey],
-      todaysSets,
-      recentWorkouts,
-      latestBodyWeight: latestBodyWeight ? { dateKey: latestBodyWeight.dateKey, weight: latestBodyWeight.weight, unit: state.units || null } : null,
-      latestProgressPhoto: latestPhoto,
+      strength: {
+        todayWorkoutDone: !!doneDays[gymTodayKey],
+        todaysSets,
+        recentWorkouts,
+        latestBodyWeight: latestBodyWeight ? { dateKey: latestBodyWeight.dateKey, weight: latestBodyWeight.weight, unit: state.units || null } : null,
+        latestProgressPhoto: latestPhoto,
+      },
+      running: {
+        last7DaysSessions: recentRuns.length,
+        last7DaysKm: Math.round(recentRuns.reduce((s, r) => s + (Number(r.distanceKm) || 0), 0) * 10) / 10,
+        latestRun: latestRun ? { dateKey: latestRun.dateKey, distanceKm: latestRun.distanceKm, durationMin: latestRun.durationMin, effort: latestRun.effort } : null,
+      },
     };
   }
 
@@ -3459,6 +3714,11 @@ img, video, canvas, svg { max-width: 100%; }
     try { renderAll(); } catch {}
     try { wtRender(); } catch {}
     try { photosRender(); } catch {}
+    // RunLog is defined in the separate <script> block below this one
+    // (kept apart so the Running tab is additive, not interleaved into
+    // this file's existing IIFE) — reload it too so a remote pull is
+    // reflected in the Running tab immediately, same as weight/photos above.
+    try { if (window.RunLog) window.RunLog.reload(); } catch {}
   }
 
   function pcApplyRemoteState(remote) {
@@ -3594,6 +3854,396 @@ img, video, canvas, svg { max-width: 100%; }
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) pcFlushPushOnUnload();
   });
+
+  // Read-only getters for the Running tab / weekly-objectives script
+  // below (kept as a separate <script> so this file's existing IIFE
+  // and its extensive strength-tracking logic stay untouched). These
+  // are closures over the live `state`/`doneDays` bindings, not
+  // snapshots, so they always reflect the latest value even after a
+  // remote sync reassigns them in pcRerender().
+  window.PoCoach = { getState: () => state, getDoneDays: () => doneDays };
+})();
+</script>
+
+<!-- =============================================================
+     Training page additions: Strength/Running tabs, Running log,
+     "This week's objectives" (api/training-plan.js), and "Today's
+     session" (api/training-today.js). Kept as its own script rather
+     than interleaved into the block above, so the existing strength-
+     tracking IIFE (and everything it's already carefully wired to)
+     stays completely untouched — this only reaches into it through
+     the small window.PoCoach / window.RunLog getters defined on both
+     sides.
+     ============================================================= -->
+<script>
+(function () {
+  'use strict';
+  const $$ = (id) => document.getElementById(id);
+
+  function getSecret() {
+    try { return localStorage.getItem('dashboard:secret') || ''; } catch (e) { return ''; }
+  }
+  function dateKey(d) {
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+  function mondayOf(d) {
+    const date = new Date(d);
+    const day = date.getDay(); // 0 = Sun .. 6 = Sat
+    const diff = (day === 0 ? -6 : 1) - day; // shift back to Monday
+    date.setDate(date.getDate() + diff);
+    date.setHours(0, 0, 0, 0);
+    return date;
+  }
+  function thisWeekMondayKey() { return dateKey(mondayOf(new Date())); }
+  function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  // ============================================================
+  // TABS
+  // ============================================================
+  const trainingTabs = document.querySelectorAll('.training-tab');
+  trainingTabs.forEach((tab) => {
+    tab.addEventListener('click', () => {
+      trainingTabs.forEach((t) => { t.classList.remove('active'); t.setAttribute('aria-selected', 'false'); });
+      tab.classList.add('active'); tab.setAttribute('aria-selected', 'true');
+      document.querySelectorAll('.training-panel').forEach((p) => p.classList.remove('active'));
+      const panel = $$(tab.dataset.panel);
+      if (panel) panel.classList.add('active');
+    });
+  });
+
+  // ============================================================
+  // RUNNING LOG — mirrors gym.html's own po_coach_weights pattern
+  // exactly: a flat JSON array in localStorage, sorted, re-saved
+  // wholesale on every change. localStorage.setItem is already
+  // wrapped by the script above (for 'po_coach_runs', added to its
+  // PC_SYNCED_KEYS list) so saving here automatically triggers both
+  // the cross-device raw mirror and the compact api/sync-state.js
+  // summary push — nothing extra needed here for either.
+  //   po_coach_runs : [{ id, dateKey, distanceKm, durationMin, effort, notes }]
+  // ============================================================
+  const RUN_KEY = 'po_coach_runs';
+  let runEntries = runLoad();
+
+  function runLoad() {
+    try {
+      const raw = localStorage.getItem(RUN_KEY);
+      const arr = raw ? JSON.parse(raw) : [];
+      return Array.isArray(arr) ? arr.sort((a, b) => b.dateKey.localeCompare(a.dateKey)) : [];
+    } catch (e) { return []; }
+  }
+  function runSave(arr) {
+    try { localStorage.setItem(RUN_KEY, JSON.stringify(arr)); } catch (e) {}
+  }
+  function runFmtPace(distanceKm, durationMin) {
+    if (!distanceKm || !durationMin) return '—';
+    const paceMin = durationMin / distanceKm;
+    const m = Math.floor(paceMin);
+    const s = Math.round((paceMin - m) * 60);
+    return m + ':' + String(s).padStart(2, '0') + ' /km';
+  }
+
+  function runRender() {
+    const listEl = $$('runHistoryList');
+    if (!runEntries.length) { listEl.innerHTML = '<div class="run-empty">No runs logged yet.</div>'; return; }
+    listEl.innerHTML = runEntries.slice(0, 30).map((r) => {
+      const pace = runFmtPace(r.distanceKm, r.durationMin);
+      return '<div class="run-history-item">' +
+        '<div class="run-history-main">' +
+          '<span class="run-history-date">' + escapeHtml(r.dateKey) + '</span>' +
+          '<span class="run-history-stats">' + r.distanceKm + ' km · ' + r.durationMin + ' min · ' + pace + '</span>' +
+          (r.notes ? '<span class="run-history-notes">' + escapeHtml(r.notes) + '</span>' : '') +
+        '</div>' +
+        '<span class="run-history-effort">RPE ' + (r.effort != null ? r.effort : '—') + '</span>' +
+        '<button type="button" class="run-history-del" data-del="' + r.id + '" aria-label="Delete run">×</button>' +
+      '</div>';
+    }).join('');
+    listEl.querySelectorAll('[data-del]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        runEntries = runEntries.filter((r) => r.id !== btn.dataset.del);
+        runSave(runEntries);
+        runRender();
+        renderWeeklyProgress();
+      });
+    });
+  }
+
+  window.RunLog = {
+    reload: () => { runEntries = runLoad(); runRender(); },
+    getEntries: () => runEntries.slice(),
+  };
+
+  // ---- Log form ----
+  let selectedEffort = null;
+  document.querySelectorAll('.run-effort-pill').forEach((pill) => {
+    pill.addEventListener('click', () => {
+      document.querySelectorAll('.run-effort-pill').forEach((p) => p.classList.remove('active'));
+      pill.classList.add('active');
+      selectedEffort = Number(pill.dataset.effort);
+    });
+  });
+
+  const runDateInput = $$('runDateInput');
+  const runDistanceInput = $$('runDistanceInput');
+  const runDurationInput = $$('runDurationInput');
+  const runPaceDisplay = $$('runPaceDisplay');
+  const runNotesInput = $$('runNotesInput');
+  runDateInput.value = dateKey(new Date());
+
+  function updatePacePreview() {
+    const dist = parseFloat(runDistanceInput.value);
+    const dur = parseFloat(runDurationInput.value);
+    runPaceDisplay.value = (dist > 0 && dur > 0) ? runFmtPace(dist, dur) : '';
+  }
+  runDistanceInput.addEventListener('input', updatePacePreview);
+  runDurationInput.addEventListener('input', updatePacePreview);
+
+  $$('runSaveBtn').addEventListener('click', () => {
+    const dk = runDateInput.value || dateKey(new Date());
+    const dist = parseFloat(runDistanceInput.value);
+    const dur = parseFloat(runDurationInput.value);
+    if (!dist || dist <= 0 || !dur || dur <= 0) { alert('Enter a distance and duration first.'); return; }
+    const entry = {
+      id: 'run_' + Date.now() + '_' + Math.floor(Math.random() * 9999),
+      dateKey: dk,
+      distanceKm: Math.round(dist * 100) / 100,
+      durationMin: Math.round(dur * 10) / 10,
+      effort: selectedEffort,
+      notes: runNotesInput.value.trim(),
+    };
+    runEntries.push(entry);
+    runEntries.sort((a, b) => b.dateKey.localeCompare(a.dateKey));
+    runSave(runEntries);
+    runRender();
+    renderWeeklyProgress();
+
+    runDistanceInput.value = ''; runDurationInput.value = ''; runPaceDisplay.value = '';
+    runNotesInput.value = ''; selectedEffort = null;
+    document.querySelectorAll('.run-effort-pill').forEach((p) => p.classList.remove('active'));
+    runDateInput.value = dateKey(new Date());
+  });
+
+  runRender();
+
+  // ============================================================
+  // Whoop live fetch — mirrors topbar.js's gatherTodayContext() Whoop
+  // section exactly (same whoop_tokens_v1 key, same refresh-then-retry
+  // flow through /api/whoop-refresh + /api/whoop-data), just with a
+  // configurable `limit` so this can pull a multi-day trend instead of
+  // gatherTodayContext()'s hardcoded limit=1. Not a different WHOOP
+  // integration — same tokens, same endpoints, same failure handling.
+  // ============================================================
+  const WHOOP_KEY = 'whoop_tokens_v1';
+
+  async function whoopRefreshToken(t) {
+    if (!t.refresh) return null;
+    try {
+      const r = await fetch('/api/whoop-refresh', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: t.refresh }),
+      });
+      const j = await r.json();
+      if (j.access_token) {
+        const next = { access: j.access_token, refresh: j.refresh_token || t.refresh, expires: Date.now() + (j.expires_in || 3500) * 1000 };
+        try { localStorage.setItem(WHOOP_KEY, JSON.stringify(next)); } catch (e) {}
+        return next;
+      }
+    } catch (e) {}
+    return null;
+  }
+  async function whoopProxyFetch(path, t) {
+    const [p, qs] = path.split('?');
+    const params = new URLSearchParams(qs || ''); params.set('path', p);
+    const r = await fetch('/api/whoop-data?' + params.toString(), { headers: { Authorization: 'Bearer ' + t.access, Accept: 'application/json' } });
+    if (r.status === 401) { const n = await whoopRefreshToken(t); if (n) return whoopProxyFetch(path, n); throw new Error('unauthorized'); }
+    if (!r.ok) throw new Error('WHOOP ' + r.status);
+    return r.json();
+  }
+  async function fetchWhoopTrend(limit) {
+    let tokens;
+    try { tokens = JSON.parse(localStorage.getItem(WHOOP_KEY)); } catch (e) { tokens = null; }
+    if (!tokens || !tokens.access) return { connected: false, today: null, recentRecovery: [], recentStrain: [] };
+    try {
+      let t = tokens;
+      if (t.expires && Date.now() > t.expires - 60000) { const n = await whoopRefreshToken(t); if (n) t = n; }
+      const [rec, cycles] = await Promise.all([
+        whoopProxyFetch('/recovery?limit=' + limit, t).catch(() => null),
+        whoopProxyFetch('/cycle?limit=' + limit, t).catch(() => null),
+      ]);
+      const recRecords = (rec && rec.records) || [];
+      const cycRecords = (cycles && cycles.records) || [];
+      const recentRecovery = recRecords
+        .map((r) => ({ date: String(r.created_at || '').slice(0, 10), recoveryPct: r.score ? Math.round(r.score.recovery_score || 0) : null }))
+        .filter((x) => x.recoveryPct != null);
+      const recentStrain = cycRecords
+        .map((c) => ({ date: String(c.start || '').slice(0, 10), strain: c.score && c.score.strain != null ? Math.round(c.score.strain * 10) / 10 : null }))
+        .filter((x) => x.strain != null);
+      const today = {
+        recoveryPct: recentRecovery.length ? recentRecovery[0].recoveryPct : null,
+        strain: recentStrain.length ? recentStrain[0].strain : null,
+      };
+      return { connected: true, today, recentRecovery, recentStrain };
+    } catch (e) {
+      return { connected: true, today: null, recentRecovery: [], recentStrain: [] }; // token exists but fetch failed
+    }
+  }
+
+  // ============================================================
+  // THIS WEEK'S OBJECTIVES — api/training-plan.js
+  // ============================================================
+  const PLAN_KEY = 'po_coach_weekly_plan_v1';
+  function loadStoredPlan() { try { return JSON.parse(localStorage.getItem(PLAN_KEY)); } catch (e) { return null; } }
+  function saveStoredPlan(p) { try { localStorage.setItem(PLAN_KEY, JSON.stringify(p)); } catch (e) {} }
+
+  function computeWeekProgress(plan) {
+    const monday = thisWeekMondayKey();
+    let doneDays = {};
+    try { doneDays = (window.PoCoach && window.PoCoach.getDoneDays()) || {}; } catch (e) {}
+    const strengthDone = Object.keys(doneDays).filter((dk) => dk >= monday && !!doneDays[dk]).length;
+
+    const runsThisWeek = runEntries.filter((r) => r.dateKey >= monday);
+    const kmDone = Math.round(runsThisWeek.reduce((s, r) => s + (Number(r.distanceKm) || 0), 0) * 10) / 10;
+    const kmTarget = plan ? Math.round(((plan.running.longRun.targetKm || 0) + (plan.running.easyVolume.targetKm || 0)) * 10) / 10 : 0;
+
+    return {
+      strengthDone,
+      strengthTarget: plan ? plan.strength.targetSessions : 0,
+      kmDone,
+      kmTarget,
+      runsThisWeek: runsThisWeek.map((r) => ({ dateKey: r.dateKey, distanceKm: r.distanceKm, durationMin: r.durationMin, effort: r.effort })),
+    };
+  }
+
+  function renderWeeklyProgress() {
+    const stored = loadStoredPlan();
+    const isCurrentWeek = !!(stored && stored.weekStart === thisWeekMondayKey() && stored.plan);
+    if (!isCurrentWeek) {
+      $$('tpWeeklyEmpty').style.display = 'block';
+      $$('tpWeeklyBody').style.display = 'none';
+      return null;
+    }
+    const plan = stored.plan;
+    const progress = computeWeekProgress(plan);
+    $$('tpWeeklyEmpty').style.display = 'none';
+    $$('tpWeeklyBody').style.display = 'block';
+
+    $$('tpStrengthProgressText').textContent = progress.strengthDone + ' of ' + progress.strengthTarget + ' sessions';
+    $$('tpStrengthProgressFill').style.width = (progress.strengthTarget ? Math.min(100, (progress.strengthDone / progress.strengthTarget) * 100) : 0) + '%';
+    $$('tpRunningProgressText').textContent = progress.kmDone + ' of ' + progress.kmTarget + ' km';
+    $$('tpRunningProgressFill').style.width = (progress.kmTarget ? Math.min(100, (progress.kmDone / progress.kmTarget) * 100) : 0) + '%';
+
+    $$('tpStrengthValue').textContent = plan.strength.targetSessions + ' sessions/wk';
+    $$('tpStrengthDesc').textContent = plan.strength.focus || '';
+    $$('tpIntervalValue').textContent = plan.running.interval.targetSessions + '× · ' + plan.running.interval.targetMinutes + ' min';
+    $$('tpIntervalDesc').textContent = plan.running.interval.description || '';
+    $$('tpLongRunValue').textContent = plan.running.longRun.targetKm + ' km';
+    $$('tpLongRunDesc').textContent = plan.running.longRun.description || '';
+    $$('tpEasyValue').textContent = plan.running.easyVolume.targetKm + ' km';
+    $$('tpEasyDesc').textContent = plan.running.easyVolume.description || '';
+    $$('tpRationale').textContent = plan.rationale || '';
+
+    return { plan, progress };
+  }
+
+  async function generateWeeklyPlan() {
+    const secret = getSecret();
+    if (!secret) { alert('Set your dashboard secret first (on the Cronometer page) to use AI features.'); return; }
+    const btn = $$('tpGenerateBtn');
+    btn.disabled = true; btn.classList.add('is-spinning');
+    try {
+      const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 21);
+      let state = {}, doneDays = {};
+      try { state = (window.PoCoach && window.PoCoach.getState()) || {}; } catch (e) {}
+      try { doneDays = (window.PoCoach && window.PoCoach.getDoneDays()) || {}; } catch (e) {}
+
+      const strengthSessions = Object.keys(doneDays)
+        .filter((dk) => new Date(dk) >= cutoff)
+        .sort().reverse()
+        .map((dk) => {
+          let totalSets = 0; const exSet = new Set();
+          Object.keys(state.logs || {}).forEach((exId) => {
+            (state.logs[exId] || []).forEach((log) => {
+              if (String(log.date || '').slice(0, 10) === dk) { totalSets++; exSet.add(exId); }
+            });
+          });
+          return { date: dk, totalSets, exerciseCount: exSet.size };
+        });
+      const recentExerciseNames = Array.from(new Set((state.exercises || []).map((e) => e.name)));
+      const runningSessions = runEntries
+        .filter((r) => new Date(r.dateKey) >= cutoff)
+        .map((r) => ({ date: r.dateKey, distanceKm: r.distanceKm, durationMin: r.durationMin, pace: runFmtPace(r.distanceKm, r.durationMin), effort: r.effort, notes: r.notes }));
+
+      const whoopTrend = await fetchWhoopTrend(14);
+      const whoop = whoopTrend.connected ? { recentRecovery: whoopTrend.recentRecovery, recentStrain: whoopTrend.recentStrain } : null;
+
+      const res = await fetch('/api/training-plan?secret=' + encodeURIComponent(secret), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ strengthSessions, recentExerciseNames, runningSessions, whoop }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.ok) throw new Error((json && json.error) || ('HTTP ' + res.status));
+
+      saveStoredPlan({ weekStart: thisWeekMondayKey(), plan: json.plan, generatedAt: new Date().toISOString() });
+      renderWeeklyProgress();
+    } catch (e) {
+      alert('Could not generate objectives: ' + (e.message || String(e)));
+    } finally {
+      btn.disabled = false; btn.classList.remove('is-spinning');
+    }
+  }
+  $$('tpGenerateBtn').addEventListener('click', generateWeeklyPlan);
+  renderWeeklyProgress();
+
+  // ============================================================
+  // TODAY'S SESSION — api/training-today.js
+  // ============================================================
+  async function generateTodayRecommendation() {
+    const secret = getSecret();
+    if (!secret) { $$('ttText').textContent = 'Set your dashboard secret first (on the Cronometer page) to use AI features.'; return; }
+    const btn = $$('ttRefreshBtn');
+    btn.disabled = true; btn.classList.add('is-spinning');
+    $$('ttText').textContent = 'Thinking…';
+    $$('ttSub').textContent = '';
+    try {
+      const stored = loadStoredPlan();
+      const isCurrentWeek = !!(stored && stored.weekStart === thisWeekMondayKey() && stored.plan);
+      const plan = isCurrentWeek ? stored.plan : null;
+      const progress = plan ? computeWeekProgress(plan) : null;
+
+      const whoopTrend = await fetchWhoopTrend(7);
+      const whoopToday = whoopTrend.connected ? whoopTrend.today : null;
+
+      const res = await fetch('/api/training-today?secret=' + encodeURIComponent(secret), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          weekPlan: plan,
+          progress: plan ? {
+            strengthSessionsDone: progress.strengthDone,
+            strengthSessionsTarget: progress.strengthTarget,
+            runningKmDone: progress.kmDone,
+            runningKmTarget: progress.kmTarget,
+            runningSessionsThisWeek: progress.runsThisWeek,
+          } : null,
+          whoopToday,
+          whoopRecentStrain: whoopTrend.connected ? whoopTrend.recentStrain : null,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.ok) throw new Error((json && json.error) || ('HTTP ' + res.status));
+
+      $$('ttText').textContent = json.recommendation;
+      $$('ttSub').textContent = (whoopToday && whoopToday.recoveryPct != null)
+        ? ('Recovery ' + whoopToday.recoveryPct + '%')
+        : (plan ? '' : "Tip: generate this week's objectives above for a more specific pick.");
+    } catch (e) {
+      $$('ttText').textContent = 'Could not get a recommendation: ' + (e.message || String(e));
+    } finally {
+      btn.disabled = false; btn.classList.remove('is-spinning');
+    }
+  }
+  $$('ttRefreshBtn').addEventListener('click', generateTodayRecommendation);
+  generateTodayRecommendation();
 })();
 </script>
 

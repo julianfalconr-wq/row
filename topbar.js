@@ -4,7 +4,7 @@
 //     <script src="topbar.js" defer></script>
 // It self-injects HTML + CSS, reads progress from localStorage,
 // and renders the water +1 button in the top bar plus the
-// Main/Health/Fitness bottom tabs. Skips the topbar/bottombar on
+// Main/Health/Training bottom tabs. Skips the topbar/bottombar on
 // finance.html and inside iframes (so the water tracker can embed
 // cleanly) — but the chat FAB shows on every non-embedded page,
 // finance.html included, since that's a page in its own right, just
@@ -349,8 +349,8 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
   <a href="health.html" class="bottombar-tab" data-page="health">
     <span class="bottombar-tab-icon">💊</span><span>Health</span>
   </a>
-  <a href="gym.html" class="bottombar-tab" data-page="fitness">
-    <span class="bottombar-tab-icon">💪</span><span>Fitness</span>
+  <a href="gym.html" class="bottombar-tab" data-page="training">
+    <span class="bottombar-tab-icon">💪</span><span>Training</span>
   </a>
 </nav>`;
 
@@ -402,7 +402,7 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
   function currentPageKey() {
     const p = (window.location.pathname || '').toLowerCase();
     if (p.endsWith('health.html')) return 'health';
-    if (p.endsWith('gym.html')) return 'fitness';
+    if (p.endsWith('gym.html')) return 'training';
     if (p.endsWith('main.html')) return 'main';
     return 'hub'; // index.html (the bento hub) — no bottombar tab represents it
   }
