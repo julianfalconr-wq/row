@@ -1152,53 +1152,86 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
       }
     }
 
+    // TEMPORARY diagnostic logging (see [push] console lines) — added to
+    // find why push_subscriptions has 0 rows despite iOS reporting
+    // notification permission granted. Remove once the root cause is
+    // confirmed and fixed; the original version silently swallowed every
+    // failure here, which is exactly what made this impossible to debug.
     async function subscribeForPush() {
+      console.log('[push] subscribeForPush() called');
       try {
-        if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) return;
+        const support = {
+          serviceWorker: 'serviceWorker' in navigator,
+          PushManager: 'PushManager' in window,
+          Notification: 'Notification' in window,
+        };
+        console.log('[push] browser support:', support);
+        if (!support.serviceWorker || !support.PushManager || !support.Notification) {
+          console.log('[push] ABORT: missing required browser API');
+          return;
+        }
+
         const secret = getSecret();
-        if (!secret) return;
+        console.log('[push] dashboard:secret present in localStorage:', !!secret);
+        if (!secret) { console.log('[push] ABORT: no dashboard:secret — never reached service worker registration'); return; }
 
+        console.log('[push] registering /sw.js ...');
         const reg = await navigator.serviceWorker.register('/sw.js');
+        console.log('[push] service worker registered, scope:', reg.scope);
 
+        console.log('[push] fetching VAPID public key from /api/push-subscribe ...');
         const keyRes = await fetch('/api/push-subscribe?secret=' + encodeURIComponent(secret));
+        console.log('[push] GET /api/push-subscribe status:', keyRes.status);
         const keyJson = await keyRes.json();
+        console.log('[push] GET /api/push-subscribe body:', keyJson);
         const publicKey = keyJson && keyJson.publicKey;
-        if (!publicKey) return; // VAPID keys not configured yet — nothing to do
+        if (!publicKey) { console.log('[push] ABORT: no publicKey in response — VAPID keys likely not set server-side'); return; }
 
         let existing = await reg.pushManager.getSubscription();
+        console.log('[push] existing pushManager subscription:', existing ? existing.endpoint : null);
         if (!existing) {
+          console.log('[push] calling pushManager.subscribe() ...');
           existing = await reg.pushManager.subscribe({
             userVisibleOnly: true,
             applicationServerKey: urlBase64ToUint8Array(publicKey),
           });
+          console.log('[push] pushManager.subscribe() resolved:', existing.endpoint);
         }
 
-        await fetch('/api/push-subscribe?secret=' + encodeURIComponent(secret), {
+        console.log('[push] POSTing subscription to /api/push-subscribe ...');
+        const postRes = await fetch('/api/push-subscribe?secret=' + encodeURIComponent(secret), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(existing.toJSON()),
         });
-      } catch (e) { /* fail silently — push is a nice-to-have, never blocks chat */ }
+        const postJson = await postRes.json().catch(() => null);
+        console.log('[push] POST /api/push-subscribe status:', postRes.status, 'body:', postJson);
+      } catch (e) {
+        console.error('[push] subscribeForPush() THREW:', e && (e.message || String(e)), e);
+      }
     }
 
     let pushSetupAttempted = false;
     function maybeSetupPush() {
-      if (pushSetupAttempted) return;
-      if (!('Notification' in window)) return;
+      if (pushSetupAttempted) { console.log('[push] maybeSetupPush: already attempted this page load, skipping'); return; }
+      if (!('Notification' in window)) { console.log('[push] maybeSetupPush: no Notification API'); return; }
+      console.log('[push] maybeSetupPush: Notification.permission =', Notification.permission);
       if (Notification.permission === 'granted') { pushSetupAttempted = true; subscribeForPush(); return; }
-      if (Notification.permission === 'denied') return;
+      if (Notification.permission === 'denied') { console.log('[push] maybeSetupPush: permission denied, not asking'); return; }
 
       // 'default' — ask once, the first time the panel is opened, not on
       // page load (a permission prompt before the user has done anything
       // gets reflexively denied and can't be re-asked).
       let asked = false;
       try { asked = localStorage.getItem(PUSH_ASKED_KEY) === '1'; } catch (e) {}
+      console.log('[push] maybeSetupPush: permission default, already asked before =', asked);
       if (asked) return;
       pushSetupAttempted = true;
       try { localStorage.setItem(PUSH_ASKED_KEY, '1'); } catch (e) {}
       Notification.requestPermission().then((perm) => {
+        console.log('[push] Notification.requestPermission() resolved:', perm);
         if (perm === 'granted') subscribeForPush();
-      }).catch(() => {});
+      }).catch((e) => console.error('[push] Notification.requestPermission() THREW:', e));
     }
 
     function openChatPanel() {

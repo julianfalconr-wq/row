@@ -171,7 +171,18 @@ export default async function handler(req, res) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title: 'Row', body: message, url: '/health.html?openChat=1' }),
     });
-    const sendJson = await sendRes.json().catch(() => ({}));
+    // Previously: await sendRes.json().catch(() => ({})) — if send-notification
+    // ever crashed instead of returning JSON (e.g. an uncaught throw), this
+    // silently produced sendResult: {} with zero indication of what actually
+    // went wrong. Now the raw response text is captured first so a parse
+    // failure still reports the real status and body instead of an empty object.
+    const sendText = await sendRes.text();
+    let sendJson;
+    try {
+      sendJson = JSON.parse(sendText);
+    } catch (e) {
+      sendJson = { error: 'non-JSON response from /api/send-notification', status: sendRes.status, bodyPreview: sendText.slice(0, 300) };
+    }
 
     return res.status(200).json({ ok: true, message, sendResult: sendJson });
   } catch (e) {

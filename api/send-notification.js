@@ -61,8 +61,14 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'method not allowed' });
   if (!checkAuth(req, res)) return;
 
-  const publicKey = process.env.VAPID_PUBLIC_KEY;
-  const privateKey = process.env.VAPID_PRIVATE_KEY;
+  // .trim() defensively — this project's Vercel env vars have twice now
+  // (WHOOP_CLIENT_ID, WHOOP_CLIENT_SECRET) turned out to carry trailing
+  // whitespace/newlines from being pasted into the dashboard, and
+  // web-push's setVapidDetails() throws SYNCHRONOUSLY (uncaught, below)
+  // if a key doesn't decode to exactly the expected byte length — which
+  // a stray trailing newline would break.
+  const publicKey = (process.env.VAPID_PUBLIC_KEY || '').trim();
+  const privateKey = (process.env.VAPID_PRIVATE_KEY || '').trim();
   if (!publicKey || !privateKey) {
     return res.status(500).json({ error: 'missing VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY env vars — generate with `npx web-push generate-vapid-keys`' });
   }
@@ -76,7 +82,16 @@ export default async function handler(req, res) {
   const notifBody = (body && body.body) || '';
   const url = (body && body.url) || '/health.html?openChat=1';
 
-  webpush.setVapidDetails(process.env.VAPID_SUBJECT || 'mailto:you@example.com', publicKey, privateKey);
+  // Previously unguarded — a malformed VAPID key throws here synchronously,
+  // outside every try/catch in this file, which crashes the whole function
+  // with Vercel's own (non-JSON) error page instead of a JSON response.
+  // That's exactly what turns into daily-checkin.js's sendResult: {} —
+  // its `.json().catch(() => ({}))` has nothing real to parse or report.
+  try {
+    webpush.setVapidDetails(process.env.VAPID_SUBJECT || 'mailto:you@example.com', publicKey, privateKey);
+  } catch (e) {
+    return res.status(500).json({ error: 'invalid VAPID keys: ' + (e.message || String(e)) });
+  }
 
   let rows;
   try {
