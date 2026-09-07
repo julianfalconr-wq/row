@@ -1426,7 +1426,7 @@ img, video, canvas, svg { max-width: 100%; }
     </div>
   </div>
 
-  <!-- This week's objectives (AI-generated, see api/training-plan.js) -->
+  <!-- This week's objectives (AI-generated, see api/training.js?mode=plan) -->
   <div class="card" id="tpWeeklyCard">
     <div class="tp-card-head">
       <h2 class="tp-card-title">This week's objectives</h2>
@@ -1466,7 +1466,7 @@ img, video, canvas, svg { max-width: 100%; }
     </div>
   </div>
 
-  <!-- Today's recommended session (Whoop-adjusted, see api/training-today.js) -->
+  <!-- Today's recommended session (Whoop-adjusted, see api/training.js?mode=today) -->
   <div class="card" id="ttCard">
     <div class="tp-card-head">
       <h2 class="tp-card-title">Today's session</h2>
@@ -3867,9 +3867,12 @@ img, video, canvas, svg { max-width: 100%; }
 
 <!-- =============================================================
      Training page additions: Strength/Running tabs, Running log,
-     "This week's objectives" (api/training-plan.js), and "Today's
-     session" (api/training-today.js). Kept as its own script rather
-     than interleaved into the block above, so the existing strength-
+     "This week's objectives" and "Today's session" (both served by
+     api/training.js — a single file with mode=plan/mode=today, kept
+     merged rather than split into two files because Vercel's Hobby
+     plan caps a deployment at 12 Serverless Functions and this repo
+     is already at that ceiling). Kept as its own script rather than
+     interleaved into the block above, so the existing strength-
      tracking IIFE (and everything it's already carefully wired to)
      stays completely untouched — this only reaches into it through
      the small window.PoCoach / window.RunLog getters defined on both
@@ -4090,7 +4093,7 @@ img, video, canvas, svg { max-width: 100%; }
   }
 
   // ============================================================
-  // THIS WEEK'S OBJECTIVES — api/training-plan.js
+  // THIS WEEK'S OBJECTIVES — api/training.js?mode=plan
   // ============================================================
   const PLAN_KEY = 'po_coach_weekly_plan_v1';
   function loadStoredPlan() { try { return JSON.parse(localStorage.getItem(PLAN_KEY)); } catch (e) { return null; } }
@@ -4177,7 +4180,7 @@ img, video, canvas, svg { max-width: 100%; }
       const whoopTrend = await fetchWhoopTrend(14);
       const whoop = whoopTrend.connected ? { recentRecovery: whoopTrend.recentRecovery, recentStrain: whoopTrend.recentStrain } : null;
 
-      const res = await fetch('/api/training-plan?secret=' + encodeURIComponent(secret), {
+      const res = await fetch('/api/training?mode=plan&secret=' + encodeURIComponent(secret), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ strengthSessions, recentExerciseNames, runningSessions, whoop }),
       });
@@ -4196,7 +4199,7 @@ img, video, canvas, svg { max-width: 100%; }
   renderWeeklyProgress();
 
   // ============================================================
-  // TODAY'S SESSION — api/training-today.js
+  // TODAY'S SESSION — api/training.js?mode=today
   // ============================================================
   async function generateTodayRecommendation() {
     const secret = getSecret();
@@ -4214,7 +4217,7 @@ img, video, canvas, svg { max-width: 100%; }
       const whoopTrend = await fetchWhoopTrend(7);
       const whoopToday = whoopTrend.connected ? whoopTrend.today : null;
 
-      const res = await fetch('/api/training-today?secret=' + encodeURIComponent(secret), {
+      const res = await fetch('/api/training?mode=today&secret=' + encodeURIComponent(secret), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           weekPlan: plan,
