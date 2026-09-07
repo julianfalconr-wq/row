@@ -42,6 +42,121 @@ const MODEL = 'claude-sonnet-5';
 const MAX_TOOL_ITERATIONS = 6;
 const MEMORY_ROOT = '/memories';
 
+// ---------- propose_training_objectives tool ----------
+// Lets Claude propose a concrete weekly training plan after negotiating
+// it conversationally (padel days, recovery, time constraints — the
+// same back-and-forth the user described having with a coach before),
+// instead of the Training page's one-click "Generate" button being the
+// only way to set objectives. The input schema mirrors the exact plan
+// shape api/training.js's normalizePlan() already produces and
+// gym.html's "Generate" flow already stores — same fields, same
+// meaning — so the frontend can save it under the identical
+// po_coach_weekly_plan_v1 key with zero changes to how the Training
+// page reads or renders it.
+const PROPOSE_OBJECTIVES_TOOL = {
+  name: 'propose_training_objectives',
+  description:
+    'Propose a concrete weekly training plan (strength + running) for the user to review. This does ' +
+    'NOT save anything by itself — the user sees the proposal in the chat and explicitly chooses to save ' +
+    'it or not. Only call this once you have gathered enough from the conversation to give specific ' +
+    'numbers (padel/other commitments this week, how recovery has been, time available) — do not call it ' +
+    'on the first message about training if you do not have that context yet; ask first. Equipment reality: ' +
+    'the user currently only has a flat/adjustable bench press setup and ONE dumbbell for strength — no ' +
+    'barbell, no rack, no second dumbbell, no machines, so every strength suggestion must be doable with ' +
+    'just those two things. Running should balance VO2 max (interval/tempo work) and building distance ' +
+    'capacity past 10km (a progressively longer long run plus easy Zone 2 volume) — standard periodization, ' +
+    'not an ad-hoc guess.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      strength: {
+        type: 'object',
+        properties: {
+          targetSessions: { type: 'integer', description: 'Number of strength sessions this week' },
+          focus: { type: 'string', description: 'Short phrase, e.g. "full-body bench + single-dumbbell supersets"' },
+        },
+        required: ['targetSessions', 'focus'],
+      },
+      running: {
+        type: 'object',
+        properties: {
+          interval: {
+            type: 'object',
+            properties: {
+              targetSessions: { type: 'integer' },
+              targetMinutes: { type: 'integer' },
+              description: { type: 'string', description: 'Concrete session, e.g. "6x3min hard w/ 2min easy jog recovery"' },
+            },
+            required: ['targetSessions', 'targetMinutes', 'description'],
+          },
+          longRun: {
+            type: 'object',
+            properties: {
+              targetKm: { type: 'number' },
+              description: { type: 'string' },
+            },
+            required: ['targetKm', 'description'],
+          },
+          easyVolume: {
+            type: 'object',
+            properties: {
+              targetKm: { type: 'number' },
+              description: { type: 'string' },
+            },
+            required: ['targetKm', 'description'],
+          },
+        },
+        required: ['interval', 'longRun', 'easyVolume'],
+      },
+      rationale: { type: 'string', description: '1-3 sentences explaining the plan given what the user told you' },
+    },
+    required: ['strength', 'running', 'rationale'],
+  },
+};
+
+// Same defensive normalization api/training.js's normalizePlan() applies
+// to Claude's other training-plan output — duplicated rather than
+// imported (this repo's established pattern for small per-file config,
+// see e.g. the NUTRIENTS list shared between api/food-scan.js and
+// health.html), since these are separate serverless functions with no
+// shared-module setup. Guarantees the frontend always gets the exact
+// shape it expects regardless of how closely the model followed the
+// input_schema.
+function numOr(v, fallback) {
+  const n = Number(v);
+  return isNaN(n) ? fallback : n;
+}
+function normalizeProposedPlan(raw) {
+  const r = raw || {};
+  const strength = r.strength || {};
+  const running = r.running || {};
+  const interval = running.interval || {};
+  const longRun = running.longRun || {};
+  const easyVolume = running.easyVolume || {};
+  return {
+    strength: {
+      targetSessions: Math.max(1, Math.round(numOr(strength.targetSessions, 3))),
+      focus: typeof strength.focus === 'string' ? strength.focus.slice(0, 200) : '',
+    },
+    running: {
+      interval: {
+        targetSessions: Math.max(0, Math.round(numOr(interval.targetSessions, 1))),
+        targetMinutes: Math.max(0, Math.round(numOr(interval.targetMinutes, 25))),
+        description: typeof interval.description === 'string' ? interval.description.slice(0, 300) : '',
+      },
+      longRun: {
+        targetKm: Math.max(0, numOr(longRun.targetKm, 8)),
+        description: typeof longRun.description === 'string' ? longRun.description.slice(0, 300) : '',
+      },
+      easyVolume: {
+        targetKm: Math.max(0, numOr(easyVolume.targetKm, 10)),
+        description: typeof easyVolume.description === 'string' ? easyVolume.description.slice(0, 300) : '',
+      },
+    },
+    rationale: typeof r.rationale === 'string' ? r.rationale.slice(0, 600) : '',
+  };
+}
+
 // ---------- Supabase-backed memory store ----------
 
 function supabaseHeaders() {
@@ -229,6 +344,19 @@ function buildSystemPrompt(todayContext) {
     '\n\nYou also have a memory tool. Use it to remember durable facts about the user across ' +
     'conversations (preferences, recurring patterns, things they\'ve told you before) — not the ' +
     'raw numbers above, those change daily and are already provided fresh again next time.\n\n' +
+    'WEEKLY TRAINING OBJECTIVES: the user can also set up this week\'s training plan by talking it through ' +
+    'with you, the way they used to negotiate a weekly plan back-and-forth with a coach — mentioning things ' +
+    'like padel days, how recovery has been, or how much time they actually have this week. When the user ' +
+    'brings up setting up or discussing this week\'s training, do NOT immediately propose a plan on the ' +
+    'first message. Ask clarifying questions first if you don\'t already have enough to be specific — in ' +
+    'particular: any padel or other commitments this week, how recovery/energy has felt lately, and any ' +
+    'time constraints. Use the gym/whoop data already in TODAY\'S DATA above as a starting point (it already ' +
+    'covers recent strength sessions and recovery trend), but that data says nothing about padel or upcoming ' +
+    'time constraints, so still ask about those. Only once you have enough to give concrete numbers should ' +
+    'you call the propose_training_objectives tool — never call it speculatively or as a first response. ' +
+    'When you do call it, also say a short summary sentence of the plan in your normal reply text (the ' +
+    'proposal itself is shown to the user as a card with its own Save button, so don\'t repeat every number ' +
+    'in prose — just enough that the message reads fine on its own).\n\n' +
     'CHARTS: when a chart would clearly help — trends over time, comparisons between days or ' +
     'metrics — you may include, inside your normal reply text, exactly one fenced block like this:\n' +
     '```chart\n' +
@@ -282,7 +410,7 @@ export default async function handler(req, res) {
           max_tokens: 1024,
           system: buildSystemPrompt(todayContext),
           messages,
-          tools: [{ type: 'memory_20250818', name: 'memory' }],
+          tools: [{ type: 'memory_20250818', name: 'memory' }, PROPOSE_OBJECTIVES_TOOL],
         }),
       });
 
@@ -300,8 +428,25 @@ export default async function handler(req, res) {
         return res.status(200).json({ reply: textBlock ? textBlock.text : '', history: messages });
       }
 
+      // propose_training_objectives is terminal from this endpoint's point
+      // of view — it's a proposal for the USER to accept or dismiss client-
+      // side, not something Claude needs to react to further. Every
+      // tool_use still needs a matching tool_result pushed onto `messages`
+      // (the Anthropic API requires it for the next turn to be valid), but
+      // we answer the acknowledgment ourselves instead of looping back for
+      // another model turn once a proposal is found.
+      let proposedObjectives = null;
       const toolResults = [];
       for (const toolUse of toolUses) {
+        if (toolUse.name === 'propose_training_objectives') {
+          proposedObjectives = normalizeProposedPlan(toolUse.input);
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: toolUse.id,
+            content: 'Proposal shown to the user in the chat UI for review. Not saved automatically — only the user can save it.',
+          });
+          continue;
+        }
         const result = await handleMemoryCommand(toolUse.input);
         toolResults.push({
           type: 'tool_result',
@@ -311,6 +456,11 @@ export default async function handler(req, res) {
         });
       }
       messages.push({ role: 'user', content: toolResults });
+
+      if (proposedObjectives) {
+        const textBlock = (data.content || []).find((b) => b.type === 'text');
+        return res.status(200).json({ reply: textBlock ? textBlock.text : '', history: messages, proposedObjectives });
+      }
     }
 
     return res.status(504).json({ error: 'too many tool iterations, aborted' });

@@ -302,6 +302,39 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
 .chat-chart-wrap { position: relative; width: 100%; height: 200px; margin: 6px 0; }
 .chat-chart-text { white-space: pre-wrap; word-break: break-word; }
 .chat-chart-fallback { font-size: 11px; color: #76746E; font-style: italic; margin-top: 4px; }
+.chat-plan-card {
+  margin-top: 10px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+.chat-plan-row {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.chat-plan-row:last-of-type { border-bottom: none; }
+.chat-plan-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.chat-plan-label { font-size: 9.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #76746E; }
+.chat-plan-desc { font-size: 11px; color: #A5A3A0; }
+.chat-plan-value { font-size: 12.5px; font-weight: 700; color: #FAFAFA; text-align: right; white-space: nowrap; flex-shrink: 0; }
+.chat-plan-rationale { font-size: 11.5px; color: #A5A3A0; margin-top: 10px; line-height: 1.4; font-style: italic; }
+.chat-plan-actions { display: flex; gap: 8px; margin-top: 12px; }
+.chat-plan-save-btn {
+  flex: 1; padding: 10px; border-radius: 10px; border: none;
+  background: #1D9E75; color: #08110D; font-family: inherit; font-size: 12.5px; font-weight: 700;
+  cursor: pointer;
+}
+.chat-plan-save-btn:disabled { opacity: 0.5; cursor: default; }
+.chat-plan-dismiss-btn {
+  padding: 10px 14px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.10);
+  background: transparent; color: #A5A3A0; font-family: inherit; font-size: 12.5px; font-weight: 600;
+  cursor: pointer;
+}
+.chat-plan-status { font-size: 12px; font-weight: 700; margin-top: 12px; text-align: center; }
+.chat-plan-status.is-saved { color: #1D9E75; }
+.chat-plan-status.is-dismissed { color: #76746E; font-weight: 600; }
 .chat-input-row {
   display: flex; align-items: center; gap: 8px;
   padding: 12px 14px;
@@ -996,11 +1029,96 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
       }
     }
 
-    function addBubble(role, text) {
+    // ---------- weekly training objectives proposal (see api/chat.js's
+    // propose_training_objectives tool) ----------
+    // Renders the plan as a distinct card with explicit Save/Not now
+    // actions — this is the first place chat can influence real app
+    // data, so nothing is written to localStorage until the user taps
+    // Save. Writes to the exact same po_coach_weekly_plan_v1 key/shape
+    // gym.html's own "Generate" button already uses (see gym.html's
+    // PLAN_KEY/saveStoredPlan/thisWeekMondayKey), so the Training page's
+    // progress bars and rendering pick it up with no changes there.
+    const PLAN_KEY = 'po_coach_weekly_plan_v1';
+    function mondayOfLocal(d) {
+      const date = new Date(d);
+      const day = date.getDay(); // 0 = Sun .. 6 = Sat
+      const diff = (day === 0 ? -6 : 1) - day;
+      date.setDate(date.getDate() + diff);
+      date.setHours(0, 0, 0, 0);
+      return date;
+    }
+    function dateKeyLocal(d) {
+      return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    }
+    function thisWeekMondayKeyLocal() { return dateKeyLocal(mondayOfLocal(new Date())); }
+
+    function planRow(label, value, desc) {
+      const row = document.createElement('div');
+      row.className = 'chat-plan-row';
+      row.innerHTML =
+        '<div class="chat-plan-main">' +
+          '<span class="chat-plan-label">' + label + '</span>' +
+          (desc ? '<span class="chat-plan-desc">' + escapeHtml(desc) + '</span>' : '') +
+        '</div>' +
+        '<span class="chat-plan-value">' + escapeHtml(value) + '</span>';
+      return row;
+    }
+
+    function renderPlanCard(container, plan) {
+      const card = document.createElement('div');
+      card.className = 'chat-plan-card';
+
+      card.appendChild(planRow('Strength', plan.strength.targetSessions + ' sessions/wk', plan.strength.focus));
+      card.appendChild(planRow('Interval / VO2 max', plan.running.interval.targetSessions + '× · ' + plan.running.interval.targetMinutes + ' min', plan.running.interval.description));
+      card.appendChild(planRow('Long run', plan.running.longRun.targetKm + ' km', plan.running.longRun.description));
+      card.appendChild(planRow('Easy volume', plan.running.easyVolume.targetKm + ' km', plan.running.easyVolume.description));
+
+      if (plan.rationale) {
+        const rationale = document.createElement('div');
+        rationale.className = 'chat-plan-rationale';
+        rationale.textContent = plan.rationale;
+        card.appendChild(rationale);
+      }
+
+      const actions = document.createElement('div');
+      actions.className = 'chat-plan-actions';
+      const saveBtn = document.createElement('button');
+      saveBtn.type = 'button'; saveBtn.className = 'chat-plan-save-btn';
+      saveBtn.textContent = "Save as this week's objectives";
+      const dismissBtn = document.createElement('button');
+      dismissBtn.type = 'button'; dismissBtn.className = 'chat-plan-dismiss-btn';
+      dismissBtn.textContent = 'Not now';
+      actions.appendChild(saveBtn);
+      actions.appendChild(dismissBtn);
+      card.appendChild(actions);
+
+      saveBtn.addEventListener('click', () => {
+        try {
+          localStorage.setItem(PLAN_KEY, JSON.stringify({ weekStart: thisWeekMondayKeyLocal(), plan, generatedAt: new Date().toISOString() }));
+        } catch (e) {}
+        actions.remove();
+        const status = document.createElement('div');
+        status.className = 'chat-plan-status is-saved';
+        status.textContent = 'Saved ✓ — check the Training page';
+        card.appendChild(status);
+      });
+      dismissBtn.addEventListener('click', () => {
+        actions.remove();
+        const status = document.createElement('div');
+        status.className = 'chat-plan-status is-dismissed';
+        status.textContent = 'Not saved';
+        card.appendChild(status);
+      });
+
+      container.appendChild(card);
+    }
+
+    function addBubble(role, text, proposedObjectives) {
       emptyEl.style.display = 'none';
       const el = document.createElement('div');
       el.className = 'chat-bubble ' + role;
       renderBubbleContent(el, text);
+      if (proposedObjectives) renderPlanCard(el, proposedObjectives);
       messagesEl.appendChild(el);
       messagesEl.scrollTop = messagesEl.scrollHeight;
       return el;
@@ -1303,7 +1421,8 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
 
         chatHistory = Array.isArray(json.history) ? json.history : chatHistory;
         saveChatHistory(chatHistory);
-        addBubble('assistant', json.reply || '(no reply)');
+        const fallbackText = json.proposedObjectives ? "Here's what I'm proposing for this week:" : '(no reply)';
+        addBubble('assistant', json.reply || fallbackText, json.proposedObjectives || null);
         archiveToServer(chatTodayKey(), chatHistory); // best-effort, doesn't block the UI
       } catch (e) {
         typingEl.remove();
