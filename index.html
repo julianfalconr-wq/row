@@ -713,6 +713,17 @@ document.addEventListener('DOMContentLoaded', function () {
   const whoopSyncBtn = document.getElementById('settingsWhoopSyncBtn');
   const whoopConnectLink = document.getElementById('settingsWhoopConnectLink');
 
+  // Shared cooldown key — same convention as health.html's WHOOP card,
+  // gym.html's Training page, and topbar.js's gatherTodayContext(), all of
+  // which independently fetch WHOOP data. A refresh failure anywhere sets
+  // this, so the others skip retrying too instead of each hammering
+  // /api/whoop-refresh on their own next attempt.
+  const WHOOP_REFRESH_COOLDOWN_KEY = 'whoop_refresh_cooldown_until';
+  const WHOOP_REFRESH_COOLDOWN_MS = 20 * 60 * 1000; // 20 minutes
+  function isWhoopRefreshCoolingDown() { return Date.now() < (Number(localStorage.getItem(WHOOP_REFRESH_COOLDOWN_KEY)) || 0); }
+  function startWhoopRefreshCooldown() { try { localStorage.setItem(WHOOP_REFRESH_COOLDOWN_KEY, String(Date.now() + WHOOP_REFRESH_COOLDOWN_MS)); } catch (e) {} }
+  function clearWhoopRefreshCooldown() { try { localStorage.removeItem(WHOOP_REFRESH_COOLDOWN_KEY); } catch (e) {} }
+
   function loadWhoopTokens() {
     try { return JSON.parse(localStorage.getItem(WHOOP_KEY)); } catch (e) { return null; }
   }
@@ -731,6 +742,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
   async function refreshWhoopToken(t) {
     if (!t.refresh) return null;
+    if (isWhoopRefreshCoolingDown()) return null; // recently failed — don't hammer /api/whoop-refresh again yet
     try {
       const r = await fetch('/api/whoop-refresh', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -740,9 +752,11 @@ document.addEventListener('DOMContentLoaded', function () {
       if (j.access_token) {
         const next = { access: j.access_token, refresh: j.refresh_token || t.refresh, expires: Date.now() + (j.expires_in || 3500) * 1000 };
         saveWhoopTokens(next);
+        clearWhoopRefreshCooldown();
         return next;
       }
     } catch (e) {}
+    startWhoopRefreshCooldown();
     return null;
   }
   async function whoopFetch(path, t) {

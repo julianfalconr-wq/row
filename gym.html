@@ -4038,9 +4038,23 @@ img, video, canvas, svg { max-width: 100%; }
   // integration — same tokens, same endpoints, same failure handling.
   // ============================================================
   const WHOOP_KEY = 'whoop_tokens_v1';
+  // Shared cooldown key — same convention as health.html's WHOOP card,
+  // index.html's settings modal, and topbar.js's gatherTodayContext(), all
+  // four of which independently fetch WHOOP data. A refresh failure on any
+  // one of them sets this, so the others skip retrying too instead of each
+  // hammering /api/whoop-refresh on their own next render/page-load — this
+  // is what was producing repeated 500/401 bursts (this page in particular
+  // auto-fires a WHOOP fetch on every load via generateTodayRecommendation()
+  // below, with no backoff of its own before this fix).
+  const WHOOP_REFRESH_COOLDOWN_KEY = 'whoop_refresh_cooldown_until';
+  const WHOOP_REFRESH_COOLDOWN_MS = 20 * 60 * 1000; // 20 minutes
+  function isWhoopRefreshCoolingDown() { return Date.now() < (Number(localStorage.getItem(WHOOP_REFRESH_COOLDOWN_KEY)) || 0); }
+  function startWhoopRefreshCooldown() { try { localStorage.setItem(WHOOP_REFRESH_COOLDOWN_KEY, String(Date.now() + WHOOP_REFRESH_COOLDOWN_MS)); } catch (e) {} }
+  function clearWhoopRefreshCooldown() { try { localStorage.removeItem(WHOOP_REFRESH_COOLDOWN_KEY); } catch (e) {} }
 
   async function whoopRefreshToken(t) {
     if (!t.refresh) return null;
+    if (isWhoopRefreshCoolingDown()) return null; // recently failed — don't hammer /api/whoop-refresh again yet
     try {
       const r = await fetch('/api/whoop-refresh', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -4050,9 +4064,11 @@ img, video, canvas, svg { max-width: 100%; }
       if (j.access_token) {
         const next = { access: j.access_token, refresh: j.refresh_token || t.refresh, expires: Date.now() + (j.expires_in || 3500) * 1000 };
         try { localStorage.setItem(WHOOP_KEY, JSON.stringify(next)); } catch (e) {}
+        clearWhoopRefreshCooldown();
         return next;
       }
     } catch (e) {}
+    startWhoopRefreshCooldown();
     return null;
   }
   async function whoopProxyFetch(path, t) {
@@ -4238,7 +4254,9 @@ img, video, canvas, svg { max-width: 100%; }
       $$('ttText').textContent = json.recommendation;
       $$('ttSub').textContent = (whoopToday && whoopToday.recoveryPct != null)
         ? ('Recovery ' + whoopToday.recoveryPct + '%')
-        : (plan ? '' : "Tip: generate this week's objectives above for a more specific pick.");
+        : (whoopTrend.connected && isWhoopRefreshCoolingDown()
+          ? 'WHOOP needs reconnecting — see the Whoop card on Health'
+          : (plan ? '' : "Tip: generate this week's objectives above for a more specific pick."));
     } catch (e) {
       $$('ttText').textContent = 'Could not get a recommendation: ' + (e.message || String(e));
     } finally {

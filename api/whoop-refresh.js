@@ -27,7 +27,16 @@ export default async function handler(req, res) {
       body: form,
     });
     const text = await r.text();
-    if (!r.ok) return res.status(500).json({ error: 'refresh failed: ' + text });
+    if (!r.ok) {
+      // Logged explicitly (not just returned in the response body) so the
+      // actual WHOOP error — e.g. invalid_grant for a dead/rotated refresh
+      // token, vs. invalid_client for a credentials problem — is visible
+      // in Vercel's function logs without having to inspect response
+      // bodies. A dead refresh_token needs a real reconnect; nothing in
+      // this file can recover from that on its own.
+      console.error('[whoop-refresh] WHOOP token endpoint returned ' + r.status + ': ' + text);
+      return res.status(500).json({ error: 'refresh failed: ' + text });
+    }
     try { return res.status(200).json(JSON.parse(text)); }
     catch { return res.status(500).json({ error: 'non-JSON' }); }
   } catch (e) {
