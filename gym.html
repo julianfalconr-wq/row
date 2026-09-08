@@ -2022,7 +2022,12 @@ img, video, canvas, svg { max-width: 100%; }
         if (found >= 0) idx = found;
       }
       s.splitAnchor = {
-        date: (CONFIG.splitAnchor && CONFIG.splitAnchor.date) || new Date().toISOString().slice(0, 10),
+        // Local calendar date, not a UTC slice — this anchors "index"
+        // to a specific day, and todaySplit() compares it against local
+        // midnight, so it must be derived the same way or the anchor
+        // silently shifts a day west of UTC. wtDateKey() is defined
+        // further down this same IIFE but hoisted, so it's safe here.
+        date: (CONFIG.splitAnchor && CONFIG.splitAnchor.date) || wtDateKey(new Date()),
         index: idx
       };
     }
@@ -2158,8 +2163,14 @@ img, video, canvas, svg { max-width: 100%; }
     if (!ex || !logs.length) { wrap.classList.remove('show'); return; }
     const last = logs[logs.length - 1];
     const setStr = ex.bw ? (last.reps + ' reps') : (last.weight + unit() + ' × ' + last.reps);
-    const d = new Date(last.date);
-    const da = Math.floor((Date.now() - d.getTime()) / 86400000);
+    // Calendar-day difference via local midnight (same pattern
+    // todaySplit() uses), not raw elapsed milliseconds — a set logged
+    // at 11pm yesterday and viewed at 6am today is 7 hours apart but a
+    // full calendar day "ago"; raw elapsed-time bucketing would
+    // misreport that as "today".
+    const todayMid = new Date(); todayMid.setHours(0, 0, 0, 0);
+    const lastMid = new Date(last.date); lastMid.setHours(0, 0, 0, 0);
+    const da = Math.round((todayMid - lastMid) / 86400000);
     const ago = da === 0 ? 'today' : da === 1 ? 'yesterday' : da + ' days ago';
     v.textContent = setStr;
     m.textContent = ago;
@@ -2175,7 +2186,14 @@ img, video, canvas, svg { max-width: 100%; }
     const ex = getCurrentEx();
     if (!ex) { wrap.innerHTML = ''; return; }
     const todayKey = wtDateKey(new Date());
-    const todays = getLogs().filter(l => String(l.date || '').slice(0, 10) === todayKey);
+    // wtDateKey(new Date(l.date)) — NOT l.date.slice(0,10). Slicing an
+    // ISO timestamp gives its UTC calendar date, which disagrees with
+    // the user's actual local day in negative-UTC-offset timezones
+    // (e.g. a 9pm log in Mexico City, UTC-6, is already "tomorrow" in
+    // UTC) — exactly the bug this whole file's date handling was
+    // audited for. Always round-trip through a real Date + local
+    // getters instead.
+    const todays = getLogs().filter(l => wtDateKey(new Date(l.date)) === todayKey);
     if (!todays.length) { wrap.innerHTML = ''; return; }
     wrap.innerHTML = todays.map((l, i) => {
       const val = ex.bw ? (l.reps + ' reps') : (l.weight + unit() + ' × ' + l.reps);
@@ -2229,7 +2247,7 @@ img, video, canvas, svg { max-width: 100%; }
     $('bestSet').textContent = ex.bw ? (best.reps + 'r') : (best.weight + '×' + best.reps);
     // Distinct days, not logs.length — logging several sets in one
     // sitting is several entries but still one session.
-    const uniqueDays = new Set(logs.map(l => String(l.date || '').slice(0, 10)));
+    const uniqueDays = new Set(logs.map(l => wtDateKey(new Date(l.date))));
     $('sessionCount').textContent = uniqueDays.size;
   }
   function renderSparkline() {
@@ -2299,7 +2317,13 @@ img, video, canvas, svg { max-width: 100%; }
     try {
       const rot = state.splitRotation;
       if (!rot || !rot.length) return { name: '—', index: 0 };
-      const a = new Date(state.splitAnchor.date);
+      // wtParseKey(), not new Date(bareDateString) — a bare "YYYY-MM-DD"
+      // string is parsed by JS as UTC midnight, which is the PREVIOUS
+      // local calendar day anywhere west of UTC (e.g. Mexico City,
+      // UTC-6) — silently shifting the whole rotation back a day.
+      // wtParseKey() builds the Date from y/m/d components directly,
+      // which the spec always treats as local time.
+      const a = wtParseKey(state.splitAnchor.date);
       const t = new Date();
       a.setHours(0,0,0,0); t.setHours(0,0,0,0);
       const diffDays = Math.round((t - a) / 86400000);
@@ -2405,7 +2429,10 @@ img, video, canvas, svg { max-width: 100%; }
     const byDay = {};
     state.exercises.forEach(ex => {
       (state.logs[ex.id] || []).forEach(l => {
-        const dk = l.date.slice(0, 10);
+        // wtDateKey(new Date(l.date)) — local calendar date, not a raw
+        // UTC slice of the ISO timestamp (see todaySplit()'s comment).
+        // Feeds both Today's Workout and Past Workouts below.
+        const dk = wtDateKey(new Date(l.date));
         if (!byDay[dk]) byDay[dk] = [];
         byDay[dk].push({ ex, log: l });
       });
@@ -2794,7 +2821,10 @@ img, video, canvas, svg { max-width: 100%; }
     if (newTodayIdx >= cleaned.length) newTodayIdx = 0;
     state.splitRotation = cleaned;
     state.splitAnchor = {
-      date: new Date().toISOString().slice(0, 10),
+      // Local calendar date (see todaySplit()'s comment) — editing your
+      // rotation in the evening west of UTC must anchor to the day you
+      // actually mean, not tomorrow in UTC.
+      date: wtDateKey(new Date()),
       index: newTodayIdx
     };
     saveState();
@@ -3127,7 +3157,7 @@ img, video, canvas, svg { max-width: 100%; }
         // Still count volume / sessions even for bodyweight + sparse exercises
         logs.forEach(l => {
           if (new Date(l.date) >= start) {
-            workoutDays.add(l.date.slice(0, 10));
+            workoutDays.add(wtDateKey(new Date(l.date))); // local calendar date, not a UTC slice
             totalVolumeInWindow += (l.weight || 0) * (l.reps || 0);
           }
         });
@@ -3136,7 +3166,7 @@ img, video, canvas, svg { max-width: 100%; }
       const inWin  = logs.filter(l => new Date(l.date) >= start);
       const before = logs.filter(l => new Date(l.date) < start);
       inWin.forEach(l => {
-        workoutDays.add(l.date.slice(0, 10));
+        workoutDays.add(wtDateKey(new Date(l.date))); // local calendar date, not a UTC slice
         totalVolumeInWindow += (l.weight || 0) * (l.reps || 0);
       });
       if (!inWin.length || !before.length) return;
@@ -3649,12 +3679,19 @@ img, video, canvas, svg { max-width: 100%; }
     const todaysSets = [];
     const recentWorkoutsByDay = {};
     const sevenDaysAgo = new Date(); sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    // String-compare local date keys throughout (dk >= sevenDaysAgoKey)
+    // rather than reconstructing Date objects from them — new Date(dk)
+    // on a bare "YYYY-MM-DD" string parses as UTC midnight, which is
+    // the previous local day west of UTC (see todaySplit()'s comment).
+    // Comparing two "YYYY-MM-DD" strings lexicographically is exact and
+    // sidesteps that trap entirely.
+    const sevenDaysAgoKey = wtDateKey(sevenDaysAgo);
     Object.keys(state.logs || {}).forEach((exId) => {
       (state.logs[exId] || []).forEach((log) => {
-        const dk = String(log.date || '').slice(0, 10);
-        if (!dk) return;
+        if (!log.date) return;
+        const dk = wtDateKey(new Date(log.date));
         if (dk === gymTodayKey) todaysSets.push({ exercise: exById[exId] || exId, weight: log.weight, reps: log.reps });
-        if (new Date(dk) >= sevenDaysAgo) {
+        if (dk >= sevenDaysAgoKey) {
           if (!recentWorkoutsByDay[dk]) recentWorkoutsByDay[dk] = { sets: 0, exercises: new Set() };
           recentWorkoutsByDay[dk].sets++;
           recentWorkoutsByDay[dk].exercises.add(exById[exId] || exId);
@@ -3683,7 +3720,7 @@ img, video, canvas, svg { max-width: 100%; }
     // endpoint/allow-list changes needed anywhere else.
     let runs = [];
     try { runs = JSON.parse(localStorage.getItem('po_coach_runs')) || []; } catch (e) { runs = []; }
-    const recentRuns = runs.filter((r) => r && r.dateKey && new Date(r.dateKey) >= sevenDaysAgo);
+    const recentRuns = runs.filter((r) => r && r.dateKey && r.dateKey >= sevenDaysAgoKey);
     const latestRun = runs.length ? runs.slice().sort((a, b) => (a.dateKey < b.dateKey ? 1 : -1))[0] : null;
 
     return {
@@ -4219,26 +4256,33 @@ img, video, canvas, svg { max-width: 100%; }
     const btn = $$('tpGenerateBtn');
     btn.disabled = true; btn.classList.add('is-spinning');
     try {
+      // String-compare local "YYYY-MM-DD" keys (cutoffKey, dk, r.dateKey)
+      // rather than reconstructing Date objects from them — new Date(dk)
+      // on a bare date string parses as UTC midnight, which silently
+      // shifts to the previous local day west of UTC (see todaySplit()'s
+      // comment in the script above). Comparing the strings directly is
+      // exact and avoids that trap entirely.
       const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 21);
+      const cutoffKey = dateKey(cutoff);
       let state = {}, doneDays = {};
       try { state = (window.PoCoach && window.PoCoach.getState()) || {}; } catch (e) {}
       try { doneDays = (window.PoCoach && window.PoCoach.getDoneDays()) || {}; } catch (e) {}
 
       const strengthSessions = Object.keys(doneDays)
-        .filter((dk) => new Date(dk) >= cutoff)
+        .filter((dk) => dk >= cutoffKey)
         .sort().reverse()
         .map((dk) => {
           let totalSets = 0; const exSet = new Set();
           Object.keys(state.logs || {}).forEach((exId) => {
             (state.logs[exId] || []).forEach((log) => {
-              if (String(log.date || '').slice(0, 10) === dk) { totalSets++; exSet.add(exId); }
+              if (log.date && dateKey(new Date(log.date)) === dk) { totalSets++; exSet.add(exId); }
             });
           });
           return { date: dk, totalSets, exerciseCount: exSet.size };
         });
       const recentExerciseNames = Array.from(new Set((state.exercises || []).map((e) => e.name)));
       const runningSessions = runEntries
-        .filter((r) => new Date(r.dateKey) >= cutoff)
+        .filter((r) => r.dateKey >= cutoffKey)
         .map((r) => ({ date: r.dateKey, distanceKm: r.distanceKm, durationMin: r.durationMin, pace: runFmtPace(r.distanceKm, r.durationMin), effort: r.effort, notes: r.notes }));
 
       const whoopTrend = await fetchWhoopTrend(14);
