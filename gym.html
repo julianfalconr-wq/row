@@ -724,6 +724,18 @@ img, video, canvas, svg { max-width: 100%; }
   padding: 24px;
 }
 .po-modal-bg.show { display: flex; }
+/* The Add/Edit Exercise modal can now be opened from INSIDE the
+   Settings modal (Routine editor's "+ Add exercise to <Day>" / edit
+   buttons), stacking two .po-modal-bg overlays at once. Both share the
+   same z-index (100) and #exModalBg comes first in the DOM, so with no
+   override the later #setModalBg would paint on top and hide it
+   entirely — clicking "+ Add exercise" would visibly do nothing even
+   though the modal was opening correctly underneath. Raising it above
+   the base tier fixes the stacking without needing to close/reopen
+   Settings: its own backdrop covers Settings while open, and Settings
+   reappears untouched once this modal closes.
+   Reset back to 100 if the modal is renamed/restructured later. */
+#exModalBg { z-index: 150; }
 .po-modal {
   width: 100%; max-width: 420px;
   background: var(--bg-card);
