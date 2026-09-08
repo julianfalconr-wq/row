@@ -512,6 +512,24 @@ img, video, canvas, svg { max-width: 100%; }
   font-family: var(--font-mono);
 }
 
+/* ----- Today's sets for the current exercise (compact, live-updating,
+   sits right under the Log button) ----- */
+.po-today-sets { margin-top: 12px; display: flex; flex-direction: column; gap: 6px; }
+.po-today-set-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 12px;
+  background: rgba(255,255,255,0.025);
+  border: 1px solid var(--border);
+  border-radius: 8px; font-size: 12.5px;
+}
+.po-today-set-num {
+  color: var(--text-3); font-weight: 700; letter-spacing: 0.06em;
+  text-transform: uppercase; font-size: 10px;
+}
+.po-today-set-val {
+  color: var(--text-1); font-weight: 700; font-variant-numeric: tabular-nums;
+}
+
 /* ----- Weight + Reps inputs ----- */
 .po-log-grid {
   display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px;
@@ -1680,7 +1698,7 @@ img, video, canvas, svg { max-width: 100%; }
 
     <!-- Log a set -->
     <div class="po-sub-section">
-      <div class="po-sub-title">Log today's top set</div>
+      <div class="po-sub-title">Log a set</div>
       <div class="po-bw-banner" id="bwBanner">Bodyweight — log reps only</div>
       <div class="po-last-set" id="lastSet">
         <span class="po-last-label">Last time</span>
@@ -1712,6 +1730,33 @@ img, video, canvas, svg { max-width: 100%; }
         </div>
       </div>
       <button class="po-btn-primary" id="logBtn">Log set</button>
+      <div class="po-today-sets" id="todaySetsForEx"></div>
+    </div>
+
+    <!-- Today's Workout (trimmed — no Past Workouts toggle, that stays
+         further down) moved up here, right after the log button, so
+         logging a set gives immediate confirmation without scrolling
+         past Prescription/Stats/Trend/History. Same #poTw markup/IDs/JS
+         as before, just relocated — renderTodaysWorkout() targets these
+         elements by ID regardless of where they sit in the DOM. -->
+    <div class="po-sub-section">
+      <div class="po-sub-title">Today's workout</div>
+      <div class="po-tw" id="poTw">
+        <div class="po-tw-head">
+          <div>
+            <div class="po-tw-eyebrow" id="poTwDateLabel">TODAY</div>
+            <div class="po-tw-summary">
+              <span class="po-tw-summary-num" id="poTwSetCount">0</span>
+              <span class="po-tw-summary-label">sets</span>
+              <span class="po-tw-summary-sep">·</span>
+              <span class="po-tw-summary-vol" id="poTwTotalVol">0 kg lifted</span>
+            </div>
+          </div>
+          <button class="po-tw-done-btn" id="poTwDoneBtn" type="button">Mark workout done</button>
+        </div>
+        <ul class="po-tw-list" id="poTwList"></ul>
+        <div class="po-tw-empty" id="poTwEmpty">No sets logged today — log one above and it'll appear here.</div>
+      </div>
     </div>
 
     <!-- Prescription -->
@@ -1763,29 +1808,11 @@ img, video, canvas, svg { max-width: 100%; }
       </div>
     </div>
 
-    <!-- Today's Workout — every set logged today, grouped by exercise.
-         "Mark done" stamps the day so the past-workouts list shows it
-         as a completed session. The volume here also feeds the
-         composition estimate at the top of the page. -->
+    <!-- Past Workouts — "Today's workout" itself now lives up near the
+         log button (see above) for immediate confirmation; this browsing-
+         history piece stays down here since it's not needed right after
+         logging a set. Same #poTwPast* IDs/JS as before, unchanged. -->
     <div class="po-sub-section">
-      <div class="po-sub-title">Today's workout</div>
-      <div class="po-tw" id="poTw">
-        <div class="po-tw-head">
-          <div>
-            <div class="po-tw-eyebrow" id="poTwDateLabel">TODAY</div>
-            <div class="po-tw-summary">
-              <span class="po-tw-summary-num" id="poTwSetCount">0</span>
-              <span class="po-tw-summary-label">sets</span>
-              <span class="po-tw-summary-sep">·</span>
-              <span class="po-tw-summary-vol" id="poTwTotalVol">0 kg lifted</span>
-            </div>
-          </div>
-          <button class="po-tw-done-btn" id="poTwDoneBtn" type="button">Mark workout done</button>
-        </div>
-        <ul class="po-tw-list" id="poTwList"></ul>
-        <div class="po-tw-empty" id="poTwEmpty">No sets logged today — log one above and it'll appear here.</div>
-      </div>
-
       <button type="button" class="po-tw-past-toggle" id="poTwPastToggle" aria-expanded="false">
         <span>Past workouts <span class="po-tw-past-count" id="poTwPastCount">0</span></span>
         <span class="po-tw-past-arrow" id="poTwPastArrow">▾</span>
@@ -2138,6 +2165,23 @@ img, video, canvas, svg { max-width: 100%; }
     m.textContent = ago;
     wrap.classList.add('show');
   }
+  // Compact, live-updating list of every set logged TODAY for the
+  // currently-selected exercise — reuses the same state.logs data
+  // getLogs()/summarizeDay() already read, just filtered to today and
+  // shown as "Set 1: 60kg × 8" rows right under the Log button, so
+  // logging multiple sets is visibly confirmed without scrolling.
+  function renderTodaySetsForEx() {
+    const wrap = $('todaySetsForEx');
+    const ex = getCurrentEx();
+    if (!ex) { wrap.innerHTML = ''; return; }
+    const todayKey = wtDateKey(new Date());
+    const todays = getLogs().filter(l => String(l.date || '').slice(0, 10) === todayKey);
+    if (!todays.length) { wrap.innerHTML = ''; return; }
+    wrap.innerHTML = todays.map((l, i) => {
+      const val = ex.bw ? (l.reps + ' reps') : (l.weight + unit() + ' × ' + l.reps);
+      return '<div class="po-today-set-row"><span class="po-today-set-num">Set ' + (i + 1) + '</span><span class="po-today-set-val">' + val + '</span></div>';
+    }).join('');
+  }
   function renderRx() {
     const wrap = $('rxWrap');
     const ex = getCurrentEx();
@@ -2183,7 +2227,10 @@ img, video, canvas, svg { max-width: 100%; }
       if (cur > bestVal) best = l;
     });
     $('bestSet').textContent = ex.bw ? (best.reps + 'r') : (best.weight + '×' + best.reps);
-    $('sessionCount').textContent = logs.length;
+    // Distinct days, not logs.length — logging several sets in one
+    // sitting is several entries but still one session.
+    const uniqueDays = new Set(logs.map(l => String(l.date || '').slice(0, 10)));
+    $('sessionCount').textContent = uniqueDays.size;
   }
   function renderSparkline() {
     const svg = $('sparkline');
@@ -2317,6 +2364,7 @@ img, video, canvas, svg { max-width: 100%; }
   function renderAll() {
     renderDayPill();
     renderFilters(); renderSelect(); renderForm(); renderLastSet();
+    renderTodaySetsForEx();
     renderRepsRow();
     renderRx(); renderStats(); renderSparkline(); renderHistory();
     renderTodaysWorkout();
