@@ -273,7 +273,12 @@ async function handleToday(req, res, apiKey, body) {
     userContent: 'Context:\n' + JSON.stringify(context, null, 2),
     maxTokens: 800,
   });
+  // TEMPORARY — remove once the root cause of "Model did not return valid
+  // JSON" from mode=today (post short-label prompt rewrite) is confirmed.
+  // Logs to Vercel's function logs, not the client.
+  console.log('[training mode=today] raw text:', JSON.stringify(text));
   const parsed = extractJson(text);
+  console.log('[training mode=today] extractJson result:', JSON.stringify(parsed));
   const recommendation = parsed && typeof parsed.recommendation === 'string' ? parsed.recommendation.trim() : '';
   if (!recommendation) return res.status(502).json({ ok: false, error: 'Model did not return valid JSON.' });
 
