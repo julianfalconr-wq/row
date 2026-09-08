@@ -3861,7 +3861,7 @@ img, video, canvas, svg { max-width: 100%; }
   // are closures over the live `state`/`doneDays` bindings, not
   // snapshots, so they always reflect the latest value even after a
   // remote sync reassigns them in pcRerender().
-  window.PoCoach = { getState: () => state, getDoneDays: () => doneDays };
+  window.PoCoach = { getState: () => state, getDoneDays: () => doneDays, getTodaySplit: () => todaySplit() };
 })();
 </script>
 
@@ -4217,6 +4217,46 @@ img, video, canvas, svg { max-width: 100%; }
   // ============================================================
   // TODAY'S SESSION — api/training.js?mode=today
   // ============================================================
+
+  // Grounds the AI recommendation in the user's ACTUAL configured split
+  // (Push/Pull/Legs/whatever they set up, via window.PoCoach.getTodaySplit()
+  // — the exact same rotation math the day pill at the top of the Strength
+  // tab already uses, not a reimplementation) and their actually-configured
+  // exercises for that day, with the most recent logged set per exercise.
+  // Without this, api/training.js had nothing telling it what the user's
+  // real split even is, so it was free to invent a generic structure (e.g.
+  // "full-body") that doesn't match what's actually set up in Strength.
+  function buildTodayStrengthContext() {
+    const state = (window.PoCoach && window.PoCoach.getState()) || {};
+    const split = (window.PoCoach && window.PoCoach.getTodaySplit()) || { name: null, index: 0 };
+    const days = Array.isArray(state.days) ? state.days : [];
+    const splitName = split && split.name ? String(split.name) : null;
+    const isRestDay = /^rest\b/i.test(splitName || '');
+
+    let exercisesConfiguredForToday = [];
+    if (splitName && !isRestDay) {
+      const matchedDay = days.find((d) => (d.name || '').toLowerCase() === splitName.toLowerCase());
+      const dayId = matchedDay ? matchedDay.id : null;
+      exercisesConfiguredForToday = (state.exercises || [])
+        .filter((ex) => !dayId || ex.day === dayId)
+        .slice(0, 10)
+        .map((ex) => {
+          const logs = (state.logs && state.logs[ex.id]) || [];
+          const last = logs.length ? logs.slice().sort((a, b) => (String(a.date) < String(b.date) ? 1 : -1))[0] : null;
+          return {
+            name: ex.name,
+            lastPerformance: last ? { date: String(last.date || '').slice(0, 10), weight: last.weight, reps: last.reps } : null,
+          };
+        });
+    }
+
+    return {
+      todaySplitDay: splitName, // e.g. "Push", "Pull", "Legs", "Rest" — or null if no rotation configured at all
+      isRestDayInRotation: isRestDay,
+      exercisesConfiguredForToday, // [] on a rest day or if nothing is configured for this split day
+    };
+  }
+
   async function generateTodayRecommendation() {
     const secret = getSecret();
     if (!secret) { $$('ttText').textContent = 'Set your dashboard secret first (on the Cronometer page) to use AI features.'; return; }
@@ -4232,6 +4272,7 @@ img, video, canvas, svg { max-width: 100%; }
 
       const whoopTrend = await fetchWhoopTrend(7);
       const whoopToday = whoopTrend.connected ? whoopTrend.today : null;
+      const strengthContext = buildTodayStrengthContext();
 
       const res = await fetch('/api/training?mode=today&secret=' + encodeURIComponent(secret), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -4244,6 +4285,7 @@ img, video, canvas, svg { max-width: 100%; }
             runningKmTarget: progress.kmTarget,
             runningSessionsThisWeek: progress.runsThisWeek,
           } : null,
+          strengthContext,
           whoopToday,
           whoopRecentStrain: whoopTrend.connected ? whoopTrend.recentStrain : null,
         }),

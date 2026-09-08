@@ -224,6 +224,21 @@ function buildTodaySystemPrompt() {
     'that can be today\'s answer instead; if strength sessions are behind target and recovery is low, ' +
     'suggest strength over running (lower systemic fatigue) or vice versa depending on which is more ' +
     'overdue. Use judgment, but always land on ONE concrete recommendation.\n\n' +
+    'strengthContext tells you the user\'s ACTUAL configured strength split — do not invent a different ' +
+    'one. strengthContext.todaySplitDay is today\'s real rotation day (e.g. "Push", "Pull", "Legs", or ' +
+    '"Rest") from the split they set up themselves; strengthContext.exercisesConfiguredForToday lists the ' +
+    'specific exercises they actually have configured for that day, each with lastPerformance (weight/reps ' +
+    'from their most recently logged set for that exercise, or null if never logged). If you recommend ' +
+    'strength today, you MUST ground it in this real data — name the actual split day (e.g. "today\'s Push ' +
+    'day") and reference the actual exercises listed (and their last logged weight/reps, when available, ' +
+    'e.g. "bench press — you did 60kg x 8 last time"). NEVER invent a generic structure like "full-body" ' +
+    'or reference exercises that are not in exercisesConfiguredForToday — if that list is empty, say plainly ' +
+    'that nothing is configured for today\'s split rather than making something up. If ' +
+    'strengthContext.isRestDayInRotation is true, do not recommend strength training unless this week\'s ' +
+    'strength target is meaningfully behind and recovery is good — and if you do, say explicitly that ' +
+    'you\'re suggesting it despite today normally being a rest day, don\'t pretend it\'s scheduled. If ' +
+    'strengthContext itself is missing or todaySplitDay is null, no split has been configured at all — say ' +
+    'so rather than guessing a structure.\n\n' +
     'Reply with ONLY valid JSON, no markdown fences, no commentary, in exactly this shape:\n' +
     JSON.stringify({ recommendation: 'one short, specific, actionable sentence or two — name the exact session type and a concrete number (km, minutes, or sessions), not vague advice' }, null, 2)
   );
@@ -233,6 +248,7 @@ async function handleToday(req, res, apiKey, body) {
   const context = {
     weekPlan: body.weekPlan && typeof body.weekPlan === 'object' ? body.weekPlan : null,
     progress: body.progress && typeof body.progress === 'object' ? body.progress : null,
+    strengthContext: body.strengthContext && typeof body.strengthContext === 'object' ? body.strengthContext : null,
     whoopToday: body.whoopToday && typeof body.whoopToday === 'object' ? body.whoopToday : null,
     whoopRecentStrain: Array.isArray(body.whoopRecentStrain) ? body.whoopRecentStrain.slice(0, 14) : null,
   };
