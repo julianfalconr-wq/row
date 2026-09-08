@@ -794,6 +794,44 @@ img, video, canvas, svg { max-width: 100%; }
 }
 .po-add-row-btn:hover { background: rgba(255,255,255,0.05); color: var(--text-1); }
 
+/* Routine editor — per-day exercise list, nested under each day row
+   in the Settings modal's Days section */
+.po-day-ex-list {
+  display: flex; flex-direction: column; gap: 4px;
+  margin: 4px 0 12px 6px; padding-left: 10px;
+  border-left: 2px solid var(--border);
+}
+.po-day-ex-row {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 8px;
+  background: rgba(255,255,255,0.02);
+  border-radius: 6px;
+}
+.po-day-ex-name {
+  flex: 1; min-width: 0; font-size: 12px; color: var(--text-2);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.po-day-ex-actions { display: flex; gap: 2px; flex-shrink: 0; }
+.po-day-ex-actions button {
+  background: transparent; border: none; color: var(--text-4);
+  font-size: 12px; cursor: pointer; padding: 3px 6px; border-radius: 4px;
+  -webkit-tap-highlight-color: transparent;
+}
+.po-day-ex-actions button:hover { color: var(--text-1); background: rgba(255,255,255,0.06); }
+.po-day-ex-actions button:disabled { opacity: 0.25; cursor: default; }
+.po-day-ex-actions button:disabled:hover { background: transparent; }
+.po-day-ex-empty {
+  font-size: 11.5px; color: var(--text-4); font-style: italic; padding: 4px 8px;
+}
+.po-day-ex-add {
+  width: 100%; margin-top: 2px; padding: 7px;
+  background: transparent; border: 1px dashed var(--border);
+  border-radius: 6px; color: var(--text-3);
+  font-family: inherit; font-size: 11.5px; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.po-day-ex-add:hover { color: var(--text-1); border-color: var(--text-3); }
+
 /* Rotation editor list */
 .rot-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
 .rot-row {
@@ -2650,7 +2688,11 @@ img, video, canvas, svg { max-width: 100%; }
       });
     });
   }
-  function openExModal(mode, ex) {
+  // `preset` (add mode only) lets a caller pre-select gym/day instead of
+  // falling back to the current filter — used by the Routine editor's
+  // "+ Add exercise to <Day>" button so it opens already scoped to that
+  // day instead of whatever the exercise picker happens to be filtered to.
+  function openExModal(mode, ex, preset) {
     editingExId = mode === 'edit' ? ex.id : null;
     $('exModalTitle').textContent = mode === 'edit' ? 'Edit exercise' : 'Add exercise';
     $('exDelete').style.display = mode === 'edit' ? 'block' : 'none';
@@ -2665,8 +2707,8 @@ img, video, canvas, svg { max-width: 100%; }
       $('exStep').value = ex.step;
     } else {
       $('exName').value = '';
-      modalGym = state.filterGym;
-      modalDay = state.filterDay;
+      modalGym = (preset && preset.gym) || state.filterGym;
+      modalDay = (preset && preset.day) || state.filterDay;
       $('exBw').checked = false;
       $('exStartWeight').value = 20;
       $('exRepMin').value = 6;
@@ -2718,6 +2760,10 @@ img, video, canvas, svg { max-width: 100%; }
     saveState();
     $('exModalBg').classList.remove('show');
     renderAll();
+    // Refresh the Routine editor's per-day exercise lists too, in case
+    // this save came from its "+ Add exercise to <Day>" / "Edit" buttons
+    // and the Settings modal is still open underneath.
+    renderSettings();
   });
   $('exDelete').addEventListener('click', () => {
     if (!editingExId) return;
@@ -2729,6 +2775,7 @@ img, video, canvas, svg { max-width: 100%; }
     saveState();
     $('exModalBg').classList.remove('show');
     renderAll();
+    renderSettings();
   });
 
   // ============================================================
@@ -2834,8 +2881,50 @@ img, video, canvas, svg { max-width: 100%; }
   });
 
   // ============================================================
-  // SETTINGS MODAL (gyms, days, units, data)
+  // SETTINGS MODAL (gyms, days + their exercises ("Routine"), units, data)
   // ============================================================
+
+  // Routine editor: which exercises belong to each day type, in what
+  // order. Reuses the existing exercise data model (state.exercises,
+  // each already tagged with a .day id) rather than a new storage
+  // location — "order" is simply the exercise's position within
+  // state.exercises among others sharing the same .day, so reordering
+  // swaps positions in that same array (also the order the exercise
+  // picker dropdown and every other per-day listing already uses).
+  function exercisesForDay(dayId) {
+    return state.exercises.filter(e => e.day === dayId);
+  }
+  function moveExerciseInDay(exId, dir) {
+    const ex = state.exercises.find(e => e.id === exId);
+    if (!ex) return;
+    const sameDay = exercisesForDay(ex.day);
+    const pos = sameDay.indexOf(ex);
+    const swapWith = sameDay[pos + dir];
+    if (!swapWith) return;
+    const i1 = state.exercises.indexOf(ex);
+    const i2 = state.exercises.indexOf(swapWith);
+    state.exercises[i1] = swapWith;
+    state.exercises[i2] = ex;
+    saveState(); renderSettings(); renderAll();
+  }
+  function dayExerciseListHtml(d) {
+    const exs = exercisesForDay(d.id);
+    const rows = exs.length
+      ? exs.map((ex, idx) =>
+          '<div class="po-day-ex-row" data-ex-id="' + ex.id + '">'
+          + '<span class="po-day-ex-name">' + escape(ex.name) + '</span>'
+          + '<div class="po-day-ex-actions">'
+          + '<button type="button" data-action="up"' + (idx === 0 ? ' disabled' : '') + ' aria-label="Move up">↑</button>'
+          + '<button type="button" data-action="down"' + (idx === exs.length - 1 ? ' disabled' : '') + ' aria-label="Move down">↓</button>'
+          + '<button type="button" data-action="edit" aria-label="Edit">✎</button>'
+          + '</div></div>'
+        ).join('')
+      : '<div class="po-day-ex-empty">No exercises yet.</div>';
+    return '<div class="po-day-ex-list" data-day-id="' + d.id + '">' + rows
+      + '<button type="button" class="po-day-ex-add" data-day-id="' + d.id + '">+ Add exercise to ' + escape(d.name) + '</button>'
+      + '</div>';
+  }
+
   function renderSettings() {
     $('setUnitsSeg').querySelectorAll('button').forEach(b => {
       b.classList.toggle('active', b.dataset.u === state.units);
@@ -2851,6 +2940,7 @@ img, video, canvas, svg { max-width: 100%; }
       + '<input type="text" value="' + escape(d.name) + '" data-field="name" placeholder="Day name">'
       + '<button class="po-mini-btn" data-action="del" aria-label="Delete">×</button>'
       + '</div>'
+      + dayExerciseListHtml(d)
     ).join('');
     $('setGyms').querySelectorAll('.po-set-row').forEach(row => {
       const i = parseInt(row.dataset.i, 10);
@@ -2874,11 +2964,23 @@ img, video, canvas, svg { max-width: 100%; }
       });
       row.querySelector('[data-action="del"]').addEventListener('click', () => {
         if (state.days.length <= 1) { alert('You need at least one day.'); return; }
-        if (!confirm('Remove "' + state.days[i].name + '"?')) return;
+        if (!confirm('Remove "' + state.days[i].name + '"? Exercises tagged to this day will become invisible until you reassign them.')) return;
         state.days.splice(i, 1);
         if (!state.days.find(d => d.id === state.filterDay)) state.filterDay = state.days[0].id;
         saveState(); renderSettings(); renderAll();
       });
+    });
+    $('setDays').querySelectorAll('.po-day-ex-row').forEach(row => {
+      const exId = row.dataset.exId;
+      row.querySelector('[data-action="up"]').addEventListener('click', () => moveExerciseInDay(exId, -1));
+      row.querySelector('[data-action="down"]').addEventListener('click', () => moveExerciseInDay(exId, 1));
+      row.querySelector('[data-action="edit"]').addEventListener('click', () => {
+        const ex = state.exercises.find(e => e.id === exId);
+        if (ex) openExModal('edit', ex);
+      });
+    });
+    $('setDays').querySelectorAll('.po-day-ex-add').forEach(btn => {
+      btn.addEventListener('click', () => openExModal('add', null, { day: btn.dataset.dayId }));
     });
   }
   $('settingsBtn').addEventListener('click', () => {
