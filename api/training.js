@@ -223,47 +223,52 @@ async function handlePlan(req, res, apiKey, body) {
 
 function buildTodaySystemPrompt() {
   return (
-    'You recommend ONE specific training session for today on a personal dashboard, given this week\'s ' +
-    'objectives, what has already been logged this week, and today\'s Whoop recovery if available.\n\n' +
-    'Whoop-adjustment principle (match this app\'s existing convention exactly): recovery >=67% counts as ' +
-    'high/well-recovered — normal or harder work (including the interval session) is fine. 34-66% is ' +
-    'moderate — favor easier/shorter work, or strength over a hard interval session. Below 34% is low — ' +
-    'recommend an easy Zone 2 run, light/no strength, or explicit rest; do not recommend the interval ' +
-    'session on a low-recovery day. If Whoop is not connected (whoopToday is null), ignore recovery and ' +
-    'decide purely from this week\'s objectives and what is still outstanding.\n\n' +
-    'progress.runningSessionsThisWeek lists what has actually been logged since Monday, NOT pre-labeled ' +
-    'by type — infer from each session\'s own distance/duration/effort which piece of the weekly running ' +
-    'structure (interval/tempo, long run, or easy volume) it most likely satisfied (e.g. the longest-' +
-    'distance session is probably the long run; a short, high-effort, fast-paced session is probably the ' +
-    'interval/tempo one). Then prioritize whichever piece of this week\'s plan is still outstanding and ' +
-    'appropriate for today\'s recovery: if the interval/tempo session hasn\'t happened yet this week and ' +
-    'recovery is good, that\'s usually today\'s answer; if the long run is still due and recovery is fine, ' +
-    'that can be today\'s answer instead; if strength sessions are behind target and recovery is low, ' +
-    'suggest strength over running (lower systemic fatigue) or vice versa depending on which is more ' +
-    'overdue. Use judgment, but always land on ONE concrete recommendation.\n\n' +
-    'strengthContext tells you the user\'s ACTUAL configured strength split — use it to decide whether ' +
-    'strength fits today and, if so, which real day it is (strengthContext.todaySplitDay, e.g. "Push", ' +
-    '"Pull", "Legs", or "Rest") — NEVER invent a day/structure like "full-body" that doesn\'t match ' +
-    'strengthContext.todaySplitDay, and never name a day other than the real one. strengthContext.' +
-    'exercisesConfiguredForToday exists so you can sanity-check that today\'s split actually has exercises ' +
-    'configured (and to inform your judgment on whether strength is worth doing at all today) — it is ' +
-    'context for YOUR reasoning only, not something to repeat in the output. If ' +
-    'strengthContext.isRestDayInRotation is true, do not recommend strength unless this week\'s strength ' +
-    'target is meaningfully behind and recovery is good, and if so keep the "anyway" framing to a couple ' +
-    'trailing words at most (e.g. "Push anyway"), never a full sentence explaining it. If strengthContext ' +
-    'itself is missing or todaySplitDay is null, no split has been configured — say that plainly and ' +
-    'briefly instead of naming a day.\n\n' +
+    'You recommend today\'s training on a personal dashboard. This week\'s plan (weekPlan) always covers ' +
+    'BOTH strength and running — evaluate the two independently, then combine whichever pieces are ' +
+    'actually outstanding and appropriate today into ONE recommendation (e.g. "Push + 5K run"). It is ' +
+    'normal and expected for the answer to include both — do not default to naming only strength; check ' +
+    'running\'s status with the same weight every time.\n\n' +
+    'WHOOP-ADJUSTMENT (match this app\'s existing convention exactly): recovery >=67% is high/well-' +
+    'recovered — combining strength with even the hard interval session today is fine if both are due. ' +
+    '34-66% is moderate — combining is still fine for lighter pairings (e.g. strength + an easy run), but ' +
+    'avoid pairing strength with the interval session; if both would be demanding, pick just one. Below ' +
+    '34% is low — pick AT MOST ONE light thing (an easy Zone 2 run OR light strength) or recommend ' +
+    'explicit rest; never combine two demanding sessions, and never recommend the interval session. If ' +
+    'Whoop is not connected (whoopToday is null), ignore recovery and decide purely from what\'s ' +
+    'outstanding in the plan.\n\n' +
+    'STRENGTH — strengthContext tells you the user\'s ACTUAL configured split; use it, don\'t invent a ' +
+    'different one. strengthContext.todaySplitDay is today\'s real rotation day (e.g. "Push", "Pull", ' +
+    '"Legs", or "Rest") from the split they set up themselves — NEVER name a different day, and never ' +
+    'invent a generic structure like "full-body". strengthContext.exercisesConfiguredForToday is context ' +
+    'for your own reasoning only (sanity-checking the day actually has exercises configured) — never ' +
+    'repeat it in the output. progress.strengthSessionsDone vs progress.strengthSessionsTarget tells you ' +
+    'whether strength is behind this week. If strengthContext.isRestDayInRotation is true, only include ' +
+    'strength anyway if the weekly target is meaningfully behind and recovery allows it, keeping that ' +
+    'framing to a couple trailing words at most (e.g. "Push anyway"). If strengthContext itself is ' +
+    'missing or todaySplitDay is null, no split is configured — say that plainly rather than guessing.\n\n' +
+    'RUNNING — weekPlan.running has three pieces, each with its own target: interval (VO2max/tempo), ' +
+    'longRun, and easyVolume. progress.runningSessionsThisWeek lists what has ACTUALLY been logged since ' +
+    'Monday, NOT pre-labeled by type — infer from each session\'s own distance/duration/effort which ' +
+    'piece it most likely satisfied (the longest-distance session is probably the long run; a short, ' +
+    'high-effort, fast-paced session is probably the interval one; anything else is probably easy ' +
+    'volume). Whichever piece(s) have NOT clearly been satisfied yet are outstanding and worth ' +
+    'recommending if recovery allows — never suggest a piece that\'s already been done this week. ' +
+    'progress.runningKmDone vs progress.runningKmTarget is a secondary volume signal only, not a ' +
+    'substitute for checking which specific piece is still due.\n\n' +
+    'NOT TRACKED YET: padel (or anything else outside this app) is not tracked anywhere in this data — ' +
+    'do not mention padel, assume a padel day, or factor it into the recommendation in any way. Reason ' +
+    'only from weekPlan, progress, strengthContext, and Whoop.\n\n' +
     'FORMAT — this is the most important rule: the recommendation is a SHORT LABEL, not a paragraph. One ' +
     'line, naming only the split day and/or the run type/distance from this week\'s plan — nothing else. ' +
-    'Good examples: "Push", "Push + 5K run", "10K long run", "Rest — recovery is low", "Easy 5K + Legs". ' +
-    'Bad (never do this): listing individual exercises, sets, reps, or weights; explaining "no prior ' +
-    'weights logged, so start conservative"; multi-sentence reasoning. The exercise-by-exercise detail for ' +
-    'whatever day you name is already visible on the Strength tab itself once the user gets there — your ' +
-    'only job is telling them WHICH one to do today, not repeating what\'s already on that page. A few ' +
-    'trailing words of context are fine when genuinely needed (e.g. "— recovery is low"), but never more ' +
-    'than that.\n\n' +
+    'Good examples: "Push", "Push + 5K run", "Push + long run", "10K long run", "Rest — recovery is low", ' +
+    '"Easy 5K + Legs". Bad (never do this): listing individual exercises, sets, reps, or weights; ' +
+    'explaining "no prior weights logged, so start conservative"; multi-sentence reasoning. The exercise-' +
+    'by-exercise detail for whatever day you name is already visible on the Strength tab itself once the ' +
+    'user gets there — your only job is telling them WHICH one(s) to do today, not repeating what\'s ' +
+    'already on that page. A few trailing words of context are fine when genuinely needed (e.g. "— ' +
+    'recovery is low"), but never more than that.\n\n' +
     'Reply with ONLY valid JSON, no markdown fences, no commentary, in exactly this shape:\n' +
-    JSON.stringify({ recommendation: 'ONE short line naming only the split day and/or run type/distance — e.g. "Push + 5K run" — never individual exercises, sets, weights, or multi-sentence explanations' }, null, 2)
+    JSON.stringify({ recommendation: 'ONE short line naming only the split day and/or run type/distance, combined with "+" when both are due — e.g. "Push + 5K run" — never individual exercises, sets, weights, or multi-sentence explanations' }, null, 2)
   );
 }
 
@@ -294,7 +299,14 @@ async function handleToday(req, res, apiKey, body) {
     maxTokens: 800,
     effort: 'low',
   });
+  // TEMPORARY — the strength+running combined-reasoning rewrite made this
+  // prompt meaningfully more involved than the one 'low' effort was
+  // originally verified against; confirm 'low' still produces real output
+  // (not another empty string) before trusting it, same discipline as the
+  // last two rounds of debugging this endpoint. Remove once confirmed.
+  console.log('[training mode=today] raw text:', JSON.stringify(text));
   const parsed = extractJson(text);
+  console.log('[training mode=today] recommendation:', parsed && parsed.recommendation);
   const recommendation = parsed && typeof parsed.recommendation === 'string' ? parsed.recommendation.trim() : '';
   if (!recommendation) return res.status(502).json({ ok: false, error: 'Model did not return valid JSON.' });
 
