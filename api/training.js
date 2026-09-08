@@ -78,7 +78,24 @@ function extractJson(text) {
   return null;
 }
 
-async function callClaude(apiKey, { system, userContent, maxTokens }) {
+// `effort` is optional and maps to Anthropic's output_config.effort
+// (low/medium/high/xhigh/max) — claude-sonnet-5 uses adaptive thinking
+// on by default at "high" effort (the API default when omitted), which
+// can spend a large share of max_tokens on internal reasoning before
+// ever writing output text. Omit `effort` to keep that default
+// (handlePlan's multi-field weekly plan genuinely benefits from more
+// headroom); pass 'low' for simple, short-output tasks like
+// handleToday's one-line recommendation, where high-effort adaptive
+// thinking was consuming the whole 800-token budget on reasoning and
+// leaving a literal empty string for the actual answer.
+async function callClaude(apiKey, { system, userContent, maxTokens, effort }) {
+  const body = {
+    model: 'claude-sonnet-5',
+    max_tokens: maxTokens,
+    system,
+    messages: [{ role: 'user', content: userContent }],
+  };
+  if (effort) body.output_config = { effort };
   const anthropicRes = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -86,19 +103,19 @@ async function callClaude(apiKey, { system, userContent, maxTokens }) {
       'x-api-key': apiKey,
       'anthropic-version': '2023-06-01',
     },
-    body: JSON.stringify({
-      model: 'claude-sonnet-5',
-      max_tokens: maxTokens,
-      system,
-      messages: [{ role: 'user', content: userContent }],
-    }),
+    body: JSON.stringify(body),
   });
   if (!anthropicRes.ok) {
     const errText = await anthropicRes.text();
     throw new Error('Anthropic API error (' + anthropicRes.status + '): ' + errText.slice(0, 500));
   }
   const data = await anthropicRes.json();
-  return (data && data.content && data.content[0] && data.content[0].text) || '';
+  // Find the actual text block rather than assuming content[0] is it —
+  // when thinking fires, the response's content array starts with a
+  // thinking block, and content[0].text on that block is undefined. This
+  // matches the pattern api/chat.js and api/daily-checkin.js already use.
+  const textBlock = (data && data.content || []).find((b) => b && b.type === 'text');
+  return textBlock ? textBlock.text : '';
 }
 
 // ------------------------------------------------------------
@@ -263,22 +280,21 @@ async function handleToday(req, res, apiKey, body) {
     return res.status(200).json({ ok: true, recommendation: 'Generate this week\'s objectives above first, then check back here for today\'s pick.' });
   }
 
-  // Was 300 — confirmed via temporary logging that this prompt's reasoning
-  // (Whoop thresholds, inferring session type from raw logged runs) was
-  // sometimes eating the whole budget before the JSON closed, producing a
-  // truncated response extractJson() correctly couldn't parse. Matches
-  // handlePlan's 800 now.
+  // maxTokens 800 (raised from 300 after an earlier truncation bug) plus
+  // effort: 'low' (this task's actual root cause) — claude-sonnet-5's
+  // adaptive thinking defaults to 'high' effort, which was spending most
+  // or all of the budget on internal reasoning for this single-line
+  // recommendation and leaving a literal empty string as the response
+  // text. 'low' effort is Anthropic's own recommendation for exactly
+  // this kind of simple, short-output, latency-sensitive task, and lets
+  // the model skip thinking entirely on inputs this straightforward.
   const text = await callClaude(apiKey, {
     system: buildTodaySystemPrompt(),
     userContent: 'Context:\n' + JSON.stringify(context, null, 2),
     maxTokens: 800,
+    effort: 'low',
   });
-  // TEMPORARY — remove once the root cause of "Model did not return valid
-  // JSON" from mode=today (post short-label prompt rewrite) is confirmed.
-  // Logs to Vercel's function logs, not the client.
-  console.log('[training mode=today] raw text:', JSON.stringify(text));
   const parsed = extractJson(text);
-  console.log('[training mode=today] extractJson result:', JSON.stringify(parsed));
   const recommendation = parsed && typeof parsed.recommendation === 'string' ? parsed.recommendation.trim() : '';
   if (!recommendation) return res.status(502).json({ ok: false, error: 'Model did not return valid JSON.' });
 
