@@ -418,6 +418,16 @@ img, video, canvas, svg { max-width: 100%; }
   font-family: inherit; font-size: 12.5px; font-weight: 600;
   cursor: pointer; transition: background 0.15s, color 0.15s;
   -webkit-tap-highlight-color: transparent;
+  /* Custom day types (e.g. "Explosiveness", "Movility" from the routine
+     editor) are single long words that can't wrap — without this, once
+     there are enough tabs that flex:1 shrinks each button below its
+     text's natural width, the label overflows the button's box and
+     visually runs into the next tab, even though the container's own
+     `gap` is still applied underneath. This used to only be fixed inside
+     the max-width:480px media query below, so it broke on anything wider.
+     Truncating with an ellipsis keeps every tab's visible gap intact
+     regardless of viewport width or how many/long the day types are. */
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .po-seg-btn:hover { color: var(--text-2); background: rgba(255,255,255,0.04); }
 .po-seg-btn.active {
@@ -892,13 +902,12 @@ img, video, canvas, svg { max-width: 100%; }
   /* Cards — tighter padding so content has room */
   .card { padding: 16px 14px; margin-bottom: 12px; }
 
-  /* Gym / Day segmented controls — let labels truncate instead of pushing wider */
+  /* Gym / Day segmented controls — truncation itself now lives in the
+     base .po-seg-btn rule above (it applies at every width); just the
+     tighter mobile sizing stays here. */
   .po-seg-row { gap: 8px; }
   .po-seg-control { padding: 3px; gap: 2px; }
-  .po-seg-btn {
-    padding: 9px 6px; font-size: 12px;
-    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  }
+  .po-seg-btn { padding: 9px 6px; font-size: 12px; }
 
   /* Exercise picker */
   .po-exercise-bar { gap: 6px; }
