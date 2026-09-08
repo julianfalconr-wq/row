@@ -8,17 +8,24 @@ export default async function handler(req, res) {
   if (typeof body === 'string') { try { body = JSON.parse(body); } catch { body = {}; } }
   const refresh = body && body.refresh_token;
   if (!refresh) return res.status(400).json({ error: 'refresh_token required' });
-  // .trim() matters: WHOOP_CLIENT_ID/WHOOP_CLIENT_SECRET have trailing
-  // whitespace in this project's actual Vercel env vars (confirmed via
-  // debug logging when this same issue broke the initial OAuth exchange
-  // in api/whoop-callback.js — fixed there but missed here, which is why
-  // token refresh silently failed every time the access token expired).
+  // .trim() matters: WHOOP_CLIENT_ID/WHOOP_CLIENT_SECRET/WHOOP_REDIRECT_URI
+  // have trailing whitespace in this project's actual Vercel env vars
+  // (confirmed via debug logging when this same issue broke the initial
+  // OAuth exchange in api/whoop-callback.js — fixed there but missed here).
   const clientId = (process.env.WHOOP_CLIENT_ID || '').trim();
   const clientSecret = (process.env.WHOOP_CLIENT_SECRET || '').trim();
-  if (!clientId || !clientSecret) return res.status(500).json({ error: 'server not configured' });
+  // WHOOP's own token endpoint returned "invalid_request" here even with a
+  // live refresh token and correct client_id/secret, with an error_hint
+  // pointing at redirect_uri whitelisting — WHOOP requires redirect_uri on
+  // the refresh_token grant too, not just authorization_code, even though
+  // that's not strictly required by the OAuth2 spec. api/whoop-callback.js
+  // already sends this same (trimmed) value for the authorization_code
+  // exchange; it was simply missing here.
+  const redirectUri = (process.env.WHOOP_REDIRECT_URI || '').trim();
+  if (!clientId || !clientSecret || !redirectUri) return res.status(500).json({ error: 'server not configured' });
   try {
     const form = new URLSearchParams({
-      grant_type: 'refresh_token', refresh_token: refresh,
+      grant_type: 'refresh_token', refresh_token: refresh, redirect_uri: redirectUri,
       client_id: clientId, client_secret: clientSecret, scope: 'offline',
     });
     const r = await fetch('https://api.prod.whoop.com/oauth/oauth2/token', {

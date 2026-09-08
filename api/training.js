@@ -241,17 +241,17 @@ async function handleToday(req, res, apiKey, body) {
     return res.status(200).json({ ok: true, recommendation: 'Generate this week\'s objectives above first, then check back here for today\'s pick.' });
   }
 
+  // Was 300 — confirmed via temporary logging that this prompt's reasoning
+  // (Whoop thresholds, inferring session type from raw logged runs) was
+  // sometimes eating the whole budget before the JSON closed, producing a
+  // truncated response extractJson() correctly couldn't parse. Matches
+  // handlePlan's 800 now.
   const text = await callClaude(apiKey, {
     system: buildTodaySystemPrompt(),
     userContent: 'Context:\n' + JSON.stringify(context, null, 2),
-    maxTokens: 300,
+    maxTokens: 800,
   });
-  // TEMPORARY — remove once the root cause of "Model did not return valid
-  // JSON" from mode=today is confirmed. Logs to Vercel's function logs,
-  // not the client.
-  console.log('[training mode=today] raw text:', JSON.stringify(text));
   const parsed = extractJson(text);
-  console.log('[training mode=today] extractJson result:', JSON.stringify(parsed));
   const recommendation = parsed && typeof parsed.recommendation === 'string' ? parsed.recommendation.trim() : '';
   if (!recommendation) return res.status(502).json({ ok: false, error: 'Model did not return valid JSON.' });
 
