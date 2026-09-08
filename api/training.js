@@ -299,14 +299,7 @@ async function handleToday(req, res, apiKey, body) {
     maxTokens: 800,
     effort: 'low',
   });
-  // TEMPORARY — the strength+running combined-reasoning rewrite made this
-  // prompt meaningfully more involved than the one 'low' effort was
-  // originally verified against; confirm 'low' still produces real output
-  // (not another empty string) before trusting it, same discipline as the
-  // last two rounds of debugging this endpoint. Remove once confirmed.
-  console.log('[training mode=today] raw text:', JSON.stringify(text));
   const parsed = extractJson(text);
-  console.log('[training mode=today] recommendation:', parsed && parsed.recommendation);
   const recommendation = parsed && typeof parsed.recommendation === 'string' ? parsed.recommendation.trim() : '';
   if (!recommendation) return res.status(502).json({ ok: false, error: 'Model did not return valid JSON.' });
 
