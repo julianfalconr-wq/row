@@ -455,6 +455,24 @@ body::after {
 .cal-event-body { min-width: 0; }
 .cal-event-title { font-size: 13px; color: var(--text-primary); font-weight: 600; word-break: break-word; }
 .cal-event-day { font-size: 9.5px; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.08em; margin-top: 2px; }
+/* Events fully contained within another event's time range (e.g. a
+   30-min call inside a longer "Eating out" block) render here instead
+   of as their own flat-list row — offset right with a connector line
+   so they read as "happens during" the row directly above. */
+.cal-event-children {
+  display: flex; flex-direction: column; gap: 6px;
+  margin: -2px 0 0 22px;
+  padding-left: 12px;
+  border-left: 2px solid var(--line);
+}
+.cal-event-row.is-nested {
+  padding: 7px 10px;
+  background: transparent;
+  border-style: dashed;
+  opacity: 0.82;
+}
+.cal-event-row.is-nested .cal-event-time { font-size: 10.5px; min-width: 50px; }
+.cal-event-row.is-nested .cal-event-title { font-size: 12px; font-weight: 500; }
 .cal-empty { text-align: center; font-size: 12px; color: var(--text-tertiary); font-style: italic; padding: 14px 0; }
 .cal-add-toggle {
   width: 100%; margin-top: 12px; padding: 10px;
@@ -1822,6 +1840,76 @@ document.addEventListener('DOMContentLoaded', function () {
     return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
 
+  // ---- Nested-event containment ----
+  // An event is "nested" under another when it's fully contained by it
+  // in time (parent.start <= child.start AND parent.end >= child.end,
+  // and they aren't the identical range — an identical range has no
+  // sensible parent/child direction, so both stay top-level rather than
+  // arbitrarily picking one). Only timed events (dateTime, not an
+  // all-day {date}) participate — an all-day entry has no clock range
+  // to contain anything within, and nothing should be nested "inside"
+  // one either. Partial overlaps (neither fully contains the other)
+  // are deliberately left as ordinary separate rows — not attempted
+  // here.
+  //
+  // If an event qualifies as contained by more than one other event,
+  // it attaches to whichever candidate started earliest (ties broken
+  // by the later end, i.e. the more obviously outer one) — per that
+  // rule, the outermost ancestor in any nested chain always wins the
+  // "earliest start" comparison for every descendant, so this never
+  // needs to recurse into more than one level of nesting in practice:
+  // building a flat parent-index -> [child-index,...] map and rendering
+  // each top-level event's direct children is sufficient.
+  function timedRangeMs(ev) {
+    if (!ev.start || !ev.start.dateTime || !ev.end || !ev.end.dateTime) return null;
+    const start = new Date(ev.start.dateTime).getTime();
+    const end = new Date(ev.end.dateTime).getTime();
+    if (isNaN(start) || isNaN(end)) return null;
+    return { start, end };
+  }
+
+  function computeEventNesting(events) {
+    const ranges = events.map((ev) => timedRangeMs(ev));
+    const parentIdx = new Array(events.length).fill(-1);
+
+    events.forEach((_, i) => {
+      const a = ranges[i];
+      if (!a) return; // all-day / unparseable — never a child
+      let best = -1;
+      events.forEach((__, j) => {
+        if (i === j) return;
+        const b = ranges[j];
+        if (!b) return; // all-day / unparseable — never a parent
+        const isIdentical = b.start === a.start && b.end === a.end;
+        const contains = !isIdentical && b.start <= a.start && b.end >= a.end;
+        if (!contains) return;
+        if (best === -1) { best = j; return; }
+        const bestRange = ranges[best];
+        if (b.start < bestRange.start || (b.start === bestRange.start && b.end > bestRange.end)) best = j;
+      });
+      parentIdx[i] = best;
+    });
+
+    const childrenOf = new Map();
+    events.forEach((_, i) => {
+      const p = parentIdx[i];
+      if (p === -1) return;
+      if (!childrenOf.has(p)) childrenOf.set(p, []);
+      childrenOf.get(p).push(i);
+    });
+    return { parentIdx, childrenOf };
+  }
+
+  function eventRowHtml(ev, isNested) {
+    return '<div class="cal-event-row' + (isNested ? ' is-nested' : '') + '">' +
+        '<div class="cal-event-time">' + escapeHtml(fmtEventTime(ev)) + '</div>' +
+        '<div class="cal-event-body">' +
+          '<div class="cal-event-title">' + escapeHtml(ev.summary || '(untitled)') + '</div>' +
+          '<div class="cal-event-day">' + escapeHtml(fmtEventDay(ev)) + '</div>' +
+        '</div>' +
+      '</div>';
+  }
+
   function renderEvents(events) {
     if (!events.length) {
       listEl.innerHTML = '';
@@ -1829,15 +1917,21 @@ document.addEventListener('DOMContentLoaded', function () {
       return;
     }
     emptyEl.style.display = 'none';
-    listEl.innerHTML = events.map((ev) => (
-      '<div class="cal-event-row">' +
-        '<div class="cal-event-time">' + escapeHtml(fmtEventTime(ev)) + '</div>' +
-        '<div class="cal-event-body">' +
-          '<div class="cal-event-title">' + escapeHtml(ev.summary || '(untitled)') + '</div>' +
-          '<div class="cal-event-day">' + escapeHtml(fmtEventDay(ev)) + '</div>' +
-        '</div>' +
-      '</div>'
-    )).join('');
+    const { parentIdx, childrenOf } = computeEventNesting(events);
+    listEl.innerHTML = events.map((ev, i) => {
+      if (parentIdx[i] !== -1) return ''; // rendered under its parent instead, below
+      const children = childrenOf.get(i);
+      let html = eventRowHtml(ev, false);
+      if (children && children.length) {
+        // events[] is already chronological (the API call requests
+        // singleEvents=true & orderBy=startTime), so filtering into
+        // this array preserves that order — no extra sort needed.
+        html += '<div class="cal-event-children">' +
+          children.map((ci) => eventRowHtml(events[ci], true)).join('') +
+          '</div>';
+      }
+      return html;
+    }).join('');
   }
 
   let currentDays = 1;
