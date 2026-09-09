@@ -91,8 +91,8 @@
 .topbar-icon-btn:hover { background: rgba(255, 255, 255, 0.08); }
 .topbar-back-btn { margin-right: auto; }
 .topbar-icon {
-  font-size: 20px; line-height: 1;
-  filter: grayscale(100%) brightness(1.4); opacity: 0.85;
+  width: 20px; height: 20px;
+  stroke: currentColor; color: rgba(255, 255, 255, 0.85);
 }
 .bottombar {
   position: fixed; bottom: 0; left: 0; right: 0; z-index: 40;
@@ -111,14 +111,11 @@
   -webkit-tap-highlight-color: transparent; transition: color 0.15s;
 }
 .bottombar-tab-icon {
-  font-size: 24px; line-height: 1;
-  filter: grayscale(100%) brightness(1.2); opacity: 0.55;
-  transition: opacity 0.15s, filter 0.15s, transform 0.10s;
+  width: 24px; height: 24px;
+  stroke: currentColor; stroke-width: 1.75;
+  transition: transform 0.10s;
 }
 .bottombar-tab.active { color: #FAFAFA; }
-.bottombar-tab.active .bottombar-tab-icon {
-  filter: grayscale(100%) brightness(1.6); opacity: 1;
-}
 .bottombar-tab:active .bottombar-tab-icon { transform: scale(0.92); }
 body.has-bottombar {
   padding-bottom: calc(72px + env(safe-area-inset-bottom)) !important;
@@ -129,8 +126,8 @@ body.has-bottombar {
   .topbar-pill-count { font-size: 12px; }
   .topbar-water-add { width: 40px; font-size: 18px; }
   .topbar-icon-btn { width: 40px; height: 38px; }
-  .topbar-icon { font-size: 18px; }
-  .bottombar-tab-icon { font-size: 22px; }
+  .topbar-icon { width: 18px; height: 18px; }
+  .bottombar-tab-icon { width: 22px; height: 22px; }
   .bottombar-tab { font-size: 10px; }
 }
 html, body { -webkit-text-size-adjust: 100%; }
@@ -231,6 +228,7 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
   display: inline-flex; align-items: center; justify-content: center;
   transition: color 0.15s, border-color 0.15s;
 }
+.chat-history-icon { width: 15px; height: 15px; stroke: currentColor; }
 .chat-close-btn:hover, .chat-history-btn:hover, .chat-back-btn:hover { color: #FAFAFA; border-color: #76746E; }
 .chat-messages {
   flex: 1; overflow-y: auto; min-height: 0;
@@ -366,6 +364,7 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
   transition: transform 0.1s, background 0.15s, color 0.15s;
 }
 .chat-mic-btn:active { transform: scale(0.92); }
+.chat-mic-icon { width: 18px; height: 18px; stroke: currentColor; }
 .chat-mic-btn.is-listening {
   background: #E5484D; color: #FAFAFA; border-color: transparent;
   animation: chatMicPulse 1.2s ease-in-out infinite;
@@ -386,23 +385,23 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
     <button class="topbar-water-add" id="topbarWaterAdd" aria-label="Log one drink" type="button">+</button>
   </div>
   <a href="finance.html" class="topbar-icon-btn" id="topbarFinance" aria-label="Finance">
-    <span class="topbar-icon">📊</span>
+    <i data-lucide="wallet" class="topbar-icon"></i>
   </a>
 </header>`;
 
   const bottombarHtml = `
 <nav class="bottombar" id="bottombar" role="navigation" aria-label="Main tabs">
   <a href="main.html" class="bottombar-tab" data-page="main">
-    <span class="bottombar-tab-icon">🏠</span><span>Main</span>
+    <i data-lucide="home" class="bottombar-tab-icon"></i><span>Main</span>
   </a>
   <a href="health.html" class="bottombar-tab" data-page="health">
-    <span class="bottombar-tab-icon">💊</span><span>Health</span>
+    <i data-lucide="pill" class="bottombar-tab-icon"></i><span>Health</span>
   </a>
   <a href="gym.html" class="bottombar-tab" data-page="training">
-    <span class="bottombar-tab-icon">💪</span><span>Training</span>
+    <i data-lucide="dumbbell" class="bottombar-tab-icon"></i><span>Training</span>
   </a>
   <a href="habits.html" class="bottombar-tab" data-page="habits">
-    <span class="bottombar-tab-icon">✅</span><span>Habits</span>
+    <i data-lucide="list-checks" class="bottombar-tab-icon"></i><span>Habits</span>
   </a>
 </nav>`;
 
@@ -418,7 +417,7 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
       <h3 id="chatHeadTitle">Ask about today</h3>
       <div class="chat-head-actions">
         <button type="button" class="chat-back-btn" id="chatBackBtn" aria-label="Back to today" style="display:none">←</button>
-        <button type="button" class="chat-history-btn" id="chatHistoryBtn" aria-label="History">🕘</button>
+        <button type="button" class="chat-history-btn" id="chatHistoryBtn" aria-label="History"><i data-lucide="history" class="chat-history-icon"></i></button>
         <button type="button" class="chat-close-btn" id="chatCloseBtn" aria-label="Close">×</button>
       </div>
     </div>
@@ -432,7 +431,7 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
     <div class="chat-day-list" id="chatDayList" style="display:none"></div>
     <div class="chat-input-row" id="chatInputRow">
       <input type="text" id="chatInput" class="chat-input" placeholder="Ask a question…" autocomplete="off">
-      <button type="button" id="chatMicBtn" class="chat-mic-btn" aria-label="Voice input" style="display:none">🎤</button>
+      <button type="button" id="chatMicBtn" class="chat-mic-btn" aria-label="Voice input" style="display:none"><i data-lucide="mic" class="chat-mic-icon"></i></button>
       <button type="button" id="chatSendBtn" class="chat-send-btn" aria-label="Send">↑</button>
     </div>
   </div>
@@ -1738,10 +1737,29 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
     sync();
   }
 
+  // Shared entry point for rendering Lucide icons (<i data-lucide="...">
+  // placeholders -> inline SVG), used both here and by any other page's
+  // own dynamic re-renders that introduce new data-lucide elements
+  // (e.g. finance.html's empty states, health.html's Daily Stack list) —
+  // one place to keep the stroke width consistent everywhere, per the
+  // "consistent stroke width across every instance" requirement. Safe
+  // to call repeatedly; Lucide skips elements already converted to SVG.
+  // Lucide's own <script> tag is loaded (deferred, before topbar.js's
+  // own tag) by every page directly, not injected here, so there's no
+  // load-order race to worry about — see daylib.js's header comment for
+  // the general shape of that lesson, learned the hard way earlier in
+  // this project.
+  window.RowIcons = {
+    render: function () {
+      if (window.lucide) window.lucide.createIcons({ attrs: { 'stroke-width': 1.75 } });
+    },
+  };
+
   function boot() {
     injectStyle();
     injectChrome();
     injectChat();
+    window.RowIcons.render();
     const btn = document.getElementById('topbarWaterAdd');
     if (btn) btn.addEventListener('click', (e) => { e.preventDefault(); addWater(); });
     render();

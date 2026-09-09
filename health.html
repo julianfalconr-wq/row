@@ -23,6 +23,7 @@
      daylib.js's own header comment for the full reasoning. -->
 <script src="daylib.js"></script>
 <script src="sync.js" defer></script>
+<script src="https://unpkg.com/lucide@1.43.0/dist/umd/lucide.js" defer></script>
 <script src="topbar.js" defer></script>
 <script src="cronometer-lib.js" defer></script>
 <style>
@@ -187,6 +188,7 @@ main {
   transition: color 0.15s, border-color 0.15s;
 }
 .crono-settings-btn:hover { color: var(--text-primary); border-color: var(--text-tertiary); }
+.crono-settings-icon { width: 16px; height: 16px; stroke: currentColor; stroke-width: 1.75; }
 .crono-header-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 
 .crono-energy-row {
@@ -322,9 +324,11 @@ main {
   border: 1px dashed var(--border-strong); background: transparent;
   color: var(--text-secondary);
   font-family: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 7px;
 }
 .foodscan-upload-btn:hover { color: var(--text-primary); border-color: var(--text-tertiary); }
 .foodscan-upload-btn input[type="file"] { display: none; }
+.foodscan-upload-icon { width: 15px; height: 15px; stroke: currentColor; stroke-width: 1.75; flex-shrink: 0; }
 .foodscan-thumb {
   width: 56px; height: 56px; border-radius: 10px; object-fit: cover;
   border: 1px solid var(--border-strong); display: none;
@@ -443,7 +447,7 @@ main {
   margin-bottom: 8px; padding-bottom: 6px;
   border-bottom: 1px solid var(--border-soft);
 }
-.stack-window-icon { font-size: 16px; }
+.stack-window-icon { width: 16px; height: 16px; stroke: currentColor; stroke-width: 1.75; }
 .stack-window-title { font-size: 13px; font-weight: 700; color: var(--text-primary); }
 .stack-window-time { font-size: 11px; color: var(--text-tertiary); font-weight: 500; }
 
@@ -1007,8 +1011,8 @@ main {
         <div class="crono-header">
           <select id="cronoDateSelect" class="crono-date-select"></select>
           <div class="crono-header-actions">
-            <a href="cronometer.html" class="crono-settings-btn" aria-label="Sync Cronometer data">⟳</a>
-            <button id="cronoSettingsBtn" class="crono-settings-btn" type="button" aria-label="Configure targets">⚙</button>
+            <a href="cronometer.html" class="crono-settings-btn" aria-label="Sync Cronometer data"><i data-lucide="refresh-cw" class="crono-settings-icon"></i></a>
+            <button id="cronoSettingsBtn" class="crono-settings-btn" type="button" aria-label="Configure targets"><i data-lucide="settings" class="crono-settings-icon"></i></button>
           </div>
         </div>
 
@@ -1080,11 +1084,11 @@ main {
 
       <div class="foodscan-picker">
         <label class="foodscan-upload-btn">
-          📷 Take photo
+          <i data-lucide="camera" class="foodscan-upload-icon"></i> Take photo
           <input type="file" id="foodscanCameraInput" accept="image/*" capture="environment">
         </label>
         <label class="foodscan-upload-btn">
-          🖼️ Choose from library
+          <i data-lucide="image" class="foodscan-upload-icon"></i> Choose from library
           <input type="file" id="foodscanGalleryInput" accept="image/*">
         </label>
         <img id="foodscanThumb" class="foodscan-thumb" alt="">
@@ -1192,10 +1196,10 @@ main {
   ];
 
   const STACK_WINDOWS = [
-    { key: 'morning', icon: '🌅', title: 'Morning', time: '7–10 AM', cutoffHour: 10 },
-    { key: 'lunch',   icon: '🍽️', title: 'Lunch',   time: '12–2 PM', cutoffHour: 14 },
-    { key: 'evening', icon: '🌙', title: 'Evening', time: '9–11 PM', cutoffHour: 23 },
-    { key: 'anytime', icon: '⏱️', title: 'Anytime', time: 'No fixed window', cutoffHour: null },
+    { key: 'morning', icon: 'sunrise', title: 'Morning', time: '7–10 AM', cutoffHour: 10 },
+    { key: 'lunch',   icon: 'utensils', title: 'Lunch',   time: '12–2 PM', cutoffHour: 14 },
+    { key: 'evening', icon: 'moon-star', title: 'Evening', time: '9–11 PM', cutoffHour: 23 },
+    { key: 'anytime', icon: 'clock', title: 'Anytime', time: 'No fixed window', cutoffHour: null },
   ];
 
   // ====== SUPPLEMENT DATABASE — researched defaults ======
@@ -1362,7 +1366,7 @@ main {
       group.className = 'stack-window';
       group.innerHTML = `
         <div class="stack-window-header">
-          <span class="stack-window-icon">${win.icon}</span>
+          <i data-lucide="${win.icon}" class="stack-window-icon"></i>
           <span class="stack-window-title">${win.title}</span>
           <span class="stack-window-time">${win.time}</span>
         </div>`;
@@ -1401,6 +1405,11 @@ main {
     if (groupsEl.children.length === 0) {
       groupsEl.innerHTML = `<div class="stack-window-empty">No items yet — add one below to start your stack.</div>`;
     }
+
+    // Each window group's header icon above is inserted via innerHTML,
+    // so it needs a fresh Lucide pass every render — RowIcons.render()
+    // (topbar.js) is idempotent, safe to call on every re-render.
+    if (window.RowIcons) window.RowIcons.render();
 
     // Sync ticker after every render
     renderTicker();
@@ -1615,7 +1624,7 @@ main {
           <div class="stack-result-icon">${s.icon || '💊'}</div>
           <div class="stack-result-body">
             <div class="stack-result-name">${escapeHtml(s.name)}</div>
-            <div class="stack-result-meta">${escapeHtml(s.dose)} · ${winMeta.icon} ${winMeta.title.toLowerCase()} · ${escapeHtml(s.note)}</div>
+            <div class="stack-result-meta">${escapeHtml(s.dose)} · ${winMeta.title.toLowerCase()} · ${escapeHtml(s.note)}</div>
           </div>
         </button>`;
     }).join('');

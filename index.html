@@ -19,6 +19,7 @@
 <script src="lock.js" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="sync.js" defer></script>
+<script src="https://unpkg.com/lucide@1.43.0/dist/umd/lucide.js" defer></script>
 <script src="topbar.js" defer></script>
 <style>
 :root {
@@ -302,8 +303,8 @@ body::after {
 .bento-emoji {
   position: absolute;
   top: 18px; right: 18px;
-  font-size: 28px;
-  line-height: 1;
+  width: 28px; height: 28px;
+  stroke: var(--accent); stroke-width: 1.75;
   filter: drop-shadow(0 0 12px var(--accent));
 }
 .bento-spacer { flex: 1; }
@@ -357,7 +358,7 @@ body::after {
   <div class="bento-grid">
     <a href="main.html" class="bento-tile big" style="--accent:#6BE3A4">
       <span class="bento-num">·01</span>
-      <span class="bento-emoji">🏠</span>
+      <i data-lucide="home" class="bento-emoji"></i>
       <span class="bento-spacer"></span>
       <span class="bento-title">Main</span>
       <span class="bento-footer">
@@ -368,7 +369,7 @@ body::after {
 
     <a href="gym.html" class="bento-tile wide" style="--accent:#7DD3FC">
       <span class="bento-num">·02</span>
-      <span class="bento-emoji">💪</span>
+      <i data-lucide="dumbbell" class="bento-emoji"></i>
       <span class="bento-spacer"></span>
       <span class="bento-title">Training</span>
       <span class="bento-footer">
@@ -379,7 +380,7 @@ body::after {
 
     <a href="health.html" class="bento-tile" style="--accent:#A7F3D0">
       <span class="bento-num">·03</span>
-      <span class="bento-emoji">💊</span>
+      <i data-lucide="pill" class="bento-emoji"></i>
       <span class="bento-spacer"></span>
       <span class="bento-title">Health</span>
       <span class="bento-footer">
@@ -390,7 +391,7 @@ body::after {
 
     <a href="po-water.html" class="bento-tile" style="--accent:#60A5FA">
       <span class="bento-num">·04</span>
-      <span class="bento-emoji">💧</span>
+      <i data-lucide="droplet" class="bento-emoji"></i>
       <span class="bento-spacer"></span>
       <span class="bento-title">Water</span>
       <span class="bento-footer">
@@ -401,7 +402,7 @@ body::after {
 
     <a href="finance.html" class="bento-tile wide" style="--accent:#F2C063">
       <span class="bento-num">·05</span>
-      <span class="bento-emoji">📊</span>
+      <i data-lucide="wallet" class="bento-emoji"></i>
       <span class="bento-spacer"></span>
       <span class="bento-title">Finance</span>
       <span class="bento-footer">
@@ -412,7 +413,7 @@ body::after {
 
     <a href="cronometer.html" class="bento-tile" style="--accent:#C4B5FD">
       <span class="bento-num">·06</span>
-      <span class="bento-emoji">🍽️</span>
+      <i data-lucide="utensils" class="bento-emoji"></i>
       <span class="bento-spacer"></span>
       <span class="bento-title">Cronometer</span>
       <span class="bento-footer">
@@ -567,9 +568,14 @@ document.addEventListener('DOMContentLoaded', function () {
     btn.className = 'topbar-icon-btn gear-btn';
     btn.id = 'settingsGearBtn';
     btn.setAttribute('aria-label', 'Settings');
-    btn.innerHTML = '<span class="topbar-icon">⚙</span>';
+    btn.innerHTML = '<i data-lucide="settings" class="topbar-icon"></i>';
     const topbarEl = document.getElementById('topbar');
     (topbarEl || document.querySelector('.dash-header')).appendChild(btn);
+    // window.RowIcons (topbar.js) is defined at that script's top level,
+    // which — being deferred — always runs before DOMContentLoaded, so
+    // it's already available here regardless of listener registration
+    // order between this inline script and topbar.js's own.
+    if (window.RowIcons) window.RowIcons.render();
     return btn;
   })();
   const modalBg   = document.getElementById('settingsModalBg');

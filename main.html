@@ -18,6 +18,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="sync.js" defer></script>
+<script src="https://unpkg.com/lucide@1.43.0/dist/umd/lucide.js" defer></script>
 <script src="topbar.js" defer></script>
 <script src="cronometer-lib.js" defer></script>
 <!-- Not deferred, on purpose (matches gym.html's daylib.js tag
@@ -128,10 +129,11 @@ body::after {
 .dash-header-gear {
   width: 34px; height: 34px; border-radius: 50%; flex-shrink: 0;
   border: 1px solid var(--line); background: var(--surface-2);
-  box-shadow: var(--shadow-card); color: var(--text-primary); font-size: 16px; cursor: pointer;
+  box-shadow: var(--shadow-card); color: var(--text-primary); cursor: pointer;
   display: inline-flex; align-items: center; justify-content: center;
   transition: background 0.2s, transform 0.12s;
 }
+.dash-header-gear-icon { width: 17px; height: 17px; stroke: currentColor; stroke-width: 1.75; }
 .dash-header-gear:hover { filter: brightness(1.15); }
 .dash-header-gear:active { transform: scale(0.94) rotate(18deg); }
 .dash-eyebrow {
@@ -1038,7 +1040,7 @@ body::after {
       <div class="dash-eyebrow" id="dashEyebrow">—</div>
       <h1 class="dash-title">Julian's Dashboard</h1>
     </div>
-    <button type="button" class="dash-header-gear" id="generalSettingsGearBtn" aria-label="General Settings">⚙</button>
+    <button type="button" class="dash-header-gear" id="generalSettingsGearBtn" aria-label="General Settings"><i data-lucide="settings" class="dash-header-gear-icon"></i></button>
   </div>
 
   <!-- Daily/weekly habit score — the main hero card, placed first
