@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<script>
+(function () {
+  try {
+    var t = localStorage.getItem('dashboard:theme');
+    if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+  } catch (e) {}
+})();
+</script>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#050506">
+<title>Habits</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<!-- Not deferred, on purpose (matches gym.html's, main.html's, and
+     health.html's daylib.js tag exactly) — see daylib.js's own header
+     comment. This page's own script is DOMContentLoaded-wrapped so it
+     doesn't strictly need this, but every other page loads daylib.js
+     this way and there's no reason for this one to be the exception. -->
+<script src="daylib.js"></script>
+<script src="topbar.js" defer></script>
+<style>
+:root {
+  --surface-1: #050506;
+  --surface-2: #121214;
+  --inset-bg: rgba(0,0,0,0.30);
+  --line: rgba(255,255,255,0.09);
+  --line-soft: rgba(255,255,255,0.06);
+  --text-primary: #FAFAFA;
+  --text-secondary: #A5A3A0;
+  --text-tertiary: #6E6C68;
+  --success: #17E88F;
+  --warning: #FFC93C;
+  --danger: #FF4D5E;
+  --shadow-card: 0 14px 34px rgba(0,0,0,0.45);
+  --title-grad-a: #FFFFFF;
+  --title-grad-b: #C7C4BC;
+  --btn-primary-a: #FFFFFF;
+  --btn-primary-b: #E8E5DD;
+  --btn-primary-text: #0A0A0B;
+  --glow-opacity: 1;
+  --font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+:root[data-theme="light"] {
+  --surface-1: #F3F3F1;
+  --surface-2: #FFFFFF;
+  --inset-bg: rgba(0,0,0,0.035);
+  --line: rgba(15,15,20,0.10);
+  --line-soft: rgba(15,15,20,0.07);
+  --text-primary: #141416;
+  --text-secondary: #55545C;
+  --text-tertiary: #8B8A90;
+  --shadow-card: 0 10px 26px rgba(20,20,26,0.08);
+  --title-grad-a: #141416;
+  --title-grad-b: #4A4952;
+  --btn-primary-a: #141416;
+  --btn-primary-b: #2B2A30;
+  --btn-primary-text: #FAFAFA;
+  --glow-opacity: 0.35;
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; padding: 0;
+  background: var(--surface-1);
+  color: var(--text-secondary);
+  font-family: var(--font);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-text-size-adjust: 100%;
+  transition: background 0.3s, color 0.3s;
+}
+body {
+  min-height: 100vh;
+  position: relative;
+  overflow-x: hidden;
+  padding: max(28px, env(safe-area-inset-top)) 20px 60px;
+}
+body::before {
+  content: '';
+  position: fixed; inset: 0;
+  background:
+    radial-gradient(circle at 82% 14%, rgba(23, 232, 143, 0.14), transparent 45%),
+    radial-gradient(circle at 18% 90%, rgba(180, 180, 200, 0.06), transparent 50%);
+  filter: blur(40px);
+  opacity: var(--glow-opacity);
+  pointer-events: none;
+  z-index: -2;
+}
+body::after {
+  content: '';
+  position: fixed; inset: 0;
+  background-image: radial-gradient(rgba(255,255,255,0.014) 1px, transparent 1px);
+  background-size: 3px 3px;
+  opacity: var(--glow-opacity);
+  pointer-events: none;
+  z-index: -1;
+}
+.page { max-width: 700px; margin: 0 auto; }
+.dash-header { margin-bottom: 14px; }
+.dash-eyebrow {
+  font-family: var(--font-mono);
+  font-size: 10.5px; font-weight: 800;
+  letter-spacing: 0.20em; text-transform: uppercase;
+  color: var(--text-tertiary);
+  margin-bottom: 6px;
+}
+.dash-title {
+  margin: 0; font-size: 30px; font-weight: 800; letter-spacing: -0.03em; text-transform: uppercase;
+  background: linear-gradient(180deg, var(--title-grad-a) 0%, var(--title-grad-b) 120%);
+  -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; color: transparent;
+}
+.section { margin-top: 22px; }
+.section-title {
+  font-size: 10.5px; font-weight: 800;
+  letter-spacing: 0.20em; text-transform: uppercase;
+  color: var(--text-tertiary);
+  display: flex; align-items: center; gap: 12px;
+  margin-bottom: 12px;
+}
+.section-title::before { content: ''; width: 18px; height: 1px; background: var(--text-tertiary); opacity: 0.6; }
+.section-title::after { content: ''; flex: 1; height: 1px; background: linear-gradient(90deg, var(--line), transparent); }
+.gm-card {
+  position: relative;
+  background: var(--surface-2);
+  border: 1px solid var(--line-soft);
+  border-radius: 18px;
+  padding: 20px;
+  box-shadow: var(--shadow-card);
+}
+
+.habits-summary-row { display: flex; align-items: center; gap: 18px; }
+.habits-summary-pct {
+  font-size: 40px; font-weight: 800; font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em; color: var(--success); flex-shrink: 0;
+}
+.habits-summary-text { min-width: 0; }
+.habits-summary-title { font-size: 15px; font-weight: 700; color: var(--text-primary); }
+.habits-summary-sub { font-size: 12px; color: var(--text-tertiary); margin-top: 3px; }
+
+.save-btn-row { display: flex; align-items: center; gap: 12px; margin-top: 14px; }
+.save-btn {
+  padding: 11px 22px; border: 0; border-radius: 12px;
+  background: linear-gradient(180deg, var(--btn-primary-a) 0%, var(--btn-primary-b) 100%);
+  color: var(--btn-primary-text);
+  font-family: inherit; font-size: 13px; font-weight: 700; cursor: pointer;
+  transition: transform 0.1s, filter 0.15s;
+}
+.save-btn:hover { filter: brightness(1.06); transform: translateY(-1px); }
+.save-btn:active { transform: translateY(0); }
+.save-btn:disabled { opacity: 0.5; cursor: default; }
+.save-confirm { font-size: 12.5px; font-weight: 700; color: var(--success); opacity: 0; transition: opacity 0.3s ease; }
+.save-confirm.show { opacity: 1; }
+
+/* nightly entry rows */
+.entry-habit-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 11px 0; border-bottom: 1px solid var(--line-soft);
+}
+.entry-habit-row:last-child { border-bottom: none; }
+.entry-habit-label { font-size: 13.5px; color: var(--text-primary); }
+.entry-habit-label small { display: block; font-size: 10.5px; color: var(--text-tertiary); font-weight: 400; margin-top: 2px; }
+.entry-habit-controls { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.entry-btn {
+  min-width: 34px; height: 30px; padding: 0 10px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--inset-bg);
+  color: var(--text-secondary); font-family: inherit; font-size: 12px; font-weight: 700; cursor: pointer;
+}
+.entry-btn.active { background: linear-gradient(180deg, var(--btn-primary-a), var(--btn-primary-b)); color: var(--btn-primary-text); border-color: transparent; }
+.entry-btn.na-btn { color: var(--text-tertiary); font-weight: 600; }
+.entry-btn.na-btn.active { background: var(--text-tertiary); color: var(--surface-2); }
+
+/* habit list editor */
+.habit-config-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 0; border-bottom: 1px solid var(--line-soft);
+}
+.habit-config-row:last-child { border-bottom: none; }
+.habit-config-main { flex: 1; min-width: 0; }
+.habit-config-label-input {
+  width: 100%; background: var(--inset-bg); border: 1px solid var(--line); color: var(--text-primary);
+  font-family: inherit; font-size: 13px; padding: 8px 10px; border-radius: 8px; outline: none; margin-bottom: 6px;
+}
+.habit-config-meta-row { display: flex; gap: 6px; }
+.habit-config-meta-row select, .habit-config-meta-row input[type="number"] {
+  background: var(--inset-bg); border: 1px solid var(--line); color: var(--text-primary);
+  font-family: inherit; font-size: 11.5px; padding: 6px 8px; border-radius: 7px; outline: none;
+}
+.habit-config-meta-row input[type="number"] { width: 60px; -moz-appearance: textfield; }
+.habit-config-actions { display: flex; flex-direction: column; gap: 4px; flex-shrink: 0; }
+.habit-config-icon-btn {
+  width: 26px; height: 26px; border-radius: 6px; border: 1px solid var(--line);
+  background: var(--inset-bg); color: var(--text-tertiary); font-size: 12px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+}
+.habit-config-icon-btn:hover { color: var(--text-primary); }
+.habit-config-add-btn {
+  width: 100%; padding: 10px; margin-top: 10px; border-radius: 10px; border: 1px dashed var(--line);
+  background: transparent; color: var(--text-tertiary); font-family: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
+}
+.habit-config-add-btn:hover { color: var(--text-primary); border-color: var(--text-tertiary); }
+
+@media (max-width: 480px) {
+  body { padding: max(20px, env(safe-area-inset-top)) 14px 50px; }
+  .gm-card { padding: 16px; }
+  .habits-summary-pct { font-size: 32px; }
+}
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="dash-header">
+    <div class="dash-eyebrow" id="habitsEyebrow">TODAY'S HABITS</div>
+    <h1 class="dash-title">Habits</h1>
+  </div>
+
+  <div class="gm-card" id="habitsSummaryCard">
+    <div class="habits-summary-row">
+      <div class="habits-summary-pct" id="habitsSummaryPct">—</div>
+      <div class="habits-summary-text">
+        <div class="habits-summary-title" id="habitsSummaryTitle">Loading…</div>
+        <div class="habits-summary-sub" id="habitsSummarySub">—</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Tonight's Habits</div>
+    <div class="gm-card">
+      <div id="nightlyEntryList"></div>
+      <div class="save-btn-row">
+        <button type="button" class="save-btn" id="nightlyEntrySaveBtn">Save</button>
+        <span class="save-confirm" id="nightlyEntryConfirm">Saved ✓</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Manage Habits</div>
+    <div class="gm-card">
+      <div id="habitConfigList"></div>
+      <button type="button" class="habit-config-add-btn" id="habitConfigAddBtn">+ Add habit</button>
+      <div class="save-btn-row">
+        <button type="button" class="save-btn" id="habitSettingsSaveBtn">Save</button>
+        <span class="save-confirm" id="habitSettingsConfirm">Saved ✓</span>
+      </div>
+    </div>
+  </div>
+
+</div>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+
+  // ---------- date helpers (DayLib-backed, see daylib.js) ----------
+  function mondayOfKey(dateKeyStr) {
+    const date = DayLib.parseDateKey(dateKeyStr);
+    const day = date.getDay();
+    const diff = (day === 0 ? -6 : 1) - day;
+    date.setDate(date.getDate() + diff);
+    return DayLib.plainDateKey(date);
+  }
+  function addDaysKey(dateKeyStr, n) {
+    const d = DayLib.parseDateKey(dateKeyStr);
+    d.setDate(d.getDate() + n);
+    return DayLib.plainDateKey(d);
+  }
+  function datesFromTo(fromKey, toKey) {
+    const out = [];
+    let k = fromKey;
+    let guard = 0;
+    while (k <= toKey && guard++ < 8) { out.push(k); k = addDaysKey(k, 1); }
+    return out;
+  }
+
+  const todayActive = DayLib.effectiveDateKey();
+  const weekMondayActive = mondayOfKey(todayActive);
+
+  function getSecret() { try { return localStorage.getItem('dashboard:secret') || ''; } catch (e) { return ''; } }
+  function escapeHtml(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+
+  // ---------- default habit config — kept identical to main.html's
+  // score hero card, which is the other reader of this same
+  // habit_config row. If you change the defaults, change both. ----------
+  function defaultHabitConfig() {
+    return {
+      habits: [
+        { id: 'sleep_wake',   label: 'Slept early & woke early',    points: 10, type: 'manual_count2' },
+        { id: 'brush_teeth',  label: 'Brush teeth (AM + PM)',       points: 4,  type: 'manual_count2' },
+        { id: 'productivity', label: '1h focused productivity',     points: 8,  type: 'manual_binary' },
+        { id: 'screen_time',  label: 'Screen time under 6h',        points: 8,  type: 'manual_binary' },
+        { id: 'plan_day',     label: 'Plan the day',                points: 5,  type: 'manual_binary' },
+        { id: 'walk_dog',     label: 'Walk the dog (AM + PM)',      points: 6,  type: 'manual_count2' },
+        { id: 'no_phone_30',  label: 'No phone first 30 min',       points: 6,  type: 'manual_binary' },
+        { id: 'no_porn',      label: 'No porn',                     points: 15, type: 'zero_tolerance' },
+        { id: 'no_fap',       label: 'No fap',                      points: 15, type: 'weekly_cap', weeklyCap: 2, weeklyPenaltyPoints: 15, perExtraDayPenaltyPoints: 5 },
+        { id: 'read',         label: 'Read',                        points: 4,  type: 'manual_binary' },
+        { id: 'stretch',      label: 'Stretching (morning + night)',points: 6,  type: 'manual_count2' },
+      ],
+    };
+  }
+
+  // ---------- server: habit_config + daily_habits (api/sync-state.js's
+  // resource= dispatch — same endpoint main.html's score card uses) ----------
+  async function fetchHabitConfig() {
+    const secret = getSecret();
+    if (!secret) return defaultHabitConfig();
+    try {
+      const r = await fetch('/api/sync-state?resource=habit-config&secret=' + encodeURIComponent(secret));
+      const j = await r.json();
+      if (j && j.ok && j.config && Array.isArray(j.config.habits) && j.config.habits.length) return j.config;
+    } catch (e) {}
+    return defaultHabitConfig();
+  }
+  async function saveHabitConfig(config) {
+    const secret = getSecret();
+    if (!secret) throw new Error('Set your dashboard secret first');
+    const r = await fetch('/api/sync-state?resource=habit-config&secret=' + encodeURIComponent(secret), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ resource: 'habit-config', config }),
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok) throw new Error((j && j.error) || 'save failed');
+  }
+  async function fetchDailyHabitsRange(fromKey, toKey) {
+    const secret = getSecret();
+    const out = {};
+    if (!secret) return out;
+    try {
+      const r = await fetch('/api/sync-state?resource=daily-habits&secret=' + encodeURIComponent(secret) + '&from=' + fromKey + '&to=' + toKey);
+      const j = await r.json();
+      if (j && j.ok && Array.isArray(j.days)) j.days.forEach((row) => { out[row.date] = row.entries; });
+    } catch (e) {}
+    return out;
+  }
+  async function saveDailyHabits(dateKeyStr, entries) {
+    const secret = getSecret();
+    if (!secret) throw new Error('Set your dashboard secret first');
+    const r = await fetch('/api/sync-state?resource=daily-habits&secret=' + encodeURIComponent(secret), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ resource: 'daily-habits', date: dateKeyStr, entries }),
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok) throw new Error((j && j.error) || 'save failed');
+  }
+
+  // ---------- manual habits scoring — same formula as main.html's
+  // score hero card (see its header comment for the full rationale on
+  // zero_tolerance/weekly_cap); kept in sync by hand, not shared, per
+  // this project's no-shared-module convention for page-specific logic
+  // (daylib.js is the one exception, being pure date math). ----------
+  function manualHabitFraction(habit, entryVal) {
+    if (habit.type === 'manual_count2') return Math.max(0, Math.min(2, Number(entryVal) || 0)) / 2;
+    return entryVal ? 1 : 0;
+  }
+  function weekOccurrenceCount(habitId, entriesByDate, fromKey, toKey) {
+    let n = 0;
+    datesFromTo(fromKey, toKey).forEach((k) => {
+      const e = entriesByDate[k] && entriesByDate[k][habitId];
+      if (e && e.na !== true && e.value === false) n++;
+    });
+    return n;
+  }
+  function scoreManualHabitsForDate(habitConfig, entriesByDate, dateActiveKey, weekMondayActiveKey) {
+    const entry = entriesByDate[dateActiveKey] || null;
+    let earned = 0, possible = 0;
+    const flags = [];
+    (habitConfig.habits || []).forEach((h) => {
+      const e = entry && entry[h.id];
+      if (!e || e.na === true) return; // unlogged or N/A — excluded, not scored 0
+      if (h.type === 'weekly_cap') {
+        possible += h.points;
+        if (e.value === true) { earned += h.points; return; }
+        const countThroughToday = weekOccurrenceCount(h.id, entriesByDate, weekMondayActiveKey, dateActiveKey);
+        const over = Math.max(0, countThroughToday - (h.weeklyCap || 0));
+        earned += Math.max(0, h.points - over * (h.perExtraDayPenaltyPoints || 0));
+        return;
+      }
+      const frac = manualHabitFraction(h, e.value);
+      earned += frac * h.points; possible += h.points;
+      if (h.type === 'zero_tolerance' && frac === 0) flags.push(h.label);
+    });
+    return { earned, possible, flags };
+  }
+
+  let currentHabitConfig = null;
+  let entriesByDate = {};
+
+  async function renderSummary() {
+    const manual = scoreManualHabitsForDate(currentHabitConfig, entriesByDate, todayActive, weekMondayActive);
+    const pct = manual.possible > 0 ? Math.round((manual.earned / manual.possible) * 100) : null;
+    $('habitsSummaryPct').textContent = pct == null ? '—' : pct + '%';
+    $('habitsSummaryTitle').textContent = pct == null ? 'Nothing logged yet today' : (pct >= 85 ? 'Crushing it' : pct >= 65 ? 'Solid' : pct >= 40 ? 'Room to improve' : 'Rough day');
+    const loggedCount = (currentHabitConfig.habits || []).filter((h) => {
+      const e = entriesByDate[todayActive] && entriesByDate[todayActive][h.id];
+      return e && e.na !== true;
+    }).length;
+    $('habitsSummarySub').textContent = loggedCount + ' of ' + (currentHabitConfig.habits || []).length + ' habits logged today' + (manual.flags.length ? ' · ⚠ ' + manual.flags.join(', ') : '');
+  }
+
+  // ---------- tonight's entry ----------
+  function habitControlHtml(h, existing) {
+    const na = existing && existing.na === true;
+    if (h.type === 'manual_count2') {
+      const v = na ? null : (existing ? existing.value : null);
+      return '<div class="entry-habit-controls" data-habit="' + h.id + '" data-type="count2">' +
+        [0, 1, 2].map((n) => '<button type="button" class="entry-btn count-btn' + (v === n ? ' active' : '') + '" data-v="' + n + '">' + n + '</button>').join('') +
+        '<button type="button" class="entry-btn na-btn' + (na ? ' active' : '') + '" data-v="na">N/A</button></div>';
+    }
+    const v = na ? null : (existing ? existing.value : null);
+    return '<div class="entry-habit-controls" data-habit="' + h.id + '" data-type="binary">' +
+      '<button type="button" class="entry-btn bin-btn' + (v === true ? ' active' : '') + '" data-v="true">Yes</button>' +
+      '<button type="button" class="entry-btn bin-btn' + (v === false ? ' active' : '') + '" data-v="false">No</button>' +
+      '<button type="button" class="entry-btn na-btn' + (na ? ' active' : '') + '" data-v="na">N/A</button></div>';
+  }
+  function renderNightlyEntry() {
+    const existingEntry = entriesByDate[todayActive] || {};
+    const html = (currentHabitConfig.habits || []).map((h) => {
+      const label = h.type === 'zero_tolerance' ? escapeHtml(h.label) + ' <small>Zero tolerance</small>' : (h.type === 'weekly_cap' ? escapeHtml(h.label) + ' <small>Cap: ' + h.weeklyCap + '/week</small>' : escapeHtml(h.label));
+      return '<div class="entry-habit-row" data-row="' + h.id + '"><span class="entry-habit-label">' + label + '</span>' + habitControlHtml(h, existingEntry[h.id]) + '</div>';
+    }).join('');
+    $('nightlyEntryList').innerHTML = html;
+    $('nightlyEntryList').querySelectorAll('.entry-habit-controls').forEach((row) => {
+      row.addEventListener('click', (e) => {
+        const btn = e.target.closest('button');
+        if (!btn) return;
+        row.querySelectorAll('button').forEach((b) => b.classList.remove('active'));
+        btn.classList.add('active');
+      });
+    });
+  }
+  $('nightlyEntrySaveBtn').addEventListener('click', async () => {
+    const entries = {};
+    $('nightlyEntryList').querySelectorAll('.entry-habit-controls').forEach((row) => {
+      const habitId = row.dataset.habit;
+      const activeBtn = row.querySelector('button.active');
+      if (!activeBtn) return; // left unanswered — stays "unlogged"
+      if (activeBtn.dataset.v === 'na') { entries[habitId] = { na: true }; return; }
+      if (row.dataset.type === 'count2') { entries[habitId] = { value: Number(activeBtn.dataset.v) }; return; }
+      entries[habitId] = { value: activeBtn.dataset.v === 'true' };
+    });
+    const btn = $('nightlyEntrySaveBtn');
+    btn.disabled = true;
+    try {
+      await saveDailyHabits(todayActive, entries);
+      entriesByDate[todayActive] = entries;
+      $('nightlyEntryConfirm').classList.add('show');
+      clearTimeout($('nightlyEntryConfirm')._t);
+      $('nightlyEntryConfirm')._t = setTimeout(() => $('nightlyEntryConfirm').classList.remove('show'), 1800);
+      await renderSummary();
+    } catch (e) {
+      alert("Couldn't save: " + (e.message || e));
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  // ---------- manage habits ----------
+  let settingsDraft = null;
+  function typeFieldsHtml(h) {
+    if (h.type !== 'weekly_cap') return '';
+    return '<input type="number" class="wc-cap" min="0" value="' + (h.weeklyCap || 0) + '" title="Weekly cap" style="width:44px">' +
+      '<input type="number" class="wc-weekpen" min="0" value="' + (h.weeklyPenaltyPoints || 0) + '" title="Weekly penalty" style="width:44px">' +
+      '<input type="number" class="wc-daypen" min="0" value="' + (h.perExtraDayPenaltyPoints || 0) + '" title="Per extra day penalty" style="width:44px">';
+  }
+  function renderHabitSettingsList() {
+    const html = settingsDraft.habits.map((h, i) => {
+      return '<div class="habit-config-row" data-idx="' + i + '">' +
+        '<div class="habit-config-main">' +
+        '<input type="text" class="habit-config-label-input hc-label" value="' + escapeHtml(h.label) + '">' +
+        '<div class="habit-config-meta-row">' +
+        '<select class="hc-type">' +
+        ['manual_binary', 'manual_count2', 'zero_tolerance', 'weekly_cap'].map((t) => '<option value="' + t + '"' + (t === h.type ? ' selected' : '') + '>' + t + '</option>').join('') +
+        '</select>' +
+        '<input type="number" class="hc-points" min="0" value="' + h.points + '" title="Points" style="width:50px">' +
+        '<span class="hc-typefields">' + typeFieldsHtml(h) + '</span>' +
+        '</div></div>' +
+        '<div class="habit-config-actions">' +
+        '<button type="button" class="habit-config-icon-btn hc-up" title="Move up">↑</button>' +
+        '<button type="button" class="habit-config-icon-btn hc-down" title="Move down">↓</button>' +
+        '<button type="button" class="habit-config-icon-btn hc-del" title="Delete">✕</button>' +
+        '</div></div>';
+    }).join('');
+    $('habitConfigList').innerHTML = html;
+  }
+  function readHabitSettingsListIntoDraft() {
+    $('habitConfigList').querySelectorAll('.habit-config-row').forEach((row, i) => {
+      const h = settingsDraft.habits[i];
+      if (!h) return;
+      h.label = row.querySelector('.hc-label').value.trim() || h.label;
+      h.type = row.querySelector('.hc-type').value;
+      h.points = Number(row.querySelector('.hc-points').value) || 0;
+      const cap = row.querySelector('.wc-cap'); if (cap) h.weeklyCap = Number(cap.value) || 0;
+      const wp = row.querySelector('.wc-weekpen'); if (wp) h.weeklyPenaltyPoints = Number(wp.value) || 0;
+      const dp = row.querySelector('.wc-daypen'); if (dp) h.perExtraDayPenaltyPoints = Number(dp.value) || 0;
+    });
+  }
+  $('habitConfigList').addEventListener('click', (e) => {
+    const row = e.target.closest('.habit-config-row');
+    if (!row) return;
+    readHabitSettingsListIntoDraft();
+    const idx = Number(row.dataset.idx);
+    if (e.target.closest('.hc-up') && idx > 0) {
+      const [h] = settingsDraft.habits.splice(idx, 1); settingsDraft.habits.splice(idx - 1, 0, h); renderHabitSettingsList();
+    } else if (e.target.closest('.hc-down') && idx < settingsDraft.habits.length - 1) {
+      const [h] = settingsDraft.habits.splice(idx, 1); settingsDraft.habits.splice(idx + 1, 0, h); renderHabitSettingsList();
+    } else if (e.target.closest('.hc-del')) {
+      settingsDraft.habits.splice(idx, 1); renderHabitSettingsList();
+    }
+  });
+  $('habitConfigList').addEventListener('change', (e) => {
+    if (e.target.classList.contains('hc-type')) { readHabitSettingsListIntoDraft(); renderHabitSettingsList(); }
+  });
+  $('habitConfigAddBtn').addEventListener('click', () => {
+    readHabitSettingsListIntoDraft();
+    settingsDraft.habits.push({ id: 'custom_' + Date.now().toString(36), label: 'New habit', points: 5, type: 'manual_binary' });
+    renderHabitSettingsList();
+  });
+  $('habitSettingsSaveBtn').addEventListener('click', async () => {
+    readHabitSettingsListIntoDraft();
+    const btn = $('habitSettingsSaveBtn');
+    btn.disabled = true;
+    try {
+      await saveHabitConfig(settingsDraft);
+      currentHabitConfig = JSON.parse(JSON.stringify(settingsDraft));
+      $('habitSettingsConfirm').classList.add('show');
+      clearTimeout($('habitSettingsConfirm')._t);
+      $('habitSettingsConfirm')._t = setTimeout(() => $('habitSettingsConfirm').classList.remove('show'), 1800);
+      renderNightlyEntry();
+      await renderSummary();
+    } catch (e) {
+      alert("Couldn't save: " + (e.message || e));
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  // ---------- init ----------
+  (async function init() {
+    const [habitConfig, entries] = await Promise.all([
+      fetchHabitConfig(),
+      fetchDailyHabitsRange(weekMondayActive, todayActive),
+    ]);
+    currentHabitConfig = habitConfig;
+    entriesByDate = entries;
+    settingsDraft = JSON.parse(JSON.stringify(habitConfig));
+
+    renderNightlyEntry();
+    renderHabitSettingsList();
+    await renderSummary();
+  })();
+});
+</script>
+</body>
+</html>

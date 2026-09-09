@@ -261,6 +261,48 @@ body::after {
   gap: 14px;
   margin-bottom: 22px;
 }
+
+/* ----- Habits gauge (Phase C) — mirrors .nutrition-score-wrap's
+   structure/proportions exactly, just with the hero card's green
+   accent instead of nutrition's purple, and linking to habits.html
+   instead of an in-page modal. ----- */
+.habit-gauge-wrap {
+  display: flex; flex-wrap: wrap;
+  align-items: center; justify-content: center;
+  gap: 18px;
+  padding: 24px;
+  border-radius: 18px;
+  background: var(--surface-2);
+  border: 1px solid var(--line-soft);
+  box-shadow: var(--shadow-card);
+  flex: 1 1 260px;
+  text-decoration: none;
+  color: inherit;
+  transition: transform 0.2s ease, border-color 0.2s ease;
+}
+.habit-gauge-wrap:hover { transform: translateY(-3px); border-color: rgba(23,232,143,0.5); }
+.habit-gauge-ring { position: relative; width: 128px; height: 128px; flex-shrink: 0; }
+.habit-gauge-ring svg { width: 100%; height: 100%; display: block; }
+.habit-gauge-track { fill: none; stroke: var(--line); stroke-width: 11; }
+.habit-gauge-fill {
+  fill: none; stroke: var(--success); stroke-width: 11; stroke-linecap: round;
+  transform: rotate(-90deg); transform-origin: 60px 60px;
+  transition: stroke-dashoffset 0.7s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.habit-gauge-overlay {
+  position: absolute; inset: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; pointer-events: none;
+}
+.habit-gauge-percent { font-size: 30px; font-weight: 800; font-variant-numeric: tabular-nums; letter-spacing: -0.03em; color: var(--text-primary); line-height: 1; }
+.habit-gauge-label { margin-top: 4px; font-family: var(--font-mono); font-size: 9px; font-weight: 800; letter-spacing: 0.18em; text-transform: uppercase; color: var(--text-tertiary); }
+.habit-gauge-text { display: flex; flex-direction: column; gap: 6px; max-width: 200px; }
+.habit-gauge-title { font-size: 15px; font-weight: 700; color: var(--text-primary); }
+.habit-gauge-sub { font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); }
+@media (max-width: 480px) {
+  .habit-gauge-ring { width: 104px; height: 104px; }
+  .habit-gauge-percent { font-size: 24px; }
+}
+
 .day-ring-wrap {
   display: flex; flex-wrap: wrap;
   align-items: center; justify-content: center;
@@ -921,54 +963,8 @@ body::after {
 .score-whoop-val { font-size: 17px; font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums; }
 .score-whoop-label { margin-top: 3px; font-size: 9px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-tertiary); }
 
-/* nightly entry rows */
-.entry-habit-row {
-  display: flex; align-items: center; justify-content: space-between; gap: 10px;
-  padding: 11px 0; border-bottom: 1px solid var(--line-soft);
-}
-.entry-habit-row:last-child { border-bottom: none; }
-.entry-habit-label { font-size: 13.5px; color: var(--text-primary); }
-.entry-habit-label small { display: block; font-size: 10.5px; color: var(--text-tertiary); font-weight: 400; margin-top: 2px; }
-.entry-habit-controls { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
-.entry-btn {
-  min-width: 34px; height: 30px; padding: 0 10px; border-radius: 8px;
-  border: 1px solid var(--line); background: var(--inset-bg);
-  color: var(--text-secondary); font-family: inherit; font-size: 12px; font-weight: 700; cursor: pointer;
-}
-.entry-btn.active { background: linear-gradient(180deg, var(--btn-primary-a), var(--btn-primary-b)); color: var(--btn-primary-text); border-color: transparent; }
-.entry-btn.na-btn { color: var(--text-tertiary); font-weight: 600; }
-.entry-btn.na-btn.active { background: var(--text-tertiary); color: var(--surface-2); }
-.entry-save-row { display: flex; align-items: center; gap: 12px; margin-top: 16px; }
-
-/* settings — habit list editor */
-.habit-config-row {
-  display: flex; align-items: center; gap: 8px;
-  padding: 10px 0; border-bottom: 1px solid var(--line-soft);
-}
-.habit-config-row:last-child { border-bottom: none; }
-.habit-config-main { flex: 1; min-width: 0; }
-.habit-config-label-input {
-  width: 100%; background: var(--inset-bg); border: 1px solid var(--line); color: var(--text-primary);
-  font-family: inherit; font-size: 13px; padding: 8px 10px; border-radius: 8px; outline: none; margin-bottom: 6px;
-}
-.habit-config-meta-row { display: flex; gap: 6px; }
-.habit-config-meta-row select, .habit-config-meta-row input[type="number"] {
-  background: var(--inset-bg); border: 1px solid var(--line); color: var(--text-primary);
-  font-family: inherit; font-size: 11.5px; padding: 6px 8px; border-radius: 7px; outline: none;
-}
-.habit-config-meta-row input[type="number"] { width: 60px; -moz-appearance: textfield; }
-.habit-config-actions { display: flex; flex-direction: column; gap: 4px; flex-shrink: 0; }
-.habit-config-icon-btn {
-  width: 26px; height: 26px; border-radius: 6px; border: 1px solid var(--line);
-  background: var(--inset-bg); color: var(--text-tertiary); font-size: 12px; cursor: pointer;
-  display: flex; align-items: center; justify-content: center;
-}
-.habit-config-icon-btn:hover { color: var(--text-primary); }
-.habit-config-add-btn {
-  width: 100%; padding: 10px; margin-top: 10px; border-radius: 10px; border: 1px dashed var(--line);
-  background: transparent; color: var(--text-tertiary); font-family: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
-}
-.habit-config-add-btn:hover { color: var(--text-primary); border-color: var(--text-tertiary); }
+/* Nightly-entry-row and habit-config-row styles moved to habits.html
+   (Phase C) along with the modals that used them. */
 
 /* ===== General Settings modal ===== */
 .gs-weight-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 0; }
@@ -1089,39 +1085,7 @@ body::after {
       </div>
       <div id="scoreBreakdownBody"></div>
       <div class="save-btn-row">
-        <button type="button" class="save-btn" id="scoreOpenEntryBtn">Log tonight's habits</button>
-      </div>
-    </div>
-  </div>
-
-  <div class="modal-bg" id="nightlyEntryModalBg">
-    <div class="modal">
-      <div class="modal-head">
-        <h3>Tonight's Habits</h3>
-        <button type="button" class="modal-close" id="nightlyEntryCloseBtn" aria-label="Close">×</button>
-      </div>
-      <div id="nightlyEntryList"></div>
-      <div class="save-btn-row">
-        <button type="button" class="save-btn" id="nightlyEntrySaveBtn">Save</button>
-        <span class="save-confirm" id="nightlyEntryConfirm">Saved ✓</span>
-      </div>
-    </div>
-  </div>
-
-  <div class="modal-bg" id="habitSettingsModalBg">
-    <div class="modal">
-      <div class="modal-head">
-        <h3>Habit Settings</h3>
-        <button type="button" class="modal-close" id="habitSettingsCloseBtn" aria-label="Close">×</button>
-      </div>
-      <div class="set-section">
-        <h4>Manual habits</h4>
-        <div id="habitConfigList"></div>
-        <button type="button" class="habit-config-add-btn" id="habitConfigAddBtn">+ Add habit</button>
-      </div>
-      <div class="save-btn-row">
-        <button type="button" class="save-btn" id="habitSettingsSaveBtn">Save</button>
-        <span class="save-confirm" id="habitSettingsConfirm">Saved ✓</span>
+        <a href="habits.html" class="save-btn" style="text-decoration:none;display:inline-block">Log tonight's habits</a>
       </div>
     </div>
   </div>
@@ -1172,7 +1136,7 @@ body::after {
       <div class="set-section">
         <h4>Habits &amp; Points</h4>
         <div class="gs-habits-note">The manual habit list and each habit's point value (Level 2 of the daily score) are managed on their own screen.</div>
-        <button type="button" class="whoop-mini-btn" id="gsManageHabitsBtn">Manage Habits →</button>
+        <a href="habits.html" class="whoop-mini-btn">Manage Habits →</a>
       </div>
 
       <div class="save-btn-row">
@@ -1245,6 +1209,23 @@ body::after {
   </div>
 
   <div class="top-cards-row">
+    <a href="habits.html" class="habit-gauge-wrap" id="habitGaugeLink">
+      <div class="habit-gauge-ring">
+        <svg viewBox="0 0 120 120">
+          <circle class="habit-gauge-track" cx="60" cy="60" r="52" />
+          <circle class="habit-gauge-fill"  cx="60" cy="60" r="52" id="habitGaugeFill" />
+        </svg>
+        <div class="habit-gauge-overlay">
+          <div class="habit-gauge-percent" id="habitGaugePercent">—</div>
+          <div class="habit-gauge-label">TODAY</div>
+        </div>
+      </div>
+      <div class="habit-gauge-text">
+        <div class="habit-gauge-title">Habits</div>
+        <div class="habit-gauge-sub" id="habitGaugeSub">Loading…</div>
+      </div>
+    </a>
+
     <div class="day-ring-wrap">
       <div class="day-ring">
         <svg viewBox="0 0 120 120">
@@ -2590,16 +2571,10 @@ document.addEventListener('DOMContentLoaded', function () {
     } catch (e) {}
     return defaultHabitConfig();
   }
-  async function saveHabitConfig(config) {
-    const secret = getSecret();
-    if (!secret) throw new Error('Set your dashboard secret first');
-    const r = await fetch('/api/sync-state?resource=habit-config&secret=' + encodeURIComponent(secret), {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ resource: 'habit-config', config }),
-    });
-    const j = await r.json();
-    if (!r.ok || !j.ok) throw new Error((j && j.error) || 'save failed');
-  }
+  // saveHabitConfig()/saveDailyHabits() moved to habits.html (Phase C)
+  // along with the editing UI that called them — this script only
+  // reads (fetchHabitConfig/fetchDailyHabitsRange, above/below) for
+  // scoring and display, never writes.
   async function fetchDailyHabitsRange(fromKey, toKey) {
     const secret = getSecret();
     const out = {};
@@ -2610,16 +2585,6 @@ document.addEventListener('DOMContentLoaded', function () {
       if (j && j.ok && Array.isArray(j.days)) j.days.forEach((row) => { out[row.date] = row.entries; });
     } catch (e) {}
     return out;
-  }
-  async function saveDailyHabits(dateKeyStr, entries) {
-    const secret = getSecret();
-    if (!secret) throw new Error('Set your dashboard secret first');
-    const r = await fetch('/api/sync-state?resource=daily-habits&secret=' + encodeURIComponent(secret), {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ resource: 'daily-habits', date: dateKeyStr, entries }),
-    });
-    const j = await r.json();
-    if (!r.ok || !j.ok) throw new Error((j && j.error) || 'save failed');
   }
 
   // ---------- auto-sourced categories (each: fixed point budget,
@@ -2802,6 +2767,21 @@ document.addEventListener('DOMContentLoaded', function () {
     else if (score < 75) ringFill.classList.add('is-warn');
   }
 
+  // ---------- render: Habits gauge (top-cards-row, Phase C) — shows
+  // JUST the manual-habits category's completion %, unlike the hero
+  // ring above which blends all 5 categories. Same r=52 circumference
+  // as the Nutrition Score ring next to it, for visually matching fill
+  // behavior. ----------
+  const HABIT_GAUGE_C = 2 * Math.PI * 52;
+  const habitGaugeFill = $('habitGaugeFill');
+  if (habitGaugeFill) { habitGaugeFill.setAttribute('stroke-dasharray', HABIT_GAUGE_C); habitGaugeFill.setAttribute('stroke-dashoffset', HABIT_GAUGE_C); }
+  function setHabitGauge(pct) {
+    if (!habitGaugeFill) return;
+    if (pct == null) { habitGaugeFill.setAttribute('stroke-dashoffset', HABIT_GAUGE_C); return; }
+    const clamped = Math.max(0, Math.min(100, pct));
+    habitGaugeFill.setAttribute('stroke-dashoffset', HABIT_GAUGE_C * (1 - clamped / 100));
+  }
+
   let lastResult = null; // populated by render(), read by the breakdown modal + nightly entry
   let currentHabitConfig = null;
 
@@ -2834,6 +2814,18 @@ document.addEventListener('DOMContentLoaded', function () {
     } else {
       flagsEl.style.display = 'none'; flagsEl.innerHTML = '';
     }
+
+    // Habits gauge (top-cards-row) — the manual-habits category alone,
+    // reusing today.manual (already computed above) rather than
+    // re-fetching/re-scoring a second time.
+    const habitPct = today.manual.possible > 0 ? Math.round((today.manual.earned / today.manual.possible) * 100) : null;
+    $('habitGaugePercent').textContent = habitPct == null ? '—' : habitPct + '%';
+    setHabitGauge(habitPct);
+    const loggedCount = (habitConfig.habits || []).filter((h) => {
+      const e = entriesByDate[todayActive] && entriesByDate[todayActive][h.id];
+      return e && e.na !== true;
+    }).length;
+    $('habitGaugeSub').textContent = habitPct == null ? 'Nothing logged yet' : (loggedCount + ' of ' + (habitConfig.habits || []).length + ' logged');
 
     // weekly score — average this week's daily scores (Monday..today,
     // computing each past day the same way, reusing cronoCache from
@@ -2965,159 +2957,17 @@ document.addEventListener('DOMContentLoaded', function () {
   $('scoreBreakdownCloseBtn').addEventListener('click', () => $('scoreBreakdownModalBg').classList.remove('show'));
   $('scoreBreakdownModalBg').addEventListener('click', (e) => { if (e.target.id === 'scoreBreakdownModalBg') $('scoreBreakdownModalBg').classList.remove('show'); });
 
-  // ---------- nightly entry modal ----------
-  function habitControlHtml(h, existing) {
-    const na = existing && existing.na === true;
-    if (h.type === 'manual_count2') {
-      const v = na ? null : (existing ? existing.value : null);
-      return '<div class="entry-habit-controls" data-habit="' + h.id + '" data-type="count2">' +
-        [0, 1, 2].map((n) => '<button type="button" class="entry-btn count-btn' + (v === n ? ' active' : '') + '" data-v="' + n + '">' + n + '</button>').join('') +
-        '<button type="button" class="entry-btn na-btn' + (na ? ' active' : '') + '" data-v="na">N/A</button></div>';
-    }
-    const v = na ? null : (existing ? existing.value : null);
-    return '<div class="entry-habit-controls" data-habit="' + h.id + '" data-type="binary">' +
-      '<button type="button" class="entry-btn bin-btn' + (v === true ? ' active' : '') + '" data-v="true">Yes</button>' +
-      '<button type="button" class="entry-btn bin-btn' + (v === false ? ' active' : '') + '" data-v="false">No</button>' +
-      '<button type="button" class="entry-btn na-btn' + (na ? ' active' : '') + '" data-v="na">N/A</button></div>';
-  }
-  function renderNightlyEntry() {
-    if (!currentHabitConfig) return;
-    const existingEntry = (lastResult.entriesByDate && lastResult.entriesByDate[todayActive]) || {};
-    const html = (currentHabitConfig.habits || []).map((h) => {
-      const label = h.type === 'zero_tolerance' ? escapeHtml(h.label) + ' <small>Zero tolerance</small>' : (h.type === 'weekly_cap' ? escapeHtml(h.label) + ' <small>Cap: ' + h.weeklyCap + '/week</small>' : escapeHtml(h.label));
-      return '<div class="entry-habit-row" data-row="' + h.id + '"><span class="entry-habit-label">' + label + '</span>' + habitControlHtml(h, existingEntry[h.id]) + '</div>';
-    }).join('');
-    $('nightlyEntryList').innerHTML = html;
-    $('nightlyEntryList').querySelectorAll('.entry-habit-controls').forEach((row) => {
-      row.addEventListener('click', (e) => {
-        const btn = e.target.closest('button');
-        if (!btn) return;
-        row.querySelectorAll('button').forEach((b) => b.classList.remove('active'));
-        btn.classList.add('active');
-      });
-    });
-  }
-  $('scoreOpenEntryBtn').addEventListener('click', () => {
-    $('scoreBreakdownModalBg').classList.remove('show');
-    renderNightlyEntry();
-    $('nightlyEntryModalBg').classList.add('show');
-  });
-  $('nightlyEntryCloseBtn').addEventListener('click', () => $('nightlyEntryModalBg').classList.remove('show'));
-  $('nightlyEntryModalBg').addEventListener('click', (e) => { if (e.target.id === 'nightlyEntryModalBg') $('nightlyEntryModalBg').classList.remove('show'); });
-
-  $('nightlyEntrySaveBtn').addEventListener('click', async () => {
-    const entries = {};
-    $('nightlyEntryList').querySelectorAll('.entry-habit-controls').forEach((row) => {
-      const habitId = row.dataset.habit;
-      const activeBtn = row.querySelector('button.active');
-      if (!activeBtn) return; // left unanswered — stays "unlogged"
-      if (activeBtn.dataset.v === 'na') { entries[habitId] = { na: true }; return; }
-      if (row.dataset.type === 'count2') { entries[habitId] = { value: Number(activeBtn.dataset.v) }; return; }
-      entries[habitId] = { value: activeBtn.dataset.v === 'true' };
-    });
-    const btn = $('nightlyEntrySaveBtn');
-    btn.disabled = true;
-    try {
-      await saveDailyHabits(todayActive, entries);
-      $('nightlyEntryConfirm').classList.add('show');
-      clearTimeout($('nightlyEntryConfirm')._t);
-      $('nightlyEntryConfirm')._t = setTimeout(() => $('nightlyEntryConfirm').classList.remove('show'), 1800);
-      await render();
-    } catch (e) {
-      alert("Couldn't save: " + (e.message || e));
-    } finally {
-      btn.disabled = false;
-    }
-  });
-
-  // ---------- habit settings modal ----------
-  let settingsDraft = null;
-  function typeFieldsHtml(h) {
-    if (h.type !== 'weekly_cap') return '';
-    return '<input type="number" class="wc-cap" min="0" value="' + (h.weeklyCap || 0) + '" title="Weekly cap" style="width:44px">' +
-      '<input type="number" class="wc-weekpen" min="0" value="' + (h.weeklyPenaltyPoints || 0) + '" title="Weekly penalty" style="width:44px">' +
-      '<input type="number" class="wc-daypen" min="0" value="' + (h.perExtraDayPenaltyPoints || 0) + '" title="Per extra day penalty" style="width:44px">';
-  }
-  function renderHabitSettingsList() {
-    const html = settingsDraft.habits.map((h, i) => {
-      return '<div class="habit-config-row" data-idx="' + i + '">' +
-        '<div class="habit-config-main">' +
-        '<input type="text" class="habit-config-label-input hc-label" value="' + escapeHtml(h.label) + '">' +
-        '<div class="habit-config-meta-row">' +
-        '<select class="hc-type">' +
-        ['manual_binary', 'manual_count2', 'zero_tolerance', 'weekly_cap'].map((t) => '<option value="' + t + '"' + (t === h.type ? ' selected' : '') + '>' + t + '</option>').join('') +
-        '</select>' +
-        '<input type="number" class="hc-points" min="0" value="' + h.points + '" title="Points" style="width:50px">' +
-        '<span class="hc-typefields">' + typeFieldsHtml(h) + '</span>' +
-        '</div></div>' +
-        '<div class="habit-config-actions">' +
-        '<button type="button" class="habit-config-icon-btn hc-up" title="Move up">↑</button>' +
-        '<button type="button" class="habit-config-icon-btn hc-down" title="Move down">↓</button>' +
-        '<button type="button" class="habit-config-icon-btn hc-del" title="Delete">✕</button>' +
-        '</div></div>';
-    }).join('');
-    $('habitConfigList').innerHTML = html;
-  }
-  function readHabitSettingsListIntoDraft() {
-    $('habitConfigList').querySelectorAll('.habit-config-row').forEach((row, i) => {
-      const h = settingsDraft.habits[i];
-      if (!h) return;
-      h.label = row.querySelector('.hc-label').value.trim() || h.label;
-      h.type = row.querySelector('.hc-type').value;
-      h.points = Number(row.querySelector('.hc-points').value) || 0;
-      const cap = row.querySelector('.wc-cap'); if (cap) h.weeklyCap = Number(cap.value) || 0;
-      const wp = row.querySelector('.wc-weekpen'); if (wp) h.weeklyPenaltyPoints = Number(wp.value) || 0;
-      const dp = row.querySelector('.wc-daypen'); if (dp) h.perExtraDayPenaltyPoints = Number(dp.value) || 0;
-    });
-  }
-  $('habitConfigList').addEventListener('click', (e) => {
-    const row = e.target.closest('.habit-config-row');
-    if (!row) return;
-    readHabitSettingsListIntoDraft();
-    const idx = Number(row.dataset.idx);
-    if (e.target.closest('.hc-up') && idx > 0) {
-      const [h] = settingsDraft.habits.splice(idx, 1); settingsDraft.habits.splice(idx - 1, 0, h); renderHabitSettingsList();
-    } else if (e.target.closest('.hc-down') && idx < settingsDraft.habits.length - 1) {
-      const [h] = settingsDraft.habits.splice(idx, 1); settingsDraft.habits.splice(idx + 1, 0, h); renderHabitSettingsList();
-    } else if (e.target.closest('.hc-del')) {
-      settingsDraft.habits.splice(idx, 1); renderHabitSettingsList();
-    }
-  });
-  $('habitConfigList').addEventListener('change', (e) => {
-    if (e.target.classList.contains('hc-type')) { readHabitSettingsListIntoDraft(); renderHabitSettingsList(); }
-  });
-  $('habitConfigAddBtn').addEventListener('click', () => {
-    readHabitSettingsListIntoDraft();
-    settingsDraft.habits.push({ id: 'custom_' + Date.now().toString(36), label: 'New habit', points: 5, type: 'manual_binary' });
-    renderHabitSettingsList();
-  });
-  function openHabitSettings() {
-    settingsDraft = JSON.parse(JSON.stringify(currentHabitConfig || defaultHabitConfig()));
-    renderHabitSettingsList();
-    $('habitSettingsModalBg').classList.add('show');
-  }
-  $('habitSettingsCloseBtn').addEventListener('click', () => $('habitSettingsModalBg').classList.remove('show'));
-  $('habitSettingsModalBg').addEventListener('click', (e) => { if (e.target.id === 'habitSettingsModalBg') $('habitSettingsModalBg').classList.remove('show'); });
-  $('habitSettingsSaveBtn').addEventListener('click', async () => {
-    readHabitSettingsListIntoDraft();
-    const btn = $('habitSettingsSaveBtn');
-    btn.disabled = true;
-    try {
-      await saveHabitConfig(settingsDraft);
-      $('habitSettingsConfirm').classList.add('show');
-      clearTimeout($('habitSettingsConfirm')._t);
-      $('habitSettingsConfirm')._t = setTimeout(() => $('habitSettingsConfirm').classList.remove('show'), 1800);
-      await render();
-    } catch (e) {
-      alert("Couldn't save: " + (e.message || e));
-    } finally {
-      btn.disabled = false;
-    }
-  });
+  // Habit logging (nightly entry) and habit list/points config used to
+  // be modals here — moved to their own page (habits.html, Phase C),
+  // reachable from the bottombar's new Habits tab, the breakdown
+  // modal's button below, and General Settings' link further down.
+  // This script keeps just enough (fetchHabitConfig/
+  // fetchDailyHabitsRange, both still below) to SCORE and DISPLAY
+  // today's habits here — not to edit them.
 
   // ---------- General Settings (Phase A: day-end time + timezone +
-  // category weights, plus a link into the Habit Settings modal
-  // above). Storage: api/sync-state.js's resource=general-settings,
+  // category weights, plus a link to habits.html for the habit list
+  // itself). Storage: api/sync-state.js's resource=general-settings,
   // which reuses the habit_config table's id="general" row — no new
   // table. Local cache: daylib.js's own localStorage key
   // (dashboard:general_settings), read/written via window.DayLib so
@@ -3192,10 +3042,6 @@ document.addEventListener('DOMContentLoaded', function () {
   $('generalSettingsCloseBtn').addEventListener('click', () => $('generalSettingsModalBg').classList.remove('show'));
   $('generalSettingsModalBg').addEventListener('click', (e) => { if (e.target.id === 'generalSettingsModalBg') $('generalSettingsModalBg').classList.remove('show'); });
   Object.values(gsWeightIds).forEach((id) => $(id).addEventListener('input', updateWeightSum));
-  $('gsManageHabitsBtn').addEventListener('click', () => {
-    $('generalSettingsModalBg').classList.remove('show');
-    openHabitSettings();
-  });
   $('generalSettingsSaveBtn').addEventListener('click', async () => {
     if (!updateWeightSum()) { alert('Category weights must sum to 100.'); return; }
     const settings = {
