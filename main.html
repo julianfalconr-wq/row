@@ -456,23 +456,25 @@ body::after {
 .cal-event-title { font-size: 13px; color: var(--text-primary); font-weight: 600; word-break: break-word; }
 .cal-event-day { font-size: 9.5px; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.08em; margin-top: 2px; }
 /* Events fully contained within another event's time range (e.g. a
-   30-min call inside a longer "Eating out" block) render here instead
-   of as their own flat-list row — offset right with a connector line
-   so they read as "happens during" the row directly above. */
-.cal-event-children {
-  display: flex; flex-direction: column; gap: 6px;
-  margin: -2px 0 0 22px;
-  padding-left: 12px;
-  border-left: 2px solid var(--line);
+   30-min call inside a longer "Eating out" block) render as small
+   chips INSIDE the containing event's own card — appended into its
+   .cal-event-body below the title/day — rather than a separate row
+   underneath it. The parent's own border/background naturally grows
+   to fit them since they're part of its box, not a sibling connected
+   by a line. */
+.cal-event-nested-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.cal-event-nested-chip {
+  display: flex; align-items: baseline; gap: 8px;
+  padding: 6px 10px;
+  background: rgba(255, 255, 255, 0.07);
+  border-radius: 8px;
 }
-.cal-event-row.is-nested {
-  padding: 7px 10px;
-  background: transparent;
-  border-style: dashed;
-  opacity: 0.82;
+:root[data-theme="light"] .cal-event-nested-chip { background: rgba(0, 0, 0, 0.05); }
+.cal-event-nested-time {
+  font-family: var(--font-mono); font-size: 10px; color: var(--text-tertiary);
+  white-space: nowrap; flex-shrink: 0;
 }
-.cal-event-row.is-nested .cal-event-time { font-size: 10.5px; min-width: 50px; }
-.cal-event-row.is-nested .cal-event-title { font-size: 12px; font-weight: 500; }
+.cal-event-nested-title { font-size: 11.5px; color: var(--text-secondary); font-weight: 600; word-break: break-word; }
 .cal-empty { text-align: center; font-size: 12px; color: var(--text-tertiary); font-style: italic; padding: 14px 0; }
 .cal-add-toggle {
   width: 100%; margin-top: 12px; padding: 10px;
@@ -1901,12 +1903,28 @@ document.addEventListener('DOMContentLoaded', function () {
     return { parentIdx, childrenOf };
   }
 
-  function eventRowHtml(ev, isNested) {
-    return '<div class="cal-event-row' + (isNested ? ' is-nested' : '') + '">' +
+  // Nested events render as small chips INSIDE the containing event's
+  // own .cal-event-row (appended into its .cal-event-body, below the
+  // title/day) — not as a separate row/box below it. That's what makes
+  // the parent's own card border/background visually grow to contain
+  // them, rather than looking like a connected-but-separate sibling.
+  function nestedChipHtml(ev) {
+    return '<div class="cal-event-nested-chip">' +
+        '<span class="cal-event-nested-time">' + escapeHtml(fmtEventTime(ev)) + '</span>' +
+        '<span class="cal-event-nested-title">' + escapeHtml(ev.summary || '(untitled)') + '</span>' +
+      '</div>';
+  }
+
+  function eventRowHtml(ev, nestedEvents) {
+    const nestedHtml = (nestedEvents && nestedEvents.length)
+      ? '<div class="cal-event-nested-list">' + nestedEvents.map(nestedChipHtml).join('') + '</div>'
+      : '';
+    return '<div class="cal-event-row">' +
         '<div class="cal-event-time">' + escapeHtml(fmtEventTime(ev)) + '</div>' +
         '<div class="cal-event-body">' +
           '<div class="cal-event-title">' + escapeHtml(ev.summary || '(untitled)') + '</div>' +
           '<div class="cal-event-day">' + escapeHtml(fmtEventDay(ev)) + '</div>' +
+          nestedHtml +
         '</div>' +
       '</div>';
   }
@@ -1920,18 +1938,12 @@ document.addEventListener('DOMContentLoaded', function () {
     emptyEl.style.display = 'none';
     const { parentIdx, childrenOf } = computeEventNesting(events);
     listEl.innerHTML = events.map((ev, i) => {
-      if (parentIdx[i] !== -1) return ''; // rendered under its parent instead, below
-      const children = childrenOf.get(i);
-      let html = eventRowHtml(ev, false);
-      if (children && children.length) {
-        // events[] is already chronological (the API call requests
-        // singleEvents=true & orderBy=startTime), so filtering into
-        // this array preserves that order — no extra sort needed.
-        html += '<div class="cal-event-children">' +
-          children.map((ci) => eventRowHtml(events[ci], true)).join('') +
-          '</div>';
-      }
-      return html;
+      if (parentIdx[i] !== -1) return ''; // rendered inside its parent's own card instead
+      // events[] is already chronological (the API call requests
+      // singleEvents=true & orderBy=startTime), so filtering into this
+      // array preserves that order — no extra sort needed.
+      const children = (childrenOf.get(i) || []).map((ci) => events[ci]);
+      return eventRowHtml(ev, children);
     }).join('');
   }
 
