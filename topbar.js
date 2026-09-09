@@ -865,7 +865,77 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
       completionPct: stackTotal ? Math.round((stackDone / stackTotal) * 100) : null,
     };
 
-    return { date: todayKey, nutrition, goals, foodScans, gym, whoop, finance, dailyStack };
+    // ---------- 8. Calendar ----------
+    // google_tokens_v1 = { access, refresh, expires } — same shape/spirit
+    // as whoop_tokens_v1 above. Live-fetches today + the next few days
+    // (via api/google-callback.js's ?action=list proxy) so the chat can
+    // see what's already scheduled before proposing a new event — this
+    // is exactly why propose_calendar_event needs this section to exist
+    // (see api/chat.js). Uses the same cooldown-on-failed-refresh
+    // circuit breaker convention as the WHOOP section above (own key,
+    // so a dead Google token doesn't block WHOOP retries or vice versa).
+    const GOOGLE_KEY = 'google_tokens_v1';
+    let calendar = { connected: false, upcoming: [] };
+    const googleTokens = safeParse(GOOGLE_KEY, null);
+    if (googleTokens && googleTokens.access) {
+      calendar.connected = true;
+      const GOOGLE_REFRESH_COOLDOWN_KEY = 'google_refresh_cooldown_until';
+      const GOOGLE_REFRESH_COOLDOWN_MS = 20 * 60 * 1000;
+      function isGoogleRefreshCoolingDown() { return Date.now() < (Number(localStorage.getItem(GOOGLE_REFRESH_COOLDOWN_KEY)) || 0); }
+      function startGoogleRefreshCooldown() { try { localStorage.setItem(GOOGLE_REFRESH_COOLDOWN_KEY, String(Date.now() + GOOGLE_REFRESH_COOLDOWN_MS)); } catch (e) {} }
+      function clearGoogleRefreshCooldown() { try { localStorage.removeItem(GOOGLE_REFRESH_COOLDOWN_KEY); } catch (e) {} }
+
+      // No dashboard:secret on these two calls — api/google-callback.js's
+      // refresh/list modes are gated only by possession of a valid Google
+      // bearer/refresh token (matching WHOOP's actual security model:
+      // api/whoop-refresh.js and api/whoop-data.js don't check
+      // DASHBOARD_SECRET either). Only its client-id mode requires the
+      // secret, and this function never calls that mode.
+      async function refreshGoogleToken(t) {
+        if (!t.refresh) return null;
+        if (isGoogleRefreshCoolingDown()) return null;
+        try {
+          const r = await fetch('/api/google-callback?action=refresh', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ refresh_token: t.refresh }),
+          });
+          const j = await r.json();
+          if (j.access_token) {
+            const next = { access: j.access_token, refresh: j.refresh_token || t.refresh, expires: Date.now() + (j.expires_in || 3500) * 1000 };
+            try { localStorage.setItem(GOOGLE_KEY, JSON.stringify(next)); } catch (e) {}
+            clearGoogleRefreshCooldown();
+            return next;
+          }
+        } catch (e) {}
+        startGoogleRefreshCooldown();
+        return null;
+      }
+      async function calendarFetch(qs, t) {
+        const r = await fetch('/api/google-callback?action=list&' + qs, {
+          headers: { Authorization: 'Bearer ' + t.access },
+        });
+        if (r.status === 401) { const n = await refreshGoogleToken(t); if (n) return calendarFetch(qs, n); throw new Error('unauthorized'); }
+        if (!r.ok) throw new Error('Calendar ' + r.status);
+        return r.json();
+      }
+
+      try {
+        let t = googleTokens;
+        if (t.expires && Date.now() > t.expires - 60000) { const n = await refreshGoogleToken(t); if (n) t = n; }
+        const timeMin = new Date();
+        const timeMax = new Date(); timeMax.setDate(timeMax.getDate() + 5);
+        const qs = new URLSearchParams({ timeMin: timeMin.toISOString(), timeMax: timeMax.toISOString() }).toString();
+        const data = await calendarFetch(qs, t);
+        calendar.upcoming = (Array.isArray(data.items) ? data.items : []).slice(0, 20).map((ev) => ({
+          title: ev.summary || '(untitled)',
+          start: (ev.start && (ev.start.dateTime || ev.start.date)) || null,
+          end: (ev.end && (ev.end.dateTime || ev.end.date)) || null,
+          allDay: !!(ev.start && ev.start.date),
+        }));
+      } catch (e) { /* leave calendar.connected true but upcoming empty — token exists but fetch failed */ }
+    }
+
+    return { date: todayKey, nutrition, goals, foodScans, gym, whoop, finance, dailyStack, calendar };
   };
 
   // =============================================================
@@ -1129,12 +1199,122 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
       container.appendChild(card);
     }
 
-    function addBubble(role, text, proposedObjectives) {
+    // ---------- calendar event proposal (see api/chat.js's
+    // propose_calendar_event tool) ----------
+    // Same explicit-confirmation pattern as renderPlanCard above, reusing
+    // its generic .chat-plan-* card styling — nothing is created until
+    // the user taps Create. Duplicates a small refresh-and-create routine
+    // rather than reaching into gatherTodayContext()'s Google helpers
+    // (a sibling function's locals aren't visible here), matching this
+    // project's established pattern of small per-scope duplication over
+    // cross-function plumbing (see e.g. health.html/gym.html/index.html
+    // each having their own independent WHOOP fetch logic).
+    function renderCalendarEventCard(container, event) {
+      const card = document.createElement('div');
+      card.className = 'chat-plan-card';
+
+      card.appendChild(planRow('Event', event.summary, event.description || ''));
+      card.appendChild(planRow('Date', event.date, ''));
+      card.appendChild(planRow('Time', event.startTime + '–' + event.endTime, ''));
+
+      const actions = document.createElement('div');
+      actions.className = 'chat-plan-actions';
+      const createBtn = document.createElement('button');
+      createBtn.type = 'button'; createBtn.className = 'chat-plan-save-btn';
+      createBtn.textContent = 'Create event';
+      const dismissBtn = document.createElement('button');
+      dismissBtn.type = 'button'; dismissBtn.className = 'chat-plan-dismiss-btn';
+      dismissBtn.textContent = 'Not now';
+      actions.appendChild(createBtn);
+      actions.appendChild(dismissBtn);
+      card.appendChild(actions);
+
+      function showStatus(text, isSaved) {
+        actions.remove();
+        const status = document.createElement('div');
+        status.className = 'chat-plan-status ' + (isSaved ? 'is-saved' : 'is-dismissed');
+        status.textContent = text;
+        card.appendChild(status);
+      }
+
+      const GOOGLE_KEY = 'google_tokens_v1';
+      const GOOGLE_COOLDOWN_KEY = 'google_refresh_cooldown_until';
+      const GOOGLE_COOLDOWN_MS = 20 * 60 * 1000;
+      function loadGoogleTokens() { try { return JSON.parse(localStorage.getItem(GOOGLE_KEY)); } catch (e) { return null; } }
+      function saveGoogleTokens(t) { try { localStorage.setItem(GOOGLE_KEY, JSON.stringify(t)); } catch (e) {} }
+      // Shares the cooldown KEY with gatherTodayContext()'s and
+      // main.html's Google sections (same convention as WHOOP's) — a
+      // failed refresh anywhere stops all three from hammering
+      // api/google-callback.js's refresh mode on their own next attempt.
+      function isGoogleCoolingDown() { return Date.now() < (Number(localStorage.getItem(GOOGLE_COOLDOWN_KEY)) || 0); }
+      function startGoogleCooldown() { try { localStorage.setItem(GOOGLE_COOLDOWN_KEY, String(Date.now() + GOOGLE_COOLDOWN_MS)); } catch (e) {} }
+      function clearGoogleCooldown() { try { localStorage.removeItem(GOOGLE_COOLDOWN_KEY); } catch (e) {} }
+
+      async function refreshGoogle(t) {
+        if (!t.refresh) return null;
+        if (isGoogleCoolingDown()) return null;
+        try {
+          const r = await fetch('/api/google-callback?action=refresh', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ refresh_token: t.refresh }),
+          });
+          const j = await r.json();
+          if (j.access_token) {
+            const next = { access: j.access_token, refresh: j.refresh_token || t.refresh, expires: Date.now() + (j.expires_in || 3500) * 1000 };
+            saveGoogleTokens(next);
+            clearGoogleCooldown();
+            return next;
+          }
+        } catch (e) {}
+        startGoogleCooldown();
+        return null;
+      }
+
+      async function doCreate(tok) {
+        const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        const r = await fetch('/api/google-callback?action=create', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok.access },
+          body: JSON.stringify({
+            summary: event.summary,
+            description: event.description || undefined,
+            start: { dateTime: event.date + 'T' + event.startTime + ':00', timeZone: tz },
+            end: { dateTime: event.date + 'T' + event.endTime + ':00', timeZone: tz },
+          }),
+        });
+        if (r.status === 401) {
+          const n = await refreshGoogle(tok);
+          if (n) return doCreate(n);
+          throw new Error('unauthorized');
+        }
+        if (!r.ok) throw new Error('Calendar ' + r.status);
+        return r.json();
+      }
+
+      createBtn.addEventListener('click', async () => {
+        const t = loadGoogleTokens();
+        if (!t || !t.access) { showStatus('Connect Google Calendar on the main dashboard first.', false); return; }
+        createBtn.disabled = true;
+        try {
+          await doCreate(t);
+          showStatus('Created ✓ — check your calendar', true);
+        } catch (e) {
+          createBtn.disabled = false;
+          showStatus('Could not create event: ' + (e.message || String(e)), false);
+        }
+      });
+      dismissBtn.addEventListener('click', () => showStatus('Not created', false));
+
+      container.appendChild(card);
+    }
+
+    function addBubble(role, text, proposedObjectives, proposedCalendarEvent) {
       emptyEl.style.display = 'none';
       const el = document.createElement('div');
       el.className = 'chat-bubble ' + role;
       renderBubbleContent(el, text);
       if (proposedObjectives) renderPlanCard(el, proposedObjectives);
+      if (proposedCalendarEvent) renderCalendarEventCard(el, proposedCalendarEvent);
       messagesEl.appendChild(el);
       messagesEl.scrollTop = messagesEl.scrollHeight;
       return el;
@@ -1246,8 +1426,9 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
     // ---------- push notifications (daily check-in) ----------
     // Fails silently at every step: no VAPID key yet, no service worker
     // support, permission denied, offline — none of it should ever
-    // interrupt a normal chat session. See api/push-subscribe.js,
-    // api/send-notification.js, api/daily-checkin.js, and sw.js.
+    // interrupt a normal chat session. See api/push.js (merged from the
+    // former api/push-subscribe.js + api/send-notification.js),
+    // api/daily-checkin.js, and sw.js.
     const PUSH_ASKED_KEY = 'push_permission_asked_v1';
     const IOS_BANNER_DISMISSED_KEY = 'ios_pwa_banner_dismissed_v1';
 
@@ -1313,11 +1494,11 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
         const reg = await navigator.serviceWorker.register('/sw.js');
         console.log('[push] service worker registered, scope:', reg.scope);
 
-        console.log('[push] fetching VAPID public key from /api/push-subscribe ...');
-        const keyRes = await fetch('/api/push-subscribe?secret=' + encodeURIComponent(secret));
-        console.log('[push] GET /api/push-subscribe status:', keyRes.status);
+        console.log('[push] fetching VAPID public key from /api/push ...');
+        const keyRes = await fetch('/api/push?secret=' + encodeURIComponent(secret));
+        console.log('[push] GET /api/push status:', keyRes.status);
         const keyJson = await keyRes.json();
-        console.log('[push] GET /api/push-subscribe body:', keyJson);
+        console.log('[push] GET /api/push body:', keyJson);
         const publicKey = keyJson && keyJson.publicKey;
         if (!publicKey) { console.log('[push] ABORT: no publicKey in response — VAPID keys likely not set server-side'); return; }
 
@@ -1332,14 +1513,14 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
           console.log('[push] pushManager.subscribe() resolved:', existing.endpoint);
         }
 
-        console.log('[push] POSTing subscription to /api/push-subscribe ...');
-        const postRes = await fetch('/api/push-subscribe?secret=' + encodeURIComponent(secret), {
+        console.log('[push] POSTing subscription to /api/push?action=subscribe ...');
+        const postRes = await fetch('/api/push?action=subscribe&secret=' + encodeURIComponent(secret), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(existing.toJSON()),
         });
         const postJson = await postRes.json().catch(() => null);
-        console.log('[push] POST /api/push-subscribe status:', postRes.status, 'body:', postJson);
+        console.log('[push] POST /api/push?action=subscribe status:', postRes.status, 'body:', postJson);
       } catch (e) {
         console.error('[push] subscribeForPush() THREW:', e && (e.message || String(e)), e);
       }
@@ -1437,8 +1618,10 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
 
         chatHistory = Array.isArray(json.history) ? json.history : chatHistory;
         saveChatHistory(chatHistory);
-        const fallbackText = json.proposedObjectives ? "Here's what I'm proposing for this week:" : '(no reply)';
-        addBubble('assistant', json.reply || fallbackText, json.proposedObjectives || null);
+        const fallbackText = json.proposedObjectives
+          ? "Here's what I'm proposing for this week:"
+          : (json.proposedCalendarEvent ? "Here's the event I'm proposing:" : '(no reply)');
+        addBubble('assistant', json.reply || fallbackText, json.proposedObjectives || null, json.proposedCalendarEvent || null);
         archiveToServer(chatTodayKey(), chatHistory); // best-effort, doesn't block the UI
       } catch (e) {
         typingEl.remove();

@@ -112,6 +112,44 @@ const PROPOSE_OBJECTIVES_TOOL = {
     },
     required: ['strength', 'running', 'rationale'],
   },
+};
+
+// ---------- propose_calendar_event tool ----------
+// Lets the user ask the chat to schedule something on Google Calendar
+// conversationally (matching the old-coach-negotiation spirit
+// propose_training_objectives already established) instead of only
+// ever using the manual "+ Add event" form in main.html's Calendar
+// card. Input schema deliberately mirrors that manual form's own raw
+// fields (title/date/startTime/endTime/description) rather than
+// Google's {dateTime, timeZone} event shape directly — the model has
+// no reliable way to know the user's IANA timezone, but the browser
+// does (Intl.DateTimeFormat().resolvedOptions().timeZone), so the
+// frontend does the exact same date+time -> {dateTime, timeZone}
+// conversion here that it already does for the manual form, and both
+// paths end up calling api/google-callback.js's ?action=create with
+// an identical body shape.
+const PROPOSE_CALENDAR_EVENT_TOOL = {
+  name: 'propose_calendar_event',
+  description:
+    'Propose a specific calendar event (title, date, start/end time) for the user to review. This does ' +
+    'NOT create anything by itself — the user sees the proposal in the chat and explicitly chooses to ' +
+    'create it or not. Only call this once you have a concrete date and start/end time to propose — ask ' +
+    'a brief clarifying question first if the request is too vague (e.g. "sometime this week" with ' +
+    'nothing else to go on), but do not ask unnecessary questions if there is already enough to work ' +
+    'with. ALWAYS check calendar.upcoming in TODAY\'S DATA for conflicts before proposing a time — never ' +
+    'propose a time that overlaps an existing event; if the time the user asked for conflicts, say so and ' +
+    'propose a nearby free slot instead of silently ignoring the conflict.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      summary: { type: 'string', description: 'Event title' },
+      description: { type: 'string', description: 'Optional short description' },
+      date: { type: 'string', description: 'YYYY-MM-DD, resolved from TODAY\'S DATA\'s current date for relative terms like "tomorrow" or "Friday"' },
+      startTime: { type: 'string', description: 'HH:MM, 24-hour, local time' },
+      endTime: { type: 'string', description: 'HH:MM, 24-hour, local time' },
+    },
+    required: ['summary', 'date', 'startTime', 'endTime'],
+  },
   // Last tool in the tools array -> caches every tool definition up to
   // and including this one (see the prompt-caching note in the handler
   // below). Tool definitions never change between requests, so this is
@@ -159,6 +197,22 @@ function normalizeProposedPlan(raw) {
       },
     },
     rationale: typeof r.rationale === 'string' ? r.rationale.slice(0, 600) : '',
+  };
+}
+
+// Defensive normalization for propose_calendar_event, same spirit as
+// normalizeProposedPlan above — guarantees the frontend always gets
+// the exact {summary, description, date, startTime, endTime} shape it
+// expects (matching main.html's manual "+ Add event" form fields
+// exactly) regardless of how closely the model followed the schema.
+function normalizeProposedEvent(raw) {
+  const r = raw || {};
+  return {
+    summary: typeof r.summary === 'string' ? r.summary.slice(0, 200) : '',
+    description: typeof r.description === 'string' ? r.description.slice(0, 1000) : '',
+    date: typeof r.date === 'string' ? r.date.slice(0, 10) : '',
+    startTime: typeof r.startTime === 'string' ? r.startTime.slice(0, 5) : '',
+    endTime: typeof r.endTime === 'string' ? r.endTime.slice(0, 5) : '',
   };
 }
 
@@ -377,6 +431,21 @@ function buildStaticSystemPrompt() {
     'When you do call it, also say a short summary sentence of the plan in your normal reply text (the ' +
     'proposal itself is shown to the user as a card with its own Save button, so don\'t repeat every number ' +
     'in prose — just enough that the message reads fine on its own).\n\n' +
+    'CALENDAR: the user can also ask you to schedule something on their Google Calendar — they\'ll ' +
+    'describe what they want (e.g. "put a gym session on my calendar tomorrow evening") and may mention ' +
+    'constraints like preferred time of day. TODAY\'S DATA includes calendar.connected and ' +
+    'calendar.upcoming (their actual scheduled events for the next few days, each with title/start/end) ' +
+    'when Google Calendar is connected. ALWAYS check calendar.upcoming before proposing a time — never ' +
+    'propose something that overlaps an existing event; if the time they asked for conflicts, say so ' +
+    'and propose a nearby free slot instead of silently ignoring the conflict. If calendar.connected is ' +
+    'false, tell them to connect Google Calendar on the main dashboard first rather than proposing ' +
+    'anything. Ask a brief clarifying question if the request is too vague to pick a specific day/time, ' +
+    'but don\'t ask unnecessary questions if there\'s already enough to work with — resolve relative ' +
+    'terms like "tomorrow" or "Friday" against TODAY\'S DATA\'s own "date" field, never guess today\'s ' +
+    'date. Only call propose_calendar_event once you have a concrete date and start/end time — never ' +
+    'call it speculatively. When you do call it, also say a short summary sentence in your normal reply ' +
+    'text (the proposal is shown as its own card with a Create button, so don\'t repeat every detail in ' +
+    'prose).\n\n' +
     'CHARTS: when a chart would clearly help — trends over time, comparisons between days or ' +
     'metrics — you may include, inside your normal reply text, exactly one fenced block like this:\n' +
     '```chart\n' +
@@ -448,7 +517,7 @@ export default async function handler(req, res) {
           max_tokens: 1024,
           system: systemBlocks,
           messages,
-          tools: [{ type: 'memory_20250818', name: 'memory' }, PROPOSE_OBJECTIVES_TOOL],
+          tools: [{ type: 'memory_20250818', name: 'memory' }, PROPOSE_OBJECTIVES_TOOL, PROPOSE_CALENDAR_EVENT_TOOL],
         }),
       });
 
@@ -479,6 +548,7 @@ export default async function handler(req, res) {
       // we answer the acknowledgment ourselves instead of looping back for
       // another model turn once a proposal is found.
       let proposedObjectives = null;
+      let proposedCalendarEvent = null;
       const toolResults = [];
       for (const toolUse of toolUses) {
         if (toolUse.name === 'propose_training_objectives') {
@@ -487,6 +557,15 @@ export default async function handler(req, res) {
             type: 'tool_result',
             tool_use_id: toolUse.id,
             content: 'Proposal shown to the user in the chat UI for review. Not saved automatically — only the user can save it.',
+          });
+          continue;
+        }
+        if (toolUse.name === 'propose_calendar_event') {
+          proposedCalendarEvent = normalizeProposedEvent(toolUse.input);
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: toolUse.id,
+            content: 'Proposal shown to the user in the chat UI for review. Not created automatically — only the user can create it.',
           });
           continue;
         }
@@ -500,9 +579,12 @@ export default async function handler(req, res) {
       }
       messages.push({ role: 'user', content: toolResults });
 
-      if (proposedObjectives) {
+      if (proposedObjectives || proposedCalendarEvent) {
         const textBlock = (data.content || []).find((b) => b.type === 'text');
-        return res.status(200).json({ reply: textBlock ? textBlock.text : '', history: messages, proposedObjectives });
+        const responseBody = { reply: textBlock ? textBlock.text : '', history: messages };
+        if (proposedObjectives) responseBody.proposedObjectives = proposedObjectives;
+        if (proposedCalendarEvent) responseBody.proposedCalendarEvent = proposedCalendarEvent;
+        return res.status(200).json(responseBody);
       }
     }
 

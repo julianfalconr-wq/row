@@ -402,6 +402,80 @@ body::after {
 .gm-card.gm-all-done .gm-progress-num,
 .gm-card.gm-all-done .gm-progress-label { color: var(--success); }
 
+/* ===== Calendar card ===== */
+.cal-disconnected { text-align: center; padding: 8px 4px 4px; }
+.cal-disconnected-title { font-size: 16px; font-weight: 700; color: var(--text-primary); margin-bottom: 6px; }
+.cal-disconnected-sub { font-size: 12.5px; color: var(--text-tertiary); line-height: 1.5; max-width: 340px; margin: 0 auto 16px; }
+.cal-connect-btn {
+  padding: 12px 22px; border-radius: 999px; border: 1px solid var(--line);
+  background: linear-gradient(180deg, var(--btn-primary-a), var(--btn-primary-b));
+  color: var(--btn-primary-text); font-family: inherit; font-weight: 700; font-size: 13.5px;
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.cal-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 14px; }
+.cal-tabs { display: flex; gap: 4px; background: var(--inset-bg); border: 1px solid var(--line); border-radius: 10px; padding: 3px; }
+.cal-tab {
+  padding: 7px 12px; border: none; background: transparent; color: var(--text-tertiary);
+  border-radius: 7px; font-family: inherit; font-size: 11.5px; font-weight: 700;
+  cursor: pointer; -webkit-tap-highlight-color: transparent; transition: background 0.15s, color 0.15s;
+}
+.cal-tab:hover { color: var(--text-secondary); }
+.cal-tab.active { background: linear-gradient(180deg, var(--btn-primary-a), var(--btn-primary-b)); color: var(--btn-primary-text); }
+.cal-refresh-btn {
+  width: 32px; height: 32px; border-radius: 50%; border: 1px solid var(--line);
+  background: transparent; color: var(--text-tertiary); cursor: pointer;
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+  transition: color 0.15s, border-color 0.15s, transform 0.4s;
+}
+.cal-refresh-btn:hover { color: var(--text-primary); border-color: var(--text-tertiary); }
+.cal-refresh-btn.is-spinning { transform: rotate(360deg); }
+.cal-err {
+  font-size: 11.5px; color: var(--danger); background: rgba(255,77,77,0.08);
+  border: 1px solid rgba(255,77,77,0.25); border-radius: 8px; padding: 8px 10px; margin-bottom: 10px;
+}
+.cal-list { display: flex; flex-direction: column; gap: 8px; }
+.cal-event-row {
+  display: flex; gap: 12px; align-items: flex-start;
+  padding: 10px 12px; background: var(--inset-bg); border: 1px solid var(--line); border-radius: 10px;
+}
+.cal-event-time {
+  font-family: var(--font-mono); font-size: 11.5px; color: var(--text-tertiary);
+  white-space: nowrap; padding-top: 1px; min-width: 60px;
+}
+.cal-event-body { min-width: 0; }
+.cal-event-title { font-size: 13px; color: var(--text-primary); font-weight: 600; word-break: break-word; }
+.cal-event-day { font-size: 9.5px; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.08em; margin-top: 2px; }
+.cal-empty { text-align: center; font-size: 12px; color: var(--text-tertiary); font-style: italic; padding: 14px 0; }
+.cal-add-toggle {
+  width: 100%; margin-top: 12px; padding: 10px;
+  background: transparent; border: 1px dashed var(--line); border-radius: 10px;
+  color: var(--text-secondary); font-family: inherit; font-size: 12.5px; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.cal-add-toggle:hover { color: var(--text-primary); border-color: var(--text-tertiary); }
+.cal-add-form { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+.cal-add-form input, .cal-add-form textarea {
+  padding: 10px 12px; border: 1px solid var(--line); background: var(--inset-bg);
+  border-radius: 8px; color: var(--text-primary); font-family: inherit; font-size: 13px;
+}
+.cal-add-form textarea { resize: vertical; }
+.cal-add-row { display: grid; grid-template-columns: 1.3fr 1fr 1fr; gap: 8px; }
+.cal-add-actions { display: flex; gap: 8px; margin-top: 4px; }
+.cal-add-cancel {
+  flex: 1; padding: 10px; border-radius: 8px; border: 1px solid var(--line);
+  background: transparent; color: var(--text-secondary); font-family: inherit; font-size: 12.5px; cursor: pointer;
+}
+.cal-add-save {
+  flex: 1; padding: 10px; border-radius: 8px; border: none;
+  background: linear-gradient(180deg, var(--btn-primary-a), var(--btn-primary-b));
+  color: var(--btn-primary-text); font-family: inherit; font-weight: 700; font-size: 12.5px; cursor: pointer;
+}
+.cal-add-save:disabled { opacity: 0.5; cursor: default; }
+.cal-add-status { font-size: 11.5px; color: var(--text-tertiary); min-height: 14px; }
+@media (max-width: 480px) {
+  .cal-add-row { grid-template-columns: 1fr; }
+}
+
 .gm-header {
   display: flex; align-items: flex-start; justify-content: space-between;
   flex-wrap: wrap; gap: 12px;
@@ -723,6 +797,53 @@ body::after {
   <div class="dash-header">
     <div class="dash-eyebrow" id="dashEyebrow">—</div>
     <h1 class="dash-title">Julian's Dashboard</h1>
+  </div>
+
+  <!-- Calendar — deliberately placed here, above everything else on
+       the page, per explicit requirement that this live prominently on
+       the main dashboard rather than buried in a sub-page. -->
+  <div class="section" id="calendarSection">
+    <div class="section-title">Calendar</div>
+
+    <div class="gm-card" id="calDisconnectedCard">
+      <div class="cal-disconnected">
+        <div class="cal-disconnected-title">Not connected</div>
+        <div class="cal-disconnected-sub">Connect Google Calendar to see upcoming events here and schedule new ones.</div>
+        <button type="button" class="cal-connect-btn" id="calConnectBtn">Connect Google Calendar</button>
+      </div>
+    </div>
+
+    <div class="gm-card" id="calConnectedCard" style="display:none">
+      <div class="cal-head">
+        <div class="cal-tabs" id="calTabs">
+          <button type="button" class="cal-tab active" data-days="1">Today</button>
+          <button type="button" class="cal-tab" data-days="3">3 days</button>
+          <button type="button" class="cal-tab" data-days="7">7 days</button>
+        </div>
+        <button type="button" class="cal-refresh-btn" id="calRefreshBtn" aria-label="Refresh">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M20.49 15A9 9 0 1 1 5.64 5.64L23 10"/></svg>
+        </button>
+      </div>
+      <div id="calErr" class="cal-err" style="display:none"></div>
+      <div id="calList" class="cal-list"></div>
+      <div id="calEmpty" class="cal-empty" style="display:none">No events in this range.</div>
+
+      <button type="button" class="cal-add-toggle" id="calAddToggle">+ Add event</button>
+      <div class="cal-add-form" id="calAddForm" style="display:none">
+        <input type="text" id="calEvTitle" placeholder="Event title">
+        <div class="cal-add-row">
+          <input type="date" id="calEvDate">
+          <input type="time" id="calEvStart">
+          <input type="time" id="calEvEnd">
+        </div>
+        <textarea id="calEvDesc" placeholder="Description (optional)" rows="2"></textarea>
+        <div class="cal-add-actions">
+          <button type="button" class="cal-add-cancel" id="calAddCancel">Cancel</button>
+          <button type="button" class="cal-add-save" id="calAddSave">Create event</button>
+        </div>
+        <div id="calAddStatus" class="cal-add-status"></div>
+      </div>
+    </div>
   </div>
 
   <div class="ticker-row">
@@ -1521,6 +1642,265 @@ document.addEventListener('DOMContentLoaded', function () {
     window.CronoLib.saveScoreForDate(latest, score);
   }
 
+  render();
+});
+</script>
+
+<!-- =============================================================
+     Google Calendar card. Kept as its own script, separate from the
+     goal/nutrition logic above, so it's fully self-contained (own
+     tokens, own render, own event handlers) — nothing above this
+     block needs to know it exists.
+     ============================================================= -->
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+  const KEY = 'google_tokens_v1';
+  const SCOPE = 'https://www.googleapis.com/auth/calendar.events';
+  const REDIRECT = window.location.origin + '/api/google-callback';
+
+  function getSecret() { try { return localStorage.getItem('dashboard:secret') || ''; } catch (e) { return ''; } }
+  function loadTokens() { try { return JSON.parse(localStorage.getItem(KEY)); } catch (e) { return null; } }
+  function saveTokens(t) { try { localStorage.setItem(KEY, JSON.stringify(t)); } catch (e) {} }
+  function clearTokens() { try { localStorage.removeItem(KEY); } catch (e) {} }
+
+  // Shared cooldown convention (same as WHOOP's, see health.html/
+  // gym.html/index.html/topbar.js) — own key so a Google refresh
+  // failure doesn't block WHOOP retries or vice versa, but the same
+  // "back off after a failure instead of hammering the endpoint on
+  // every render" principle.
+  const COOLDOWN_KEY = 'google_refresh_cooldown_until';
+  const COOLDOWN_MS = 20 * 60 * 1000;
+  function isCoolingDown() { return Date.now() < (Number(localStorage.getItem(COOLDOWN_KEY)) || 0); }
+  function startCooldown() { try { localStorage.setItem(COOLDOWN_KEY, String(Date.now() + COOLDOWN_MS)); } catch (e) {} }
+  function clearCooldown() { try { localStorage.removeItem(COOLDOWN_KEY); } catch (e) {} }
+
+  // OAuth redirect hand-off — mirrors health.html's Whoop hash parsing
+  // exactly (api/google-callback.js redirects here with the same shape).
+  if (location.hash && location.hash.indexOf('google_access') !== -1) {
+    const h = new URLSearchParams(location.hash.slice(1));
+    const access = h.get('google_access'), refresh = h.get('google_refresh');
+    const expires = Number(h.get('google_expires')) || (Date.now() + 3500 * 1000);
+    if (access) { saveTokens({ access, refresh, expires }); clearCooldown(); history.replaceState(null, '', location.pathname + location.search); }
+  }
+
+  const disconnectedCard = $('calDisconnectedCard');
+  const connectedCard = $('calConnectedCard');
+  const errEl = $('calErr');
+  const listEl = $('calList');
+  const emptyEl = $('calEmpty');
+
+  function showErr(msg) { errEl.textContent = msg || ''; errEl.style.display = msg ? 'block' : 'none'; }
+
+  $('calConnectBtn').addEventListener('click', async () => {
+    const secret = getSecret();
+    if (!secret) { alert('Set your dashboard secret first (on the Cronometer page) to connect Google Calendar.'); return; }
+    try {
+      const r = await fetch('/api/google-callback?action=client-id&secret=' + encodeURIComponent(secret));
+      const j = await r.json();
+      if (!j.clientId) { alert('Google Calendar is not configured on the server yet (missing GOOGLE_CLIENT_ID).'); return; }
+      const url = 'https://accounts.google.com/o/oauth2/v2/auth'
+        + '?client_id=' + encodeURIComponent(j.clientId)
+        + '&redirect_uri=' + encodeURIComponent(REDIRECT)
+        + '&response_type=code'
+        + '&scope=' + encodeURIComponent(SCOPE)
+        + '&access_type=offline'
+        + '&prompt=consent'
+        + '&state=' + Math.random().toString(36).slice(2);
+      location.href = url;
+    } catch (e) {
+      alert('Could not start the Google connect flow: ' + (e.message || String(e)));
+    }
+  });
+
+  // No dashboard:secret on refresh/list/create — api/google-callback.js
+  // gates those only by possession of a valid Google bearer/refresh
+  // token, matching WHOOP's actual security model (api/whoop-refresh.js
+  // and api/whoop-data.js don't check DASHBOARD_SECRET either). Only
+  // its client-id mode requires the secret (see calConnectBtn above).
+  async function refreshToken(t) {
+    if (!t.refresh) return null;
+    if (isCoolingDown()) return null; // recently failed — don't hammer the refresh endpoint again yet
+    try {
+      const r = await fetch('/api/google-callback?action=refresh', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: t.refresh }),
+      });
+      const j = await r.json();
+      if (j.access_token) {
+        const next = { access: j.access_token, refresh: j.refresh_token || t.refresh, expires: Date.now() + (j.expires_in || 3500) * 1000 };
+        saveTokens(next);
+        clearCooldown();
+        return next;
+      }
+    } catch (e) {}
+    startCooldown();
+    return null;
+  }
+
+  async function calFetch(qs, t) {
+    const r = await fetch('/api/google-callback?action=list&' + qs, {
+      headers: { Authorization: 'Bearer ' + t.access },
+    });
+    if (r.status === 401) {
+      const n = await refreshToken(t);
+      if (n) return calFetch(qs, n);
+      throw new Error('unauthorized');
+    }
+    if (!r.ok) throw new Error('Calendar ' + r.status + ': ' + (await r.text()));
+    return r.json();
+  }
+
+  function fmtEventTime(ev) {
+    if (ev.start && ev.start.date) return 'All day';
+    if (ev.start && ev.start.dateTime) {
+      const d = new Date(ev.start.dateTime);
+      return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    }
+    return '—';
+  }
+  function fmtEventDay(ev) {
+    const raw = (ev.start && (ev.start.dateTime || ev.start.date)) || null;
+    if (!raw) return '';
+    const d = new Date(raw);
+    return d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+  }
+  function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  function renderEvents(events) {
+    if (!events.length) {
+      listEl.innerHTML = '';
+      emptyEl.style.display = 'block';
+      return;
+    }
+    emptyEl.style.display = 'none';
+    listEl.innerHTML = events.map((ev) => (
+      '<div class="cal-event-row">' +
+        '<div class="cal-event-time">' + escapeHtml(fmtEventTime(ev)) + '</div>' +
+        '<div class="cal-event-body">' +
+          '<div class="cal-event-title">' + escapeHtml(ev.summary || '(untitled)') + '</div>' +
+          '<div class="cal-event-day">' + escapeHtml(fmtEventDay(ev)) + '</div>' +
+        '</div>' +
+      '</div>'
+    )).join('');
+  }
+
+  let currentDays = 1;
+  async function loadEvents() {
+    const t = loadTokens();
+    if (!t || !t.access) return;
+    showErr('');
+    const btn = $('calRefreshBtn');
+    btn.classList.add('is-spinning');
+    try {
+      const timeMin = new Date();
+      const timeMax = new Date();
+      timeMax.setDate(timeMax.getDate() + currentDays);
+      const qs = new URLSearchParams({ timeMin: timeMin.toISOString(), timeMax: timeMax.toISOString() }).toString();
+      const data = await calFetch(qs, t);
+      renderEvents(Array.isArray(data.items) ? data.items : []);
+    } catch (e) {
+      if (e.message === 'unauthorized' && isCoolingDown()) {
+        showErr('Google Calendar needs reconnecting — tap Connect again below.');
+        clearTokens();
+        render();
+        return;
+      }
+      showErr('Could not load events: ' + (e.message || String(e)));
+    } finally {
+      setTimeout(() => btn.classList.remove('is-spinning'), 400);
+    }
+  }
+
+  $('calTabs').querySelectorAll('.cal-tab').forEach((tab) => {
+    tab.addEventListener('click', () => {
+      $('calTabs').querySelectorAll('.cal-tab').forEach((t) => t.classList.remove('active'));
+      tab.classList.add('active');
+      currentDays = Number(tab.dataset.days) || 1;
+      loadEvents();
+    });
+  });
+  $('calRefreshBtn').addEventListener('click', loadEvents);
+
+  // ---- Add event form ----
+  const addForm = $('calAddForm');
+  $('calAddToggle').addEventListener('click', () => {
+    const showing = addForm.style.display !== 'none';
+    addForm.style.display = showing ? 'none' : 'flex';
+    if (!showing) {
+      const today = new Date();
+      $('calEvDate').value = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
+    }
+  });
+  $('calAddCancel').addEventListener('click', () => {
+    addForm.style.display = 'none';
+    $('calEvTitle').value = ''; $('calEvStart').value = ''; $('calEvEnd').value = ''; $('calEvDesc').value = '';
+    $('calAddStatus').textContent = '';
+  });
+  $('calAddSave').addEventListener('click', async () => {
+    const t = loadTokens();
+    if (!t || !t.access) return;
+    const title = $('calEvTitle').value.trim();
+    const dateStr = $('calEvDate').value;
+    const startStr = $('calEvStart').value;
+    const endStr = $('calEvEnd').value;
+    const desc = $('calEvDesc').value.trim();
+    if (!title || !dateStr || !startStr || !endStr) {
+      $('calAddStatus').textContent = 'Title, date, start, and end are all required.';
+      return;
+    }
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const startDateTime = dateStr + 'T' + startStr + ':00';
+    const endDateTime = dateStr + 'T' + endStr + ':00';
+    const btn = $('calAddSave');
+    btn.disabled = true;
+    $('calAddStatus').textContent = 'Creating…';
+    try {
+      const doCreate = async (tok) => {
+        const r = await fetch('/api/google-callback?action=create', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok.access },
+          body: JSON.stringify({
+            summary: title,
+            description: desc || undefined,
+            start: { dateTime: startDateTime, timeZone: tz },
+            end: { dateTime: endDateTime, timeZone: tz },
+          }),
+        });
+        if (r.status === 401) {
+          const n = await refreshToken(tok);
+          if (n) return doCreate(n);
+          throw new Error('unauthorized');
+        }
+        if (!r.ok) throw new Error('Calendar ' + r.status + ': ' + (await r.text()));
+        return r.json();
+      };
+      await doCreate(t);
+      $('calAddStatus').textContent = 'Created ✓';
+      $('calEvTitle').value = ''; $('calEvStart').value = ''; $('calEvEnd').value = ''; $('calEvDesc').value = '';
+      setTimeout(() => { addForm.style.display = 'none'; $('calAddStatus').textContent = ''; }, 900);
+      loadEvents();
+    } catch (e) {
+      $('calAddStatus').textContent = 'Could not create event: ' + (e.message || String(e));
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  function render() {
+    const t = loadTokens();
+    if (t && t.access) {
+      disconnectedCard.style.display = 'none';
+      connectedCard.style.display = 'block';
+      loadEvents();
+    } else {
+      disconnectedCard.style.display = 'block';
+      connectedCard.style.display = 'none';
+    }
+  }
   render();
 });
 </script>

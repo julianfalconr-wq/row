@@ -1,8 +1,9 @@
 // =============================================================
 // Daily proactive check-in. Triggered once a day by Vercel Cron
 // (see vercel.json) — gathers what context it can, asks Claude for a
-// brief insight, and pushes it as a notification via
-// api/send-notification.js.
+// brief insight, and pushes it as a notification via api/push.js
+// (?action=send — merged from the former api/send-notification.js to
+// stay within Vercel's 12-function Hobby-plan cap).
 //
 // IMPORTANT CONSTRAINT: there is no browser in a cron job, so this
 // cannot call the client-side window.gatherTodayContext() (topbar.js)
@@ -39,7 +40,7 @@
 // picks it up automatically once set, no extra config needed there).
 // =============================================================
 
-const SEND_NOTIFICATION_URL = 'https://row-phi-six.vercel.app/api/send-notification';
+const SEND_NOTIFICATION_URL = 'https://row-phi-six.vercel.app/api/push?action=send';
 
 function supabaseHeaders() {
   const key = process.env.SUPABASE_SERVICE_KEY;
@@ -166,7 +167,7 @@ export default async function handler(req, res) {
     const message = await askClaudeForInsight(context);
     if (!message) return res.status(502).json({ error: 'Claude returned no insight text' });
 
-    const sendRes = await fetch(SEND_NOTIFICATION_URL + '?secret=' + encodeURIComponent(process.env.DASHBOARD_SECRET), {
+    const sendRes = await fetch(SEND_NOTIFICATION_URL + '&secret=' + encodeURIComponent(process.env.DASHBOARD_SECRET), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title: 'Row', body: message, url: '/health.html?openChat=1' }),
