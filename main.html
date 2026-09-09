@@ -2467,12 +2467,17 @@ document.addEventListener('DOMContentLoaded', function () {
          per day over cap (floored at 0); a separate flat
          weeklyPenaltyPoints is subtracted once from the WEEKLY score
          if the week ends up over cap at all.
-       - Auto-sourced categories (Part 4) each get a fixed point
-         budget on the same 0-100 scale as the manual habits, and are
-         excluded entirely (not scored 0) when that source has no data
-         for the day — see CATEGORY_BUDGETS below.
-       - Daily score = round(earnedTotal / possibleTotal * 100), or
-         null ("No data yet") if nothing at all was available.
+       - Five categories — Habits, Training (Strength+Running
+         averaged), Nutrition, Water, Daily Stack — each contribute
+         weight × fraction to the daily score, where weight comes from
+         General Settings' Level-1 category weights (DayLib.loadProfile
+         ().categoryWeights, default 40/20/20/10/10 — see
+         combineWeightedCategories() below) and fraction is that
+         category's own 0-1 completion for the day (Habits' fraction is
+         itself the Level-2 point-weighted result of the manual habits
+         above). A category with no data is excluded from both the
+         weighted sum and the weight total used to normalize it (not
+         scored 0), same as every other "no data" case in this file.
        - Weekly score (Part 6) = 60% × (average of this week's daily
          scores so far) + 40% × Training's own weekly-objectives
          completion (gym.html's computeWeekProgress() formula, reused
@@ -2589,7 +2594,37 @@ document.addEventListener('DOMContentLoaded', function () {
 
   // ---------- auto-sourced categories (each: fixed point budget,
   // excluded entirely — not scored 0 — when there's no data) ----------
-  const CATEGORY_BUDGETS = { nutrition: 20, strength: 10, running: 10, water: 10, stack: 10 };
+  // Phase D: category weights now come from General Settings
+  // (DayLib.loadProfile().categoryWeights — Habits/Training/Nutrition/
+  // Water/Daily Stack, default 40/20/20/10/10, user-editable, validated
+  // to sum to 100 by the Settings UI) instead of a hardcoded constant.
+  // Strength and Running are combined into one "Training" fraction
+  // (average of whichever of the two have data) since General Settings
+  // has a single Training weight, not two — see combineTrainingFraction().
+  // Unavailable categories are excluded from BOTH the weighted sum and
+  // the weight total used to normalize it (not scored 0), same
+  // graceful-degradation principle as every other "no data" case here;
+  // this also means the score is still exactly 0-100 even if the
+  // configured weights don't sum to exactly 100 (defensive — the
+  // Settings UI enforces that sum, but an old cached profile might not).
+  function combineTrainingFraction(strength, running) {
+    const fracs = [];
+    const details = [];
+    if (strength.available) { fracs.push(strength.fraction); details.push(strength.label + ': ' + strength.detail); }
+    if (running.available) { fracs.push(running.fraction); details.push(running.label + ': ' + running.detail); }
+    if (!fracs.length) return { available: false, reason: strength.reason || running.reason || 'no data yet' };
+    return { available: true, fraction: fracs.reduce((a, b) => a + b, 0) / fracs.length, detail: details.join(' · ') };
+  }
+  function combineWeightedCategories(categories, weights) {
+    let earned = 0, weightSum = 0;
+    categories.forEach(({ key, c }) => {
+      if (!c.available) return;
+      const w = Number(weights[key]) || 0;
+      earned += c.fraction * w;
+      weightSum += w;
+    });
+    return weightSum > 0 ? Math.round((earned / weightSum) * 100) : null;
+  }
 
   function computeStackCategory(dateActiveKey) {
     if (typeof window.CronoLib === 'undefined') return { available: false };
@@ -2736,21 +2771,21 @@ document.addEventListener('DOMContentLoaded', function () {
     const strength = computeStrengthCategory(datePlainKey);
     const running = computeRunningCategory(datePlainKey, weekMondayPlainKey);
     const nutrition = await computeNutritionCategory(datePlainKey, opts.cronoCache);
+    const training = combineTrainingFraction(strength, running);
+    const habits = manual.possible > 0
+      ? { available: true, fraction: manual.earned / manual.possible }
+      : { available: false };
 
-    let earned = manual.earned, possible = manual.possible;
-    const cats = [
-      { key: 'nutrition', c: nutrition, budget: CATEGORY_BUDGETS.nutrition },
-      { key: 'strength', c: strength, budget: CATEGORY_BUDGETS.strength },
-      { key: 'running', c: running, budget: CATEGORY_BUDGETS.running },
-      { key: 'water', c: water, budget: CATEGORY_BUDGETS.water },
-      { key: 'stack', c: stack, budget: CATEGORY_BUDGETS.stack },
-    ];
-    cats.forEach(({ c, budget }) => {
-      if (c.available) { earned += c.fraction * budget; possible += budget; }
-    });
+    const weights = (DayLib.loadProfile().categoryWeights) || DayLib.DEFAULT_PROFILE.categoryWeights;
+    const score = combineWeightedCategories([
+      { key: 'habits', c: habits },
+      { key: 'training', c: training },
+      { key: 'nutrition', c: nutrition },
+      { key: 'water', c: water },
+      { key: 'dailyStack', c: stack },
+    ], weights);
 
-    const score = possible > 0 ? Math.round((earned / possible) * 100) : null;
-    return { score, manual, nutrition, strength, running, water, stack, earned, possible };
+    return { score, manual, habits, nutrition, strength, running, training, water, stack, weights };
   }
 
   // ---------- render: hero ring ----------
@@ -2801,6 +2836,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
     const today = await computeDailyScore(todayActive, todayPlain, weekMondayActive, weekMondayPlain, habitConfig, entriesByDate, { cronoCache });
     lastResult = { habitConfig, entriesByDate, today };
+    const weights = today.weights; // reused below for the weekly loop, so every day's score is computed with the SAME weights snapshot
 
     $('scoreRingNum').textContent = today.score == null ? '—' : today.score;
     setRing(today.score);
@@ -2850,10 +2886,16 @@ document.addEventListener('DOMContentLoaded', function () {
       const water = computeWaterCategory(dPlain);
       const strength = computeStrengthCategory(dPlain);
       const running = computeRunningCategory(dPlain, weekMondayPlain);
-      let earned = manual.earned, possible = manual.possible;
-      [[nutrition, CATEGORY_BUDGETS.nutrition], [strength, CATEGORY_BUDGETS.strength], [running, CATEGORY_BUDGETS.running], [water, CATEGORY_BUDGETS.water], [stack, CATEGORY_BUDGETS.stack]]
-        .forEach(([c, budget]) => { if (c.available) { earned += c.fraction * budget; possible += budget; } });
-      if (possible > 0) dayScores.push(Math.round((earned / possible) * 100));
+      const training = combineTrainingFraction(strength, running);
+      const habits = manual.possible > 0 ? { available: true, fraction: manual.earned / manual.possible } : { available: false };
+      const dayScore = combineWeightedCategories([
+        { key: 'habits', c: habits },
+        { key: 'training', c: training },
+        { key: 'nutrition', c: nutrition },
+        { key: 'water', c: water },
+        { key: 'dailyStack', c: stack },
+      ], weights);
+      if (dayScore != null) dayScores.push(dayScore);
     }
 
     let weeklyScore = null;
@@ -2903,8 +2945,10 @@ document.addEventListener('DOMContentLoaded', function () {
   function renderBreakdown() {
     if (!lastResult) return;
     const { today, weeklyScore } = lastResult;
+    const w = today.weights;
     let html = '';
     html += '<div class="score-breakdown-group"><h4>Manual habits</h4>';
+    html += catRow('Habits category', today.habits, w.habits);
     today.manual.breakdown.forEach((b) => {
       if (b.status === 'na') { html += '<div class="score-cat-row"><span class="score-cat-name"><span class="na">' + escapeHtml(b.label) + ' — N/A</span></span></div>'; return; }
       if (b.status === 'unlogged') { html += '<div class="score-cat-row"><span class="score-cat-name"><span class="na">' + escapeHtml(b.label) + ' — not logged yet</span></span></div>'; return; }
@@ -2915,11 +2959,10 @@ document.addEventListener('DOMContentLoaded', function () {
     });
     html += '</div>';
     html += '<div class="score-breakdown-group"><h4>Auto-tracked</h4>';
-    html += catRow('Nutrition', today.nutrition, CATEGORY_BUDGETS.nutrition);
-    html += catRow('Strength', today.strength, CATEGORY_BUDGETS.strength);
-    html += catRow('Running', today.running, CATEGORY_BUDGETS.running);
-    html += catRow('Water', today.water, CATEGORY_BUDGETS.water);
-    html += catRow('Daily Stack', today.stack, CATEGORY_BUDGETS.stack);
+    html += catRow('Nutrition', today.nutrition, w.nutrition);
+    html += catRow('Training', today.training, w.training);
+    html += catRow('Water', today.water, w.water);
+    html += catRow('Daily Stack', today.stack, w.dailyStack);
     html += '</div>';
     html += '<div class="score-breakdown-group"><h4>Weekly</h4><div class="score-cat-row"><span class="score-cat-name">This week\'s score</span><span class="score-cat-pts">' + (weeklyScore == null ? '—' : weeklyScore + '%') + '</span></div></div>';
     html += '<div class="score-breakdown-group" id="scoreWhoopGroup" style="display:none"><h4>WHOOP (info only)</h4><div class="score-whoop-row"><div class="score-whoop-cell"><div class="score-whoop-val" id="scoreWhoopRecovery">—</div><div class="score-whoop-label">Recovery</div></div><div class="score-whoop-cell"><div class="score-whoop-val" id="scoreWhoopSleep">—</div><div class="score-whoop-label">Sleep</div></div></div></div>';
@@ -2973,10 +3016,10 @@ document.addEventListener('DOMContentLoaded', function () {
   // (dashboard:general_settings), read/written via window.DayLib so
   // the day-boundary utility and this UI always agree on one object.
   //
-  // NOTE — scope of this phase: this only loads/saves the settings.
-  // Nothing yet actually CONSUMES dayEndTime for "today" computations
-  // (that's Phase B, file by file) or categoryWeights in the score
-  // formula (that's Phase D) — CATEGORY_BUDGETS above is untouched.
+  // dayEndTime is consumed everywhere "today" is computed (Phase B,
+  // done file by file) and categoryWeights drives the daily score
+  // formula (Phase D, combineWeightedCategories() above) — both now
+  // fully wired, not just stored.
   async function fetchGeneralSettingsFromServer() {
     const secret = getSecret();
     if (!secret) return null;
