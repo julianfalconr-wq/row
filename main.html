@@ -844,9 +844,10 @@ body::after {
     <div class="gm-card" id="calConnectedCard" style="display:none">
       <div class="cal-head">
         <div class="cal-tabs" id="calTabs">
-          <button type="button" class="cal-tab active" data-days="1">Today</button>
-          <button type="button" class="cal-tab" data-days="3">3 days</button>
-          <button type="button" class="cal-tab" data-days="7">7 days</button>
+          <button type="button" class="cal-tab active" data-start="0" data-end="1">Today</button>
+          <button type="button" class="cal-tab" data-start="1" data-end="2">Tomorrow</button>
+          <button type="button" class="cal-tab" data-start="0" data-end="3">3 days</button>
+          <button type="button" class="cal-tab" data-start="0" data-end="7">7 days</button>
         </div>
         <button type="button" class="cal-refresh-btn" id="calRefreshBtn" aria-label="Refresh">
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M20.49 15A9 9 0 1 1 5.64 5.64L23 10"/></svg>
@@ -1934,7 +1935,27 @@ document.addEventListener('DOMContentLoaded', function () {
     }).join('');
   }
 
-  let currentDays = 1;
+  // Local calendar-day boundary, not new Date() (the current instant)
+  // or any UTC-based string — new Date() as a range start/end anchors
+  // the window to "right now" rather than midnight, so in the evening
+  // (e.g. Mexico City, UTC-6) the "Today" window drifted mostly or
+  // entirely into tomorrow, which is exactly the "Today shows
+  // Wednesday" bug. setHours(0,0,0,0) + setDate() operate on the
+  // Date object's LOCAL fields, same concept as gym.html's
+  // wtDateKey()/wtParseKey() fix — duplicated locally here rather than
+  // imported since this script is intentionally self-contained (see
+  // this script block's own header comment) and gym.html's helpers
+  // live in a different file entirely; there's no shared-module setup
+  // in this project to import them through.
+  function localMidnightOffset(daysFromToday) {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() + daysFromToday);
+    return d;
+  }
+
+  let currentStartOffset = 0;
+  let currentEndOffset = 1;
   async function loadEvents() {
     const t = loadTokens();
     if (!t || !t.access) return;
@@ -1942,9 +1963,8 @@ document.addEventListener('DOMContentLoaded', function () {
     const btn = $('calRefreshBtn');
     btn.classList.add('is-spinning');
     try {
-      const timeMin = new Date();
-      const timeMax = new Date();
-      timeMax.setDate(timeMax.getDate() + currentDays);
+      const timeMin = localMidnightOffset(currentStartOffset);
+      const timeMax = localMidnightOffset(currentEndOffset);
       const qs = new URLSearchParams({ timeMin: timeMin.toISOString(), timeMax: timeMax.toISOString() }).toString();
       const data = await calFetch(qs, t);
       renderEvents(Array.isArray(data.items) ? data.items : []);
@@ -1965,7 +1985,8 @@ document.addEventListener('DOMContentLoaded', function () {
     tab.addEventListener('click', () => {
       $('calTabs').querySelectorAll('.cal-tab').forEach((t) => t.classList.remove('active'));
       tab.classList.add('active');
-      currentDays = Number(tab.dataset.days) || 1;
+      currentStartOffset = Number(tab.dataset.start) || 0;
+      currentEndOffset = Number(tab.dataset.end) || 1;
       loadEvents();
     });
   });
