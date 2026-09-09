@@ -15,6 +15,13 @@
 <meta name="color-scheme" content="dark">
 <title>Daily Stack — Customizable Template</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<!-- Not deferred, on purpose (matches gym.html's and main.html's
+     daylib.js tag exactly, same reason both times): the Daily Stack
+     script below is a bare synchronous inline IIFE, not wrapped in
+     DOMContentLoaded — a deferred script only finishes AFTER the
+     whole document parses, which is too late for that block. See
+     daylib.js's own header comment for the full reasoning. -->
+<script src="daylib.js"></script>
 <script src="sync.js" defer></script>
 <script src="topbar.js" defer></script>
 <script src="cronometer-lib.js" defer></script>
@@ -958,7 +965,7 @@ main {
     <div class="stack-head">
       <div class="sf-eyebrow">Daily stack</div>
       <div class="sf-title">Tap each as you take it</div>
-      <div class="stack-progress-text" id="stackProgressText">— / — taken today · resets at 6 AM</div>
+      <div class="stack-progress-text" id="stackProgressText">— / — taken today · resets at day-end</div>
     </div>
 
     <div class="stack-progress-track">
@@ -1151,13 +1158,24 @@ main {
     }, 2500);
   }
 
+  // Was a hardcoded 6am cutoff, independent of (and pre-dating)
+  // daylib.js — now the shared day-boundary utility, same as every
+  // other file already migrated (gym.html, main.html's Calendar/
+  // Goals/score card). Default day-end is midnight, so anyone who
+  // hasn't opened General Settings will see a real behavior change
+  // here too: supplements logged 12am-6am stop counting as
+  // "yesterday" unless day-end is explicitly set to 06:00.
   function getActiveDate() {
-    const now = new Date();
-    if (now.getHours() < 6) now.setDate(now.getDate() - 1);
-    const y = now.getFullYear();
-    const m = String(now.getMonth() + 1).padStart(2, '0');
-    const d = String(now.getDate()).padStart(2, '0');
-    return `${y}-${m}-${d}`;
+    return DayLib.effectiveDateKey();
+  }
+
+  // "resets at 6 AM" was a hardcoded string matching the old hardcoded
+  // 6am cutoff — now says whatever time is actually configured.
+  function formatDayEndTime() {
+    const [h, m] = String((DayLib.loadProfile().dayEndTime) || '00:00').split(':').map(Number);
+    const ampm = h < 12 ? 'AM' : 'PM';
+    const h12 = h % 12 === 0 ? 12 : h % 12;
+    return h12 + (m ? ':' + String(m).padStart(2, '0') : ':00') + ' ' + ampm;
   }
 
   const TEMPLATE_VERSION = 5;
@@ -1326,7 +1344,7 @@ main {
     const totalCount = items.length;
     const takenCount = items.filter(i => taken[i.id]).length;
     document.getElementById('stackProgressText').textContent =
-      `${takenCount} / ${totalCount} taken today · resets at 6 AM`;
+      `${takenCount} / ${totalCount} taken today · resets at ${formatDayEndTime()}`;
     const pct = totalCount === 0 ? 0 : (takenCount / totalCount) * 100;
     document.getElementById('stackProgressBar').style.width = pct + '%';
 

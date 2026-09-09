@@ -2511,30 +2511,22 @@ document.addEventListener('DOMContentLoaded', function () {
   // midnight date for Cronometer/Training/Water) because the
   // underlying pages themselves disagreed — Goals/Daily Stack used a
   // hardcoded 6am cutoff while Training/Water/Calendar used plain
-  // midnight. Now that Goals, Training, and Calendar have all been
-  // migrated to the ONE shared, user-configurable day-end time
-  // (daylib.js), that split is gone here too — todayActive and
-  // todayPlain below both come from DayLib.effectiveDateKey() and are
-  // always equal. Kept as two separate names (rather than merged into
-  // one) purely so every existing call site below — which still reads
-  // as "today, as an active/habit day" vs "today, as a plain
-  // training/nutrition/water day" — didn't need touching individually;
-  // collapsing them into one variable is a safe follow-up, not bundled
-  // into this correctness migration.
+  // midnight. Now that Goals, Training, Calendar, AND health.html's
+  // Daily Stack have all been migrated to the ONE shared, user-
+  // configurable day-end time (daylib.js), that split is gone here
+  // too — todayActive and todayPlain below both come from
+  // DayLib.effectiveDateKey() and are always equal. Kept as two
+  // separate names (rather than merged into one) purely so every
+  // existing call site below — which still reads as "today, as an
+  // active/habit day" vs "today, as a plain training/nutrition/water
+  // day" — didn't need touching individually; collapsing them into
+  // one variable is a safe follow-up, not bundled into this
+  // correctness migration.
   //
-  // The one remaining exception: health.html's Daily Stack has NOT
-  // been migrated yet (a later phase, out of this one's file list) —
-  // it still writes stack:taken:<key> under its own hardcoded 6am
-  // cutoff, independent of General Settings. legacyHealthActiveDateKey()
-  // bridges just that one "today" lookup so Daily Stack completion
-  // still finds the right row even if the user has configured a
-  // different day-end. Remove it the day health.html is migrated too.
-  function legacyHealthActiveDateKey() {
-    const now = new Date();
-    const d = new Date(now);
-    if (now.getHours() < 6) d.setDate(d.getDate() - 1);
-    return DayLib.plainDateKey(d);
-  }
+  // (This used to also carry a legacyHealthActiveDateKey() bridge for
+  // Daily Stack, since health.html hadn't been migrated yet at the
+  // time — removed now that it has been, so the Daily Stack lookup
+  // below just uses todayActive/dk like every other category.)
   function mondayOfKey(dateKeyStr) {
     const date = DayLib.parseDateKey(dateKeyStr);
     const day = date.getDay();
@@ -2774,12 +2766,7 @@ document.addEventListener('DOMContentLoaded', function () {
   async function computeDailyScore(dateActiveKey, datePlainKey, weekMondayActiveKey, weekMondayPlainKey, habitConfig, entriesByDate, opts) {
     opts = opts || {};
     const manual = scoreManualHabitsForDate(habitConfig, entriesByDate, dateActiveKey, weekMondayActiveKey);
-    // computeDailyScore() is only ever called for TODAY (see render()
-    // below), so this is always a live "right now" lookup — that's
-    // exactly the case legacyHealthActiveDateKey() exists for (see its
-    // own comment above). Past days in the weekly loop further down
-    // use their own already-resolved `dk` directly instead.
-    const stack = computeStackCategory(legacyHealthActiveDateKey());
+    const stack = computeStackCategory(dateActiveKey);
     const water = computeWaterCategory(datePlainKey);
     const strength = computeStrengthCategory(datePlainKey);
     const running = computeRunningCategory(datePlainKey, weekMondayPlainKey);
