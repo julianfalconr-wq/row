@@ -183,31 +183,29 @@ body::after {
   position: relative; overflow: hidden;
   flex: 1; height: 22px;
 }
+/* A single persistent row that fades in place — no second row ever
+   exists at the same time, and nothing slides. The previous design
+   (two absolutely-positioned rows sliding past each other, one up-and-
+   out while the other slid up-and-in) still looked like one text was
+   "over" the other even after the opacity math was made a true
+   mirror crossfade — two different pieces of text physically crossing
+   through the same few pixels reads as overlapping no matter how the
+   opacity is tuned. This matches health.html's Daily Stack ticker
+   (.stack-ticker-msg.is-fading), which never had this complaint and,
+   as a bonus, is structurally immune to the earlier orphaned-row bug
+   class too — there is only ever one row element, created once and
+   reused, so there is nothing to accumulate. */
 .goal-ticker-row {
-  position: absolute; inset: 0;
   display: flex; align-items: center; gap: 8px;
   font-family: var(--font-mono);
   font-size: 12.5px; font-weight: 600;
   font-variant-numeric: tabular-nums;
   color: var(--text-primary);
   white-space: nowrap;
+  opacity: 1;
+  transition: opacity 0.22s ease;
 }
-/* Both animations MUST share the same easing curve, and it must be
-   point-symmetric (x2 = 1-x1, y2 = 1-y1) — that's what guarantees
-   opacityEntering(t) = 1 - opacityLeaving(t) at every instant, i.e. a
-   true crossfade where the two always sum to 1 and neither is ever
-   the dominant, easily-legible one while the other still is.
-   Previously these used two DIFFERENT curves (an ease-out-heavy one
-   for entering, front-loading its opacity rise, paired with a slower-
-   starting one for leaving) — verified numerically that from roughly
-   20%-50% of the 450ms duration both rows sat above 0.5 opacity at
-   the same time, which is what read as both texts briefly legible
-   at once. cubic-bezier(0.45, 0, 0.55, 1) is a standard symmetric
-   ease-in-out with no such mismatch. */
-.goal-ticker-row.is-leaving  { animation: ticker-leave 0.45s cubic-bezier(0.45, 0, 0.55, 1) forwards; }
-.goal-ticker-row.is-entering { animation: ticker-enter 0.45s cubic-bezier(0.45, 0, 0.55, 1) forwards; }
-@keyframes ticker-leave { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(-100%); } }
-@keyframes ticker-enter { from { opacity: 0; transform: translateY(100%); } to { opacity: 1; transform: translateY(0); } }
+.goal-ticker-row.is-fading { opacity: 0; }
 .goal-ticker-status {
   display: inline-flex; justify-content: center;
   width: 18px;
@@ -1123,51 +1121,67 @@ body::after {
     return '·';
   }
 
+  // Single persistent row, created once and reused — see the CSS
+  // comment above .goal-ticker-row for why this replaced the earlier
+  // two-rows-sliding-past-each-other design (it still read as
+  // overlapping text even once the crossfade opacity math was made
+  // exact, since two different pieces of text physically crossing the
+  // same pixels looks like overlap regardless of opacity). This also
+  // makes the whole row-accumulation bug class structurally
+  // impossible: with only one element that's ever mutated in place,
+  // there's nothing to leak no matter how many times tick() fires or
+  // how close together.
+  let tickerRow = null;
+  function ensureTickerRow() {
+    if (tickerRow) return tickerRow;
+    // Reuse the static "Loading…" placeholder already in the markup
+    // instead of creating a second row alongside it.
+    tickerRow = tickerStage.querySelector('.goal-ticker-row');
+    if (!tickerRow) {
+      tickerRow = document.createElement('div');
+      tickerRow.className = 'goal-ticker-row';
+      const status = document.createElement('span');
+      status.className = 'goal-ticker-status';
+      const text = document.createElement('span');
+      text.className = 'goal-ticker-text';
+      tickerRow.appendChild(status);
+      tickerRow.appendChild(text);
+      tickerStage.appendChild(tickerRow);
+    }
+    return tickerRow;
+  }
+  function paintTickerRow(item) {
+    const row = ensureTickerRow();
+    row.querySelector('.goal-ticker-status').setAttribute('data-status', item.status);
+    row.querySelector('.goal-ticker-status').textContent = statusGlyph(item.status);
+    row.querySelector('.goal-ticker-text').textContent = item.text;
+  }
+
   let firstTick = true;
+  let tickerFadeTimer = null;
   function tick() {
     const { items, done, total } = buildTickerItems();
     if (cycleIdx >= items.length) cycleIdx = 0;
     const item = items[cycleIdx];
     cycleIdx = (cycleIdx + 1) % items.length;
 
-    // querySelectorAll, not querySelector — if tick() ever fires again
-    // before a previous row's 460ms leave animation finishes (e.g. two
-    // 'goals-changed' events landing close together, such as a remote
-    // sync applying today's and tomorrow's goal lists back to back),
-    // querySelector('.goal-ticker-row') only ever finds the FIRST
-    // matching row. Any row created by an in-between tick() call never
-    // gets picked up as "old", so it's never marked is-leaving or
-    // scheduled for removal — it just sits there at position:absolute;
-    // inset:0 with its is-entering animation held at opacity:1 (via
-    // "forwards") forever, permanently overlapping whatever renders
-    // after it. That orphaned-row buildup is exactly what rendered as
-    // superimposed/garbled goal text. Clearing every existing row each
-    // tick (not just "the" one) makes this self-healing regardless of
-    // how many ticks fire in a burst.
-    const oldRows = tickerStage.querySelectorAll('.goal-ticker-row');
-    const newRow = document.createElement('div');
-    newRow.className = 'goal-ticker-row';
-    const status = document.createElement('span');
-    status.className = 'goal-ticker-status';
-    status.setAttribute('data-status', item.status);
-    status.textContent = statusGlyph(item.status);
-    const text = document.createElement('span');
-    text.className = 'goal-ticker-text';
-    text.textContent = item.text;
-    newRow.appendChild(status);
-    newRow.appendChild(text);
-
-    if (oldRows.length && !firstTick) {
-      oldRows.forEach((oldRow) => {
-        oldRow.classList.add('is-leaving');
-        setTimeout(() => oldRow.remove(), 460);
-      });
-      newRow.classList.add('is-entering');
+    const row = ensureTickerRow();
+    if (firstTick) {
+      paintTickerRow(item);
+      firstTick = false;
     } else {
-      oldRows.forEach((oldRow) => oldRow.remove());
+      // If tick() fires again before the previous fade-out finished
+      // (e.g. two 'goals-changed' events landing close together),
+      // just restart the swap on the same element — nothing to leak
+      // or double up since there is only ever this one row.
+      if (tickerFadeTimer) clearTimeout(tickerFadeTimer);
+      row.classList.add('is-fading');
+      tickerFadeTimer = setTimeout(() => {
+        paintTickerRow(item);
+        row.classList.remove('is-fading');
+        tickerFadeTimer = null;
+      }, 220);
     }
-    tickerStage.appendChild(newRow);
-    firstTick = false;
 
     tickerMeta.textContent = done + '/' + total;
   }
