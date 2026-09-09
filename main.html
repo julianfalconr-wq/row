@@ -192,8 +192,20 @@ body::after {
   color: var(--text-primary);
   white-space: nowrap;
 }
-.goal-ticker-row.is-leaving  { animation: ticker-leave 0.45s cubic-bezier(0.55, 0, 0.55, 1) forwards; }
-.goal-ticker-row.is-entering { animation: ticker-enter 0.45s cubic-bezier(0.22, 1, 0.36, 1) forwards; }
+/* Both animations MUST share the same easing curve, and it must be
+   point-symmetric (x2 = 1-x1, y2 = 1-y1) — that's what guarantees
+   opacityEntering(t) = 1 - opacityLeaving(t) at every instant, i.e. a
+   true crossfade where the two always sum to 1 and neither is ever
+   the dominant, easily-legible one while the other still is.
+   Previously these used two DIFFERENT curves (an ease-out-heavy one
+   for entering, front-loading its opacity rise, paired with a slower-
+   starting one for leaving) — verified numerically that from roughly
+   20%-50% of the 450ms duration both rows sat above 0.5 opacity at
+   the same time, which is what read as both texts briefly legible
+   at once. cubic-bezier(0.45, 0, 0.55, 1) is a standard symmetric
+   ease-in-out with no such mismatch. */
+.goal-ticker-row.is-leaving  { animation: ticker-leave 0.45s cubic-bezier(0.45, 0, 0.55, 1) forwards; }
+.goal-ticker-row.is-entering { animation: ticker-enter 0.45s cubic-bezier(0.45, 0, 0.55, 1) forwards; }
 @keyframes ticker-leave { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(-100%); } }
 @keyframes ticker-enter { from { opacity: 0; transform: translateY(100%); } to { opacity: 1; transform: translateY(0); } }
 .goal-ticker-status {
