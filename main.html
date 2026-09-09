@@ -1795,10 +1795,20 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
   function fmtEventTime(ev) {
+    // All-day events have no meaningful start/end clock time (Google
+    // represents them as {date} rather than {dateTime}) — showing a
+    // range for these would be misleading, so just label them plainly.
     if (ev.start && ev.start.date) return 'All day';
     if (ev.start && ev.start.dateTime) {
-      const d = new Date(ev.start.dateTime);
-      return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      const start = new Date(ev.start.dateTime).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      // end.dateTime is already present on every event the list proxy
+      // returns (it's the raw Google Calendar API response) — just
+      // wasn't being read before.
+      if (ev.end && ev.end.dateTime) {
+        const end = new Date(ev.end.dateTime).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+        return start + ' – ' + end;
+      }
+      return start;
     }
     return '—';
   }
