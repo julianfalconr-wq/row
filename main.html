@@ -20,6 +20,7 @@
 <script src="sync.js" defer></script>
 <script src="topbar.js" defer></script>
 <script src="cronometer-lib.js" defer></script>
+<script type="module" src="daylib.js"></script>
 <style>
 :root {
   --surface-1: #050506;
@@ -113,7 +114,17 @@ body::after {
 /* ===== Header ===== */
 .dash-header {
   margin-bottom: 14px;
+  display: flex; align-items: flex-end; justify-content: space-between; gap: 12px;
 }
+.dash-header-gear {
+  width: 34px; height: 34px; border-radius: 50%; flex-shrink: 0;
+  border: 1px solid var(--line); background: var(--surface-2);
+  box-shadow: var(--shadow-card); color: var(--text-primary); font-size: 16px; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: background 0.2s, transform 0.12s;
+}
+.dash-header-gear:hover { filter: brightness(1.15); }
+.dash-header-gear:active { transform: scale(0.94) rotate(18deg); }
 .dash-eyebrow {
   font-family: var(--font-mono);
   font-size: 10.5px; font-weight: 800;
@@ -950,6 +961,24 @@ body::after {
 }
 .habit-config-add-btn:hover { color: var(--text-primary); border-color: var(--text-tertiary); }
 
+/* ===== General Settings modal ===== */
+.gs-weight-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 0; }
+.gs-weight-row label { font-size: 13px; color: var(--text-primary); }
+.gs-weight-row input[type="number"] {
+  width: 64px; background: var(--inset-bg); border: 1px solid var(--line); color: var(--text-primary);
+  font-family: inherit; font-size: 13px; padding: 7px 9px; border-radius: 8px; outline: none; -moz-appearance: textfield;
+}
+.gs-weight-sum { font-size: 12px; font-weight: 700; margin-top: 8px; color: var(--text-tertiary); }
+.gs-weight-sum.is-bad { color: var(--danger); }
+.gs-weight-sum.is-ok { color: var(--success); }
+.gs-field-row { display: flex; gap: 10px; }
+.gs-field-row .field { flex: 1; }
+.gs-field select, .gs-field input[type="time"] {
+  width: 100%; background: var(--inset-bg); border: 1px solid var(--line); color: var(--text-primary);
+  font-family: inherit; font-size: 13.5px; padding: 9px 10px; border-radius: 9px; outline: none;
+}
+.gs-habits-note { font-size: 12.5px; color: var(--text-tertiary); margin-bottom: 10px; line-height: 1.5; }
+
 /* ===== Modal shell (mirrors index.html's settings modal exactly, so
    both pages' gear-icon modals look identical) ===== */
 .modal-bg {
@@ -1000,20 +1029,25 @@ body::after {
 <div class="page">
 
   <div class="dash-header">
-    <div class="dash-eyebrow" id="dashEyebrow">—</div>
-    <h1 class="dash-title">Julian's Dashboard</h1>
+    <div>
+      <div class="dash-eyebrow" id="dashEyebrow">—</div>
+      <h1 class="dash-title">Julian's Dashboard</h1>
+    </div>
+    <button type="button" class="dash-header-gear" id="generalSettingsGearBtn" aria-label="General Settings">⚙</button>
   </div>
 
   <!-- Daily/weekly habit score — the main hero card, placed first
        (above Calendar, which was previously "above everything else"
        but that requirement predates this card existing at all). Tap
-       anywhere on the card to open the breakdown; the gear opens the
-       habit-list settings; "Log tonight" (in the breakdown modal)
-       opens the nightly manual-habit entry. -->
+       anywhere on the card to open the breakdown; "Log tonight" (in
+       the breakdown modal) opens the nightly manual-habit entry. All
+       configuration (day-end time/timezone, category weights, AND
+       the habit list itself) now lives in one place — the General
+       Settings gear up in the dash header — rather than this card
+       having its own separate settings gear. -->
   <div class="score-hero-card" id="scoreHeroCard">
     <div class="score-hero-head">
       <span class="score-hero-eyebrow">Today's Score</span>
-      <button type="button" class="score-hero-gear" id="scoreSettingsGearBtn" aria-label="Habit settings">⚙</button>
     </div>
     <div class="score-hero-body">
       <div class="score-hero-ring">
@@ -1079,6 +1113,62 @@ body::after {
       <div class="save-btn-row">
         <button type="button" class="save-btn" id="habitSettingsSaveBtn">Save</button>
         <span class="save-confirm" id="habitSettingsConfirm">Saved ✓</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- General Settings — the one place for all configuration: day-end
+       time + timezone (read by daylib.js, used everywhere "today" is
+       computed once Phase B migrates each file to it), Level-1
+       category weights for the daily score, and a link into the
+       existing Habit Settings modal above (Level 2 — its own storage
+       is untouched, this just makes it reachable from here too). -->
+  <div class="modal-bg" id="generalSettingsModalBg">
+    <div class="modal">
+      <div class="modal-head">
+        <h3>General Settings</h3>
+        <button type="button" class="modal-close" id="generalSettingsCloseBtn" aria-label="Close">×</button>
+      </div>
+
+      <div class="set-section">
+        <h4>User Profile</h4>
+        <div class="gs-field-row">
+          <div class="field gs-field">
+            <label>Day ends at</label>
+            <input type="time" id="gsDayEndTime" value="00:00">
+          </div>
+          <div class="field gs-field">
+            <label>Timezone</label>
+            <select id="gsTimezone">
+              <option value="auto">Auto-detect</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="set-divider"></div>
+
+      <div class="set-section">
+        <h4>Category Weights (Daily Score)</h4>
+        <div class="gs-weight-row"><label for="gsWeightHabits">Habits</label><input type="number" id="gsWeightHabits" min="0" max="100"></div>
+        <div class="gs-weight-row"><label for="gsWeightTraining">Training</label><input type="number" id="gsWeightTraining" min="0" max="100"></div>
+        <div class="gs-weight-row"><label for="gsWeightNutrition">Nutrition</label><input type="number" id="gsWeightNutrition" min="0" max="100"></div>
+        <div class="gs-weight-row"><label for="gsWeightWater">Water</label><input type="number" id="gsWeightWater" min="0" max="100"></div>
+        <div class="gs-weight-row"><label for="gsWeightDailyStack">Daily Stack</label><input type="number" id="gsWeightDailyStack" min="0" max="100"></div>
+        <div class="gs-weight-sum" id="gsWeightSum">Sums to 100</div>
+      </div>
+
+      <div class="set-divider"></div>
+
+      <div class="set-section">
+        <h4>Habits &amp; Points</h4>
+        <div class="gs-habits-note">The manual habit list and each habit's point value (Level 2 of the daily score) are managed on their own screen.</div>
+        <button type="button" class="whoop-mini-btn" id="gsManageHabitsBtn">Manage Habits →</button>
+      </div>
+
+      <div class="save-btn-row">
+        <button type="button" class="save-btn" id="generalSettingsSaveBtn">Save</button>
+        <span class="save-confirm" id="generalSettingsConfirm">Saved ✓</span>
       </div>
     </div>
   </div>
@@ -2839,8 +2929,7 @@ document.addEventListener('DOMContentLoaded', function () {
     } catch (e) {}
   }
 
-  $('scoreHeroCard').addEventListener('click', (e) => {
-    if (e.target.closest('#scoreSettingsGearBtn')) return;
+  $('scoreHeroCard').addEventListener('click', () => {
     renderBreakdown();
     $('scoreBreakdownModalBg').classList.add('show');
   });
@@ -2973,12 +3062,11 @@ document.addEventListener('DOMContentLoaded', function () {
     settingsDraft.habits.push({ id: 'custom_' + Date.now().toString(36), label: 'New habit', points: 5, type: 'manual_binary' });
     renderHabitSettingsList();
   });
-  $('scoreSettingsGearBtn').addEventListener('click', async (e) => {
-    e.stopPropagation();
+  function openHabitSettings() {
     settingsDraft = JSON.parse(JSON.stringify(currentHabitConfig || defaultHabitConfig()));
     renderHabitSettingsList();
     $('habitSettingsModalBg').classList.add('show');
-  });
+  }
   $('habitSettingsCloseBtn').addEventListener('click', () => $('habitSettingsModalBg').classList.remove('show'));
   $('habitSettingsModalBg').addEventListener('click', (e) => { if (e.target.id === 'habitSettingsModalBg') $('habitSettingsModalBg').classList.remove('show'); });
   $('habitSettingsSaveBtn').addEventListener('click', async () => {
@@ -2991,6 +3079,110 @@ document.addEventListener('DOMContentLoaded', function () {
       clearTimeout($('habitSettingsConfirm')._t);
       $('habitSettingsConfirm')._t = setTimeout(() => $('habitSettingsConfirm').classList.remove('show'), 1800);
       await render();
+    } catch (e) {
+      alert("Couldn't save: " + (e.message || e));
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  // ---------- General Settings (Phase A: day-end time + timezone +
+  // category weights, plus a link into the Habit Settings modal
+  // above). Storage: api/sync-state.js's resource=general-settings,
+  // which reuses the habit_config table's id="general" row — no new
+  // table. Local cache: daylib.js's own localStorage key
+  // (dashboard:general_settings), read/written via window.DayLib so
+  // the day-boundary utility and this UI always agree on one object.
+  //
+  // NOTE — scope of this phase: this only loads/saves the settings.
+  // Nothing yet actually CONSUMES dayEndTime for "today" computations
+  // (that's Phase B, file by file) or categoryWeights in the score
+  // formula (that's Phase D) — CATEGORY_BUDGETS above is untouched.
+  async function fetchGeneralSettingsFromServer() {
+    const secret = getSecret();
+    if (!secret) return null;
+    try {
+      const r = await fetch('/api/sync-state?resource=general-settings&secret=' + encodeURIComponent(secret));
+      const j = await r.json();
+      return (j && j.ok) ? j.settings : null;
+    } catch (e) { return null; }
+  }
+  async function saveGeneralSettingsToServer(settings) {
+    const secret = getSecret();
+    if (!secret) throw new Error('Set your dashboard secret first');
+    const r = await fetch('/api/sync-state?resource=general-settings&secret=' + encodeURIComponent(secret), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ resource: 'general-settings', settings }),
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok) throw new Error((j && j.error) || 'save failed');
+  }
+
+  // Hydrate the local cache from the server once at page load, so
+  // window.DayLib.loadProfile() reflects the saved settings even if
+  // this modal is never opened this session.
+  (async function hydrateGeneralSettingsCache() {
+    if (typeof window.DayLib === 'undefined') return;
+    const server = await fetchGeneralSettingsFromServer();
+    if (server) window.DayLib.saveProfile(Object.assign({}, window.DayLib.DEFAULT_PROFILE, server));
+  })();
+
+  const gsWeightIds = { habits: 'gsWeightHabits', training: 'gsWeightTraining', nutrition: 'gsWeightNutrition', water: 'gsWeightWater', dailyStack: 'gsWeightDailyStack' };
+  function populateTimezoneOptions(selected) {
+    const sel = $('gsTimezone');
+    let zones = [];
+    try { zones = typeof Intl.supportedValuesOf === 'function' ? Intl.supportedValuesOf('timeZone') : []; } catch (e) { zones = []; }
+    if (!zones.length) {
+      zones = ['UTC', 'America/Mexico_City', 'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles', 'America/Sao_Paulo', 'Europe/London', 'Europe/Paris', 'Europe/Madrid', 'Asia/Tokyo', 'Asia/Shanghai', 'Asia/Kolkata', 'Australia/Sydney'];
+    }
+    zones.forEach((z) => {
+      const opt = document.createElement('option');
+      opt.value = z; opt.textContent = z;
+      sel.appendChild(opt);
+    });
+    sel.value = selected && (selected === 'auto' || zones.includes(selected)) ? selected : 'auto';
+  }
+  function updateWeightSum() {
+    const sum = Object.values(gsWeightIds).reduce((s, id) => s + (Number($(id).value) || 0), 0);
+    const el = $('gsWeightSum');
+    el.textContent = 'Sums to ' + sum + (sum === 100 ? '' : ' (must total 100)');
+    el.classList.toggle('is-ok', sum === 100);
+    el.classList.toggle('is-bad', sum !== 100);
+    return sum === 100;
+  }
+  function openGeneralSettings() {
+    const profile = (typeof window.DayLib !== 'undefined') ? window.DayLib.loadProfile() : { dayEndTime: '00:00', timezone: 'auto', categoryWeights: { habits: 35, training: 20, nutrition: 20, water: 10, dailyStack: 10 } };
+    $('gsTimezone').innerHTML = '<option value="auto">Auto-detect</option>';
+    populateTimezoneOptions(profile.timezone);
+    $('gsDayEndTime').value = profile.dayEndTime || '00:00';
+    Object.keys(gsWeightIds).forEach((k) => { $(gsWeightIds[k]).value = (profile.categoryWeights && profile.categoryWeights[k] != null) ? profile.categoryWeights[k] : 0; });
+    updateWeightSum();
+    $('generalSettingsModalBg').classList.add('show');
+  }
+  $('generalSettingsGearBtn').addEventListener('click', openGeneralSettings);
+  $('generalSettingsCloseBtn').addEventListener('click', () => $('generalSettingsModalBg').classList.remove('show'));
+  $('generalSettingsModalBg').addEventListener('click', (e) => { if (e.target.id === 'generalSettingsModalBg') $('generalSettingsModalBg').classList.remove('show'); });
+  Object.values(gsWeightIds).forEach((id) => $(id).addEventListener('input', updateWeightSum));
+  $('gsManageHabitsBtn').addEventListener('click', () => {
+    $('generalSettingsModalBg').classList.remove('show');
+    openHabitSettings();
+  });
+  $('generalSettingsSaveBtn').addEventListener('click', async () => {
+    if (!updateWeightSum()) { alert('Category weights must sum to 100.'); return; }
+    const settings = {
+      dayEndTime: $('gsDayEndTime').value || '00:00',
+      timezone: $('gsTimezone').value || 'auto',
+      categoryWeights: {},
+    };
+    Object.keys(gsWeightIds).forEach((k) => { settings.categoryWeights[k] = Number($(gsWeightIds[k]).value) || 0; });
+    const btn = $('generalSettingsSaveBtn');
+    btn.disabled = true;
+    try {
+      await saveGeneralSettingsToServer(settings);
+      if (typeof window.DayLib !== 'undefined') window.DayLib.saveProfile(settings);
+      $('generalSettingsConfirm').classList.add('show');
+      clearTimeout($('generalSettingsConfirm')._t);
+      $('generalSettingsConfirm')._t = setTimeout(() => $('generalSettingsConfirm').classList.remove('show'), 1800);
     } catch (e) {
       alert("Couldn't save: " + (e.message || e));
     } finally {

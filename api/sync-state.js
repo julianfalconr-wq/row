@@ -67,6 +67,21 @@
 //   -> upserts one daily_habits row (date must be YYYY-MM-DD; caller
 //      is responsible for computing that key with LOCAL date logic,
 //      not UTC — see main.html's activeDateKey())
+//
+// -------------------------------------------------------------
+// general settings (day-end time + timezone + Level-1 category
+// weights — see daylib.js and main.html's General Settings modal).
+// Reuses the SAME habit_config table as a second row (id: "general",
+// alongside habit-config's own id: "config") rather than a third new
+// table — the schema (id/data/updated_at) is already generic enough,
+// and this keeps the Supabase footprint from growing every time a new
+// small settings blob is needed.
+//
+// GET  /api/sync-state?secret=...&resource=general-settings
+//   -> { ok:true, settings: {...} | null }  (null if never saved —
+//      caller falls back to daylib.js's DEFAULT_PROFILE)
+// POST /api/sync-state?secret=...  { resource: "general-settings", settings: {...} }
+//   -> upserts habit_config's "general" row
 // =============================================================
 
 const ALLOWED_KEYS = ['gym', 'finance', 'dailystack'];
@@ -114,21 +129,26 @@ async function writeRow(key, data) {
   if (!r.ok) throw new Error('Supabase write failed: ' + (await r.text()).slice(0, 300));
 }
 
-// ---------- habit_config ----------
-async function getHabitConfig() {
-  const r = await fetch(supabaseUrl('habit_config?id=eq.config&select=data'), { headers: supabaseHeaders() });
+// ---------- habit_config (a generic id/data row store — used for both
+// the habit list itself, id="config", and General Settings, id="general") ----------
+async function getConfigRow(id) {
+  const r = await fetch(supabaseUrl('habit_config?id=eq.' + encodeURIComponent(id) + '&select=data'), { headers: supabaseHeaders() });
   if (!r.ok) throw new Error('Supabase read failed: ' + (await r.text()).slice(0, 300));
   const rows = await r.json();
   return Array.isArray(rows) && rows[0] ? rows[0].data : null;
 }
-async function saveHabitConfig(config) {
+async function saveConfigRow(id, data) {
   const r = await fetch(supabaseUrl('habit_config?on_conflict=id'), {
     method: 'POST',
     headers: { ...supabaseHeaders(), Prefer: 'resolution=merge-duplicates' },
-    body: JSON.stringify([{ id: 'config', data: config, updated_at: new Date().toISOString() }]),
+    body: JSON.stringify([{ id, data, updated_at: new Date().toISOString() }]),
   });
   if (!r.ok) throw new Error('Supabase write failed: ' + (await r.text()).slice(0, 300));
 }
+const getHabitConfig = () => getConfigRow('config');
+const saveHabitConfig = (config) => saveConfigRow('config', config);
+const getGeneralSettings = () => getConfigRow('general');
+const saveGeneralSettings = (settings) => saveConfigRow('general', settings);
 
 // ---------- daily_habits ----------
 async function getDailyHabits(date) {
@@ -163,7 +183,7 @@ export default async function handler(req, res) {
 
   const resource = req.query && req.query.resource;
 
-  if (resource === 'habit-config' || resource === 'daily-habits') {
+  if (resource === 'habit-config' || resource === 'daily-habits' || resource === 'general-settings') {
     if (!checkAuth(req, res)) return;
     if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_KEY) {
       return res.status(500).json({ error: 'missing SUPABASE_URL / SUPABASE_SERVICE_KEY' });
@@ -183,6 +203,24 @@ export default async function handler(req, res) {
             return res.status(400).json({ error: 'config must be a plain object' });
           }
           await saveHabitConfig(config);
+          return res.status(200).json({ ok: true });
+        }
+        return res.status(405).json({ error: 'method not allowed' });
+      }
+
+      if (resource === 'general-settings') {
+        if (req.method === 'GET') {
+          const settings = await getGeneralSettings();
+          return res.status(200).json({ ok: true, settings });
+        }
+        if (req.method === 'POST') {
+          let body = req.body;
+          if (typeof body === 'string') { try { body = JSON.parse(body); } catch (e) { body = {}; } }
+          const settings = body && body.settings;
+          if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
+            return res.status(400).json({ error: 'settings must be a plain object' });
+          }
+          await saveGeneralSettings(settings);
           return res.status(200).json({ ok: true });
         }
         return res.status(405).json({ error: 'method not allowed' });
