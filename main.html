@@ -1331,7 +1331,7 @@ body::after {
       <div class="gm-header">
         <div class="gm-header-left">
           <div class="gm-eyebrow" id="tomorrowLabel">Plan tomorrow —</div>
-          <div class="gm-tomorrow-sub">Write tonight, locked until 6 AM.</div>
+          <div class="gm-tomorrow-sub" id="tomorrowLockSub">Write tonight, locked until day-end.</div>
         </div>
         <div class="gm-tomorrow-count" id="gmTomorrowCount">0 planned</div>
       </div>
@@ -1362,9 +1362,21 @@ body::after {
   // <html data-theme="..."> on every page and this page's CSS
   // variables react to that attribute.
 
+  // ---------- day-end time, formatted for display ----------
+  // "Activates at 6 AM tomorrow" / "locked until 6 AM" used to be
+  // hardcoded strings matching the old hardcoded 6am cutoff — now
+  // that the cutoff is user-configurable (General Settings), these
+  // need to say whatever time is actually configured, not always 6 AM.
+  function formatDayEndTime() {
+    const [h, m] = String((DayLib.loadProfile().dayEndTime) || '00:00').split(':').map(Number);
+    const ampm = h < 12 ? 'AM' : 'PM';
+    const h12 = h % 12 === 0 ? 12 : h % 12;
+    return h12 + (m ? ':' + String(m).padStart(2, '0') : ':00') + ' ' + ampm;
+  }
+
   // ---------- eyebrow date ----------
   function updateEyebrow() {
-    const d = new Date();
+    const d = DayLib.parseDateKey(DayLib.effectiveDateKey());
     const wk = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][d.getDay()];
     const mo = ['January','February','March','April','May','June','July','August','September','October','November','December'][d.getMonth()];
     document.getElementById('dashEyebrow').textContent = wk.toUpperCase() + ' · ' + mo.toUpperCase() + ' ' + d.getDate();
@@ -1391,22 +1403,17 @@ body::after {
   }
 
   // ---------- date helpers ----------
+  // Was a hardcoded 6am cutoff, duplicated independently of gym.html's
+  // and health.html's own versions of the same idea — now the shared
+  // day-boundary utility (daylib.js), so all three (and everywhere
+  // else migrated) agree on one user-configured day-end time instead
+  // of three different hardcoded ones.
   function pad2(n) { return String(n).padStart(2, '0'); }
-  function dateToKey(d) { return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); }
-  function getActiveDateString() {
-    const now = new Date();
-    if (now.getHours() < 6) {
-      const d = new Date(now);
-      d.setDate(d.getDate() - 1);
-      return dateToKey(d);
-    }
-    return dateToKey(now);
-  }
+  function getActiveDateString() { return DayLib.effectiveDateKey(); }
   function getTomorrowDateString() {
-    const now = new Date();
-    const d = new Date(now);
-    if (now.getHours() >= 6) d.setDate(d.getDate() + 1);
-    return dateToKey(d);
+    const d = DayLib.parseDateKey(DayLib.effectiveDateKey());
+    d.setDate(d.getDate() + 1);
+    return DayLib.plainDateKey(d); // pure extraction from an already-resolved calendar day, not effectiveDateKey() again — see daylib.js's header comment on why those two are different
   }
   function formatDate(yyyy_mm_dd) {
     const parts = yyyy_mm_dd.split('-').map(Number);
@@ -1729,7 +1736,7 @@ body::after {
     cb.type = 'checkbox';
     cb.className = 'gm-check';
     cb.checked = !!goal.done;
-    if (readOnly) { cb.disabled = true; cb.title = 'Activates at 6 AM tomorrow'; }
+    if (readOnly) { cb.disabled = true; cb.title = 'Activates at ' + formatDayEndTime() + ' tomorrow'; }
     cb.addEventListener('change', () => {
       const list = getGoals(key);
       if (!list[idx]) return;
@@ -1975,6 +1982,7 @@ body::after {
 
   // ---------- Boot ----------
   updateEyebrow();
+  document.getElementById('tomorrowLockSub').textContent = 'Write tonight, locked until ' + formatDayEndTime() + '.';
   rollover();
   processStreak();
   loadToday();
