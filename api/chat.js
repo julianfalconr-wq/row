@@ -466,9 +466,32 @@ function buildTodayContextPrompt(todayContext) {
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') return res.status(204).end();
+
+  // GET ?mode=export-memory — read-only dump of every ai_memory row, for
+  // the "Export my data" feature (topbar.js). The anon/publishable Supabase
+  // key used elsewhere in the browser can't read this table (RLS blocks it,
+  // confirmed by a direct curl test), so this goes through the service key
+  // like the memory tool itself does. Everything else about this endpoint
+  // (the POST chat flow below) is unchanged.
+  if (req.method === 'GET' && req.query && req.query.mode === 'export-memory') {
+    const dashboardSecret = process.env.DASHBOARD_SECRET;
+    if (!dashboardSecret || req.query.secret !== dashboardSecret) {
+      return res.status(401).json({ error: 'unauthorized' });
+    }
+    if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_KEY) {
+      return res.status(500).json({ error: 'missing SUPABASE_URL / SUPABASE_SERVICE_KEY' });
+    }
+    try {
+      const rows = await dbListByPrefix('');
+      return res.status(200).json({ ok: true, memories: rows });
+    } catch (e) {
+      return res.status(500).json({ error: e.message || String(e) });
+    }
+  }
+
   if (req.method !== 'POST') return res.status(405).json({ error: 'method not allowed' });
 
   const dashboardSecret = process.env.DASHBOARD_SECRET;

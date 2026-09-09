@@ -358,6 +358,22 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
 }
 .chat-send-btn:active { transform: scale(0.92); }
 .chat-send-btn:disabled { opacity: 0.4; cursor: default; }
+.chat-mic-btn {
+  flex-shrink: 0; width: 40px; height: 40px; border-radius: 50%;
+  background: rgba(255, 255, 255, 0.06); color: #C9C7C2; border: 1px solid rgba(255, 255, 255, 0.08);
+  cursor: pointer; font-size: 16px;
+  display: flex; align-items: center; justify-content: center;
+  transition: transform 0.1s, background 0.15s, color 0.15s;
+}
+.chat-mic-btn:active { transform: scale(0.92); }
+.chat-mic-btn.is-listening {
+  background: #E5484D; color: #FAFAFA; border-color: transparent;
+  animation: chatMicPulse 1.2s ease-in-out infinite;
+}
+@keyframes chatMicPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(229, 72, 77, 0.45); }
+  50% { box-shadow: 0 0 0 8px rgba(229, 72, 77, 0); }
+}
 `;
 
   const topbarHtml = `
@@ -413,6 +429,7 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
     <div class="chat-day-list" id="chatDayList" style="display:none"></div>
     <div class="chat-input-row" id="chatInputRow">
       <input type="text" id="chatInput" class="chat-input" placeholder="Ask a question…" autocomplete="off">
+      <button type="button" id="chatMicBtn" class="chat-mic-btn" aria-label="Voice input" style="display:none">🎤</button>
       <button type="button" id="chatSendBtn" class="chat-send-btn" aria-label="Send">↑</button>
     </div>
   </div>
@@ -1637,6 +1654,55 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') { e.preventDefault(); sendChatMessage(); }
     });
+
+    // ---------- voice input ----------
+    // Native browser speech-to-text (Web Speech API). Chrome/Edge expose
+    // it as SpeechRecognition, Safari/iOS only as the prefixed
+    // webkitSpeechRecognition — feature-detect both and hide the mic
+    // entirely (rather than show a button that errors on tap) when
+    // neither exists. continuous=false means the browser's own silence
+    // detection stops listening after a natural pause, same as tapping
+    // the button again mid-utterance.
+    const micBtn = document.getElementById('chatMicBtn');
+    const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (micBtn && SpeechRecognitionCtor) {
+      micBtn.style.display = 'flex';
+      let recognition = null;
+      let listening = false;
+      // Text already in the box when listening started — interim/final
+      // results replace only what voice input has added, so typing first
+      // and then dictating more doesn't clobber what was typed.
+      let baseText = '';
+
+      function stopListening() {
+        listening = false;
+        micBtn.classList.remove('is-listening');
+        if (recognition) { try { recognition.stop(); } catch (e) {} }
+      }
+
+      micBtn.addEventListener('click', () => {
+        if (listening) { stopListening(); return; }
+
+        recognition = new SpeechRecognitionCtor();
+        recognition.lang = (navigator.language || 'en-US');
+        recognition.continuous = false;
+        recognition.interimResults = true;
+
+        baseText = input.value ? input.value + ' ' : '';
+        listening = true;
+        micBtn.classList.add('is-listening');
+
+        recognition.onresult = (e) => {
+          let transcript = '';
+          for (let i = 0; i < e.results.length; i++) transcript += e.results[i][0].transcript;
+          input.value = baseText + transcript;
+        };
+        recognition.onerror = () => stopListening();
+        recognition.onend = () => stopListening();
+
+        try { recognition.start(); } catch (e) { stopListening(); }
+      });
+    }
   }
 
   function blockGesture(e) { e.preventDefault(); }

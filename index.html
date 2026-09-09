@@ -502,6 +502,14 @@ body::after {
         <button type="button" class="whoop-mini-btn" id="settingsWhoopSyncBtn">Sync now</button>
         <a href="health.html" class="whoop-mini-btn" id="settingsWhoopConnectLink" style="display:none">Connect on Health page</a>
       </div>
+
+      <div class="set-divider"></div>
+
+      <div class="set-section">
+        <h4>Export</h4>
+        <button type="button" class="whoop-mini-btn" id="exportDataBtn">Export my data</button>
+        <div style="margin-top:8px"><span class="save-confirm" id="exportDataConfirm">Downloaded ✓</span></div>
+      </div>
     </div>
   </div>
 
@@ -840,6 +848,181 @@ document.addEventListener('DOMContentLoaded', function () {
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && modalBg.classList.contains('show')) closeModal();
   });
+
+  // ---------- Export my data ----------
+  // Gathers every real piece of your own data — everything in this
+  // browser's localStorage plus whatever's synced server-side to
+  // Supabase — into one timestamped JSON file, downloaded straight to
+  // the browser. Nothing is uploaded or stored anywhere by this button;
+  // it only reads. (This is separate from gym.html's own "Export JSON"
+  // button in Strength's Settings, which exports only that page's
+  // po_coach_v1 state — that one is untouched.)
+  //
+  // LOCAL: every localStorage key on this origin EXCEPT the blocklist
+  // below, so newly-added data keys are picked up automatically without
+  // this list going stale. As of writing that covers things like:
+  // goals:* (main.html To Do), goal_streak_v1, chat_history_v1,
+  // po_water_v1 (water + body profile), po_coach_v1/_workout_done/
+  // _weekly_plan_v1/_weights/_runs/_photos (gym.html, incl. progress
+  // photos), foodscan_history_v1, stack:* (Daily Stack),
+  // cronometer_targets_v1, cronometer_score_history_v1,
+  // cronometer:dailySummary, nw_currency/nw_mxn_manual_usd_rate/
+  // nw:activity/nw:history/nw:bank/nw:stocks/nw:crypto/nw:other, subs.
+  //
+  // SERVER (fetched live via the existing secret-gated endpoints, not a
+  // local cache): Supabase app_state rows for 'cronometer' (full parsed
+  // nutrition cache, via api/cronometer-data.js's read mode), 'gym'
+  // (compact daily summary), 'finance' (raw mirror), 'dailystack'
+  // (compact summary) — the last three read directly from Supabase
+  // using the same anon/publishable key already embedded client-side
+  // elsewhere in this app (confirmed readable; RLS on app_state allows
+  // it) since there's no dedicated read endpoint for them. Also the
+  // full ai_memory table (everything Claude has written to memory about
+  // you, via api/chat.js's ?mode=export-memory) and the full
+  // chat_history archive, day by day (via api/chat-history.js). A
+  // "daily_habits" table was specced once but was never actually built
+  // — checked directly, it doesn't exist, so there's nothing to export
+  // there.
+  //
+  // EXCLUDED ON PURPOSE — credentials/tokens, never user data:
+  // whoop_tokens_v1, google_tokens_v1, dashboard:secret, cronometer:secret
+  // (localStorage), and the Supabase app_state row key='whoop_tokens'
+  // (confirmed to exist server-side — deliberately never fetched here).
+  //
+  // Also excluded as pure UI/ephemeral state rather than meaningful data:
+  // dashboard:theme, whoop_last_sync, whoop_refresh_cooldown_until,
+  // google_refresh_cooldown_until, push_permission_asked_v1,
+  // ios_pwa_banner_dismissed_v1, finance_active_tab.
+  (function () {
+    const exportBtn = document.getElementById('exportDataBtn');
+    const exportConfirm = document.getElementById('exportDataConfirm');
+    if (!exportBtn) return;
+
+    const LOCAL_BLOCKLIST = new Set([
+      'whoop_tokens_v1', 'google_tokens_v1', 'dashboard:secret', 'cronometer:secret',
+      'dashboard:theme', 'whoop_last_sync', 'whoop_refresh_cooldown_until',
+      'google_refresh_cooldown_until', 'push_permission_asked_v1',
+      'ios_pwa_banner_dismissed_v1', 'finance_active_tab',
+    ]);
+
+    function collectLocalData() {
+      const out = {};
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (!key || LOCAL_BLOCKLIST.has(key)) continue;
+        const raw = localStorage.getItem(key);
+        try { out[key] = JSON.parse(raw); } catch (e) { out[key] = raw; }
+      }
+      return out;
+    }
+
+    async function fetchAppStateRow(key) {
+      try {
+        const r = await fetch(
+          TOPBAR_SUPABASE_URL_FOR_EXPORT() + '/rest/v1/app_state?key=eq.' + encodeURIComponent(key) + '&select=data,updated_at',
+          { headers: { apikey: SUPABASE_KEY_FOR_EXPORT(), Authorization: 'Bearer ' + SUPABASE_KEY_FOR_EXPORT() } }
+        );
+        if (!r.ok) return null;
+        const rows = await r.json();
+        return Array.isArray(rows) && rows[0] ? rows[0] : null;
+      } catch (e) { return null; }
+    }
+    // Same Supabase project/publishable key already embedded client-side
+    // in sync.js/gym.html/topbar.js — kept as tiny local functions here
+    // instead of a shared constant since this project deliberately
+    // duplicates such values per file rather than sharing modules.
+    function TOPBAR_SUPABASE_URL_FOR_EXPORT() { return 'https://dfxjlneohhgfdussomou.supabase.co'; }
+    function SUPABASE_KEY_FOR_EXPORT() { return 'sb_publishable_9a1GD4OaqszZSnXW80PFTA_JvHi533e'; }
+
+    async function fetchCronometerCache(secret) {
+      try {
+        const r = await fetch('/api/cronometer-data', { headers: { 'x-dashboard-secret': secret } });
+        if (!r.ok) return null;
+        const j = await r.json();
+        return j && j.ok ? j.data : null;
+      } catch (e) { return null; }
+    }
+
+    async function fetchAiMemory(secret) {
+      try {
+        const r = await fetch('/api/chat?mode=export-memory&secret=' + encodeURIComponent(secret));
+        if (!r.ok) return [];
+        const j = await r.json();
+        return (j && j.memories) || [];
+      } catch (e) { return []; }
+    }
+
+    async function fetchChatHistory(secret) {
+      try {
+        const listRes = await fetch('/api/chat-history?secret=' + encodeURIComponent(secret));
+        if (!listRes.ok) return [];
+        const listJson = await listRes.json();
+        const days = (listJson && listJson.days) || [];
+        const full = [];
+        for (const d of days) {
+          try {
+            const dayRes = await fetch('/api/chat-history?secret=' + encodeURIComponent(secret) + '&date=' + encodeURIComponent(d.date));
+            const dayJson = dayRes.ok ? await dayRes.json() : null;
+            full.push({ date: d.date, messages: (dayJson && dayJson.messages) || [] });
+          } catch (e) { full.push({ date: d.date, messages: [] }); }
+        }
+        return full;
+      } catch (e) { return []; }
+    }
+
+    async function collectServerData() {
+      const secret = (localStorage.getItem('dashboard:secret') || '').trim();
+      const [cronometer, gym, finance, dailystack, aiMemory, chatHistory] = await Promise.all([
+        fetchCronometerCache(secret),
+        fetchAppStateRow('gym'),
+        fetchAppStateRow('finance'),
+        fetchAppStateRow('dailystack'),
+        secret ? fetchAiMemory(secret) : Promise.resolve([]),
+        secret ? fetchChatHistory(secret) : Promise.resolve([]),
+      ]);
+      return {
+        cronometer: cronometer || null,
+        gymSummary: gym ? gym.data : null,
+        financeMirror: finance ? finance.data : null,
+        dailyStackSummary: dailystack ? dailystack.data : null,
+        aiMemory,
+        chatHistory,
+      };
+    }
+
+    exportBtn.addEventListener('click', async () => {
+      exportBtn.disabled = true;
+      const originalLabel = exportBtn.textContent;
+      exportBtn.textContent = 'Gathering…';
+      try {
+        const [local, server] = await Promise.all([
+          Promise.resolve(collectLocalData()),
+          collectServerData(),
+        ]);
+        const payload = {
+          exportedAt: new Date().toISOString(),
+          local,
+          server,
+        };
+        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'row-data-export-' + new Date().toISOString().slice(0, 10) + '.json';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+
+        exportConfirm.classList.add('show');
+        clearTimeout(exportConfirm._t);
+        exportConfirm._t = setTimeout(() => exportConfirm.classList.remove('show'), 1800);
+      } finally {
+        exportBtn.disabled = false;
+        exportBtn.textContent = originalLabel;
+      }
+    });
+  })();
 });
 </script>
 </body>
