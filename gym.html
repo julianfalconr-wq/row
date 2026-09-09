@@ -13,6 +13,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0a0a0b">
 <title>Training</title>
+<!-- Not deferred, on purpose: this file's own date logic below runs
+     as plain synchronous inline scripts (not wrapped in
+     DOMContentLoaded), so daylib.js must finish executing during
+     head-parsing, before the browser even reaches those blocks. A
+     deferred or module script would only run after the whole
+     document finishes parsing — too late. See daylib.js's own header
+     comment for the full reasoning. -->
+<script src="daylib.js"></script>
 <script src="topbar.js" defer></script>
 
 <!-- =============================================================
@@ -2084,9 +2092,10 @@ img, video, canvas, svg { max-width: 100%; }
         // Local calendar date, not a UTC slice — this anchors "index"
         // to a specific day, and todaySplit() compares it against local
         // midnight, so it must be derived the same way or the anchor
-        // silently shifts a day west of UTC. wtDateKey() is defined
-        // further down this same IIFE but hoisted, so it's safe here.
-        date: (CONFIG.splitAnchor && CONFIG.splitAnchor.date) || wtDateKey(new Date()),
+        // silently shifts a day west of UTC. DayLib.effectiveDateKey()
+        // (daylib.js, loaded synchronously in <head>) is "today" per
+        // the user's configured day-end time, not just plain midnight.
+        date: (CONFIG.splitAnchor && CONFIG.splitAnchor.date) || DayLib.effectiveDateKey(),
         index: idx
       };
     }
@@ -2227,8 +2236,8 @@ img, video, canvas, svg { max-width: 100%; }
     // at 11pm yesterday and viewed at 6am today is 7 hours apart but a
     // full calendar day "ago"; raw elapsed-time bucketing would
     // misreport that as "today".
-    const todayMid = new Date(); todayMid.setHours(0, 0, 0, 0);
-    const lastMid = new Date(last.date); lastMid.setHours(0, 0, 0, 0);
+    const todayMid = DayLib.parseDateKey(DayLib.effectiveDateKey());
+    const lastMid = DayLib.parseDateKey(DayLib.effectiveDateKey(new Date(last.date)));
     const da = Math.round((todayMid - lastMid) / 86400000);
     const ago = da === 0 ? 'today' : da === 1 ? 'yesterday' : da + ' days ago';
     v.textContent = setStr;
@@ -2244,15 +2253,15 @@ img, video, canvas, svg { max-width: 100%; }
     const wrap = $('todaySetsForEx');
     const ex = getCurrentEx();
     if (!ex) { wrap.innerHTML = ''; return; }
-    const todayKey = wtDateKey(new Date());
-    // wtDateKey(new Date(l.date)) — NOT l.date.slice(0,10). Slicing an
-    // ISO timestamp gives its UTC calendar date, which disagrees with
-    // the user's actual local day in negative-UTC-offset timezones
-    // (e.g. a 9pm log in Mexico City, UTC-6, is already "tomorrow" in
-    // UTC) — exactly the bug this whole file's date handling was
-    // audited for. Always round-trip through a real Date + local
-    // getters instead.
-    const todays = getLogs().filter(l => wtDateKey(new Date(l.date)) === todayKey);
+    const todayKey = DayLib.effectiveDateKey();
+    // DayLib.effectiveDateKey(new Date(l.date)) — NOT l.date.slice(0,10).
+    // Slicing an ISO timestamp gives its UTC calendar date, which
+    // disagrees with the user's actual local day in negative-UTC-offset
+    // timezones (e.g. a 9pm log in Mexico City, UTC-6, is already
+    // "tomorrow" in UTC) — exactly the bug this whole file's date
+    // handling was audited for. Always round-trip through a real Date
+    // + the shared day-boundary utility instead.
+    const todays = getLogs().filter(l => DayLib.effectiveDateKey(new Date(l.date)) === todayKey);
     if (!todays.length) { wrap.innerHTML = ''; return; }
     wrap.innerHTML = todays.map((l, i) => {
       const val = ex.bw ? (l.reps + ' reps') : (l.weight + unit() + ' × ' + l.reps);
@@ -2306,7 +2315,7 @@ img, video, canvas, svg { max-width: 100%; }
     $('bestSet').textContent = ex.bw ? (best.reps + 'r') : (best.weight + '×' + best.reps);
     // Distinct days, not logs.length — logging several sets in one
     // sitting is several entries but still one session.
-    const uniqueDays = new Set(logs.map(l => wtDateKey(new Date(l.date))));
+    const uniqueDays = new Set(logs.map(l => DayLib.effectiveDateKey(new Date(l.date))));
     $('sessionCount').textContent = uniqueDays.size;
   }
   function renderSparkline() {
@@ -2381,9 +2390,12 @@ img, video, canvas, svg { max-width: 100%; }
       // local calendar day anywhere west of UTC (e.g. Mexico City,
       // UTC-6) — silently shifting the whole rotation back a day.
       // wtParseKey() builds the Date from y/m/d components directly,
-      // which the spec always treats as local time.
+      // which the spec always treats as local time. `t` is "today" via
+      // DayLib.effectiveDateKey(), not raw new Date() — with a
+      // configured day-end past midnight, a 1am tap still belongs to
+      // yesterday's rotation slot.
       const a = wtParseKey(state.splitAnchor.date);
-      const t = new Date();
+      const t = DayLib.parseDateKey(DayLib.effectiveDateKey());
       a.setHours(0,0,0,0); t.setHours(0,0,0,0);
       const diffDays = Math.round((t - a) / 86400000);
       const idx = ((state.splitAnchor.index + diffDays) % rot.length + rot.length) % rot.length;
@@ -2393,7 +2405,7 @@ img, video, canvas, svg { max-width: 100%; }
     }
   }
   function todayDateLabel() {
-    const d = new Date();
+    const d = DayLib.parseDateKey(DayLib.effectiveDateKey());
     const dows = ['SUN','MON','TUE','WED','THU','FRI','SAT'];
     const mons = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
     return dows[d.getDay()] + ', ' + mons[d.getMonth()] + ' ' + d.getDate();
@@ -2488,10 +2500,11 @@ img, video, canvas, svg { max-width: 100%; }
     const byDay = {};
     state.exercises.forEach(ex => {
       (state.logs[ex.id] || []).forEach(l => {
-        // wtDateKey(new Date(l.date)) — local calendar date, not a raw
-        // UTC slice of the ISO timestamp (see todaySplit()'s comment).
-        // Feeds both Today's Workout and Past Workouts below.
-        const dk = wtDateKey(new Date(l.date));
+        // DayLib.effectiveDateKey(new Date(l.date)) — the user's
+        // configured effective calendar date, not a raw UTC slice of
+        // the ISO timestamp (see todaySplit()'s comment). Feeds both
+        // Today's Workout and Past Workouts below.
+        const dk = DayLib.effectiveDateKey(new Date(l.date));
         if (!byDay[dk]) byDay[dk] = [];
         byDay[dk].push({ ex, log: l });
       });
@@ -2522,7 +2535,7 @@ img, video, canvas, svg { max-width: 100%; }
   }
 
   function renderTodaysWorkout() {
-    const todayKey = wtDateKey(new Date());
+    const todayKey = DayLib.effectiveDateKey();
     const all = logsByDay();
     const todaySets = all[todayKey] || [];
     const sum = summarizeDay(todaySets);
@@ -2531,7 +2544,7 @@ img, video, canvas, svg { max-width: 100%; }
     const eyebrow = $('poTwDateLabel');
     const dows = ['SUN','MON','TUE','WED','THU','FRI','SAT'];
     const mons = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
-    const d = new Date();
+    const d = DayLib.parseDateKey(todayKey);
     eyebrow.textContent = 'TODAY · ' + dows[d.getDay()] + ', ' + mons[d.getMonth()] + ' ' + d.getDate();
 
     $('poTwSetCount').textContent = sum.totalSets;
@@ -2568,7 +2581,7 @@ img, video, canvas, svg { max-width: 100%; }
   }
 
   function renderPastWorkouts() {
-    const todayKey = wtDateKey(new Date());
+    const todayKey = DayLib.effectiveDateKey();
     const all = logsByDay();
     const past = Object.entries(all)
       .filter(([dk]) => dk !== todayKey)
@@ -2601,7 +2614,7 @@ img, video, canvas, svg { max-width: 100%; }
   }
 
   $('poTwDoneBtn').addEventListener('click', () => {
-    const todayKey = wtDateKey(new Date());
+    const todayKey = DayLib.effectiveDateKey();
     if (doneDays[todayKey]) {
       delete doneDays[todayKey];
     } else {
@@ -2889,10 +2902,10 @@ img, video, canvas, svg { max-width: 100%; }
     if (newTodayIdx >= cleaned.length) newTodayIdx = 0;
     state.splitRotation = cleaned;
     state.splitAnchor = {
-      // Local calendar date (see todaySplit()'s comment) — editing your
-      // rotation in the evening west of UTC must anchor to the day you
-      // actually mean, not tomorrow in UTC.
-      date: wtDateKey(new Date()),
+      // Effective calendar date (see todaySplit()'s comment) — editing
+      // your rotation late at night must anchor to the day you
+      // actually mean, per the configured day-end time.
+      date: DayLib.effectiveDateKey(),
       index: newTodayIdx
     };
     saveState();
@@ -3111,7 +3124,7 @@ img, video, canvas, svg { max-width: 100%; }
   let wtEntries = wtLoad();
 
   function wtSaveEntry(weight) {
-    const key = wtDateKey(new Date());
+    const key = DayLib.effectiveDateKey();
     const existing = wtEntries.find(e => e.dateKey === key);
     if (existing) existing.weight = weight;
     else { wtEntries.push({ dateKey: key, weight }); wtEntries.sort((a,b) => a.dateKey.localeCompare(b.dateKey)); }
@@ -3121,7 +3134,7 @@ img, video, canvas, svg { max-width: 100%; }
 
   function wtRender() {
     const last = wtEntries[wtEntries.length - 1] || null;
-    const todayKey = wtDateKey(new Date());
+    const todayKey = DayLib.effectiveDateKey();
     const todayEntry = wtEntries.find(e => e.dateKey === todayKey);
     const u = state.units;
 
@@ -3165,7 +3178,11 @@ img, video, canvas, svg { max-width: 100%; }
   function wtRenderStreak() {
     const el = $('wtStreak');
     let streak = 0;
-    let cursor = new Date(new Date());
+    // Anchored at the effective today (day-end-aware), then walked
+    // backward day by day below via plain wtDateKey() — that part is
+    // correct as-is since `cursor` already represents a resolved
+    // calendar day from here on, not a fresh "now" query each time.
+    let cursor = DayLib.parseDateKey(DayLib.effectiveDateKey());
     if (!wtEntries.find(e => e.dateKey === wtDateKey(cursor))) {
       cursor.setDate(cursor.getDate() - 1);
     }
@@ -3280,7 +3297,7 @@ img, video, canvas, svg { max-width: 100%; }
         // Still count volume / sessions even for bodyweight + sparse exercises
         logs.forEach(l => {
           if (new Date(l.date) >= start) {
-            workoutDays.add(wtDateKey(new Date(l.date))); // local calendar date, not a UTC slice
+            workoutDays.add(DayLib.effectiveDateKey(new Date(l.date))); // effective calendar date, not a UTC slice
             totalVolumeInWindow += (l.weight || 0) * (l.reps || 0);
           }
         });
@@ -3289,7 +3306,7 @@ img, video, canvas, svg { max-width: 100%; }
       const inWin  = logs.filter(l => new Date(l.date) >= start);
       const before = logs.filter(l => new Date(l.date) < start);
       inWin.forEach(l => {
-        workoutDays.add(wtDateKey(new Date(l.date))); // local calendar date, not a UTC slice
+        workoutDays.add(DayLib.effectiveDateKey(new Date(l.date))); // effective calendar date, not a UTC slice
         totalVolumeInWindow += (l.weight || 0) * (l.reps || 0);
       });
       if (!inWin.length || !before.length) return;
@@ -3399,7 +3416,7 @@ img, video, canvas, svg { max-width: 100%; }
   $('wtEditBtn').addEventListener('click', () => {
     $('wtLocked').classList.add('hidden');
     $('wtInputRow').classList.remove('hidden');
-    const todayEntry = wtEntries.find(e => e.dateKey === wtDateKey(new Date()));
+    const todayEntry = wtEntries.find(e => e.dateKey === DayLib.effectiveDateKey());
     if (todayEntry) $('wtInput').value = todayEntry.weight.toFixed(1);
     $('wtInput').focus(); $('wtInput').select();
   });
@@ -3502,7 +3519,7 @@ img, video, canvas, svg { max-width: 100%; }
     const entry = {
       id,
       dataUrl: compressed,
-      dateKey: wtDateKey(new Date()),
+      dateKey: DayLib.effectiveDateKey(),
       weight: photoCurrentWeight()
     };
     photos.unshift(entry);
@@ -3795,13 +3812,19 @@ img, video, canvas, svg { max-width: 100%; }
   // re-parsing localStorage from a different page.
   // ------------------------------------------------------------
   function buildGymSummary() {
-    const gymTodayKey = wtDateKey(new Date());
+    const gymTodayKey = DayLib.effectiveDateKey();
     const exById = {};
     (state.exercises || []).forEach((ex) => { exById[ex.id] = ex.name; });
 
     const todaysSets = [];
     const recentWorkoutsByDay = {};
-    const sevenDaysAgo = new Date(); sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    // "7 days ago" relative to the EFFECTIVE today (parsed back to a
+    // resolved calendar-day Date), not raw new Date() — otherwise the
+    // window could be off by a day right around the configured
+    // day-end. wtDateKey() below is correct as plain extraction since
+    // sevenDaysAgo is now already a resolved calendar day.
+    const sevenDaysAgo = DayLib.parseDateKey(gymTodayKey);
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
     // String-compare local date keys throughout (dk >= sevenDaysAgoKey)
     // rather than reconstructing Date objects from them — new Date(dk)
     // on a bare "YYYY-MM-DD" string parses as UTC midnight, which is
@@ -3812,7 +3835,7 @@ img, video, canvas, svg { max-width: 100%; }
     Object.keys(state.logs || {}).forEach((exId) => {
       (state.logs[exId] || []).forEach((log) => {
         if (!log.date) return;
-        const dk = wtDateKey(new Date(log.date));
+        const dk = DayLib.effectiveDateKey(new Date(log.date));
         if (dk === gymTodayKey) todaysSets.push({ exercise: exById[exId] || exId, weight: log.weight, reps: log.reps });
         if (dk >= sevenDaysAgoKey) {
           if (!recentWorkoutsByDay[dk]) recentWorkoutsByDay[dk] = { sets: 0, exercises: new Set() };
@@ -4105,7 +4128,11 @@ img, video, canvas, svg { max-width: 100%; }
     date.setHours(0, 0, 0, 0);
     return date;
   }
-  function thisWeekMondayKey() { return dateKey(mondayOf(new Date())); }
+  // mondayOf(new Date()) would find Monday of the RAW current moment's
+  // week — wrong right around the configured day-end (e.g. Monday
+  // 1am with a 2am day-end is still effectively Sunday, still last
+  // week). Anchor on the effective today first, then find its Monday.
+  function thisWeekMondayKey() { return dateKey(mondayOf(DayLib.parseDateKey(DayLib.effectiveDateKey()))); }
   function escapeHtml(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
@@ -4200,7 +4227,7 @@ img, video, canvas, svg { max-width: 100%; }
   const runDurationInput = $$('runDurationInput');
   const runPaceDisplay = $$('runPaceDisplay');
   const runNotesInput = $$('runNotesInput');
-  runDateInput.value = dateKey(new Date());
+  runDateInput.value = DayLib.effectiveDateKey();
 
   function updatePacePreview() {
     const dist = parseFloat(runDistanceInput.value);
@@ -4211,7 +4238,7 @@ img, video, canvas, svg { max-width: 100%; }
   runDurationInput.addEventListener('input', updatePacePreview);
 
   $$('runSaveBtn').addEventListener('click', () => {
-    const dk = runDateInput.value || dateKey(new Date());
+    const dk = runDateInput.value || DayLib.effectiveDateKey();
     const dist = parseFloat(runDistanceInput.value);
     const dur = parseFloat(runDurationInput.value);
     if (!dist || dist <= 0 || !dur || dur <= 0) { alert('Enter a distance and duration first.'); return; }
@@ -4232,7 +4259,7 @@ img, video, canvas, svg { max-width: 100%; }
     runDistanceInput.value = ''; runDurationInput.value = ''; runPaceDisplay.value = '';
     runNotesInput.value = ''; selectedEffort = null;
     document.querySelectorAll('.run-effort-pill').forEach((p) => p.classList.remove('active'));
-    runDateInput.value = dateKey(new Date());
+    runDateInput.value = DayLib.effectiveDateKey();
   });
 
   runRender();
@@ -4385,7 +4412,7 @@ img, video, canvas, svg { max-width: 100%; }
       // shifts to the previous local day west of UTC (see todaySplit()'s
       // comment in the script above). Comparing the strings directly is
       // exact and avoids that trap entirely.
-      const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 21);
+      const cutoff = DayLib.parseDateKey(DayLib.effectiveDateKey()); cutoff.setDate(cutoff.getDate() - 21);
       const cutoffKey = dateKey(cutoff);
       let state = {}, doneDays = {};
       try { state = (window.PoCoach && window.PoCoach.getState()) || {}; } catch (e) {}
@@ -4398,7 +4425,7 @@ img, video, canvas, svg { max-width: 100%; }
           let totalSets = 0; const exSet = new Set();
           Object.keys(state.logs || {}).forEach((exId) => {
             (state.logs[exId] || []).forEach((log) => {
-              if (log.date && dateKey(new Date(log.date)) === dk) { totalSets++; exSet.add(exId); }
+              if (log.date && DayLib.effectiveDateKey(new Date(log.date)) === dk) { totalSets++; exSet.add(exId); }
             });
           });
           return { date: dk, totalSets, exerciseCount: exSet.size };
