@@ -72,6 +72,19 @@
     dayEndTime: '00:00',
     timezone: 'auto',
     categoryWeights: { habits: 40, training: 20, nutrition: 20, water: 10, dailyStack: 10 },
+    // Deliberate, explicit exception to "one shared day-end everywhere"
+    // (see this file's own header): main.html's "Today's Score" circle
+    // reads THIS value instead of dayEndTime above, while every other
+    // consumer (Training, Calendar, Cronometer, Habits, Daily Stack)
+    // keeps using dayEndTime exactly as before, untouched. Defaults to
+    // the same value as dayEndTime so the two agree until the user
+    // explicitly sets the score card's cutoff differently in General
+    // Settings. This module doesn't enforce the distinction itself —
+    // it's just a second, unrelated field in the same profile object;
+    // main.html's score engine is what actually builds a profile
+    // override using this value instead of dayEndTime when it calls
+    // effectiveDateKey().
+    scoreCardDayEndTime: '00:00',
   };
 
   function loadProfile() {

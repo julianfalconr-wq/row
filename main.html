@@ -1132,6 +1132,11 @@ body::after {
 
       <div class="set-section">
         <h4>Category Weights (Daily Score)</h4>
+        <div class="field gs-field" style="margin-bottom:14px">
+          <label>Today's Score circle — day ends at</label>
+          <input type="time" id="gsScoreCardDayEndTime" value="00:00">
+          <div class="gs-habits-note" style="margin-top:6px">Only affects the "Today's Score" circle and its Habits mini-gauge — separate from the app-wide "Day ends at" above, which Training/Calendar/Cronometer/Habits/Daily Stack all still use unchanged.</div>
+        </div>
         <div class="gs-weight-row"><label for="gsWeightHabits">Habits</label><input type="number" id="gsWeightHabits" min="0" max="100"></div>
         <div class="gs-weight-row"><label for="gsWeightTraining">Training</label><input type="number" id="gsWeightTraining" min="0" max="100"></div>
         <div class="gs-weight-row"><label for="gsWeightNutrition">Nutrition</label><input type="number" id="gsWeightNutrition" min="0" max="100"></div>
@@ -2554,10 +2559,21 @@ document.addEventListener('DOMContentLoaded', function () {
     return out;
   }
 
-  const todayActive = DayLib.effectiveDateKey();
-  const todayPlain = DayLib.effectiveDateKey();
+  // Phase A exception (deliberate, see daylib.js's DEFAULT_PROFILE
+  // comment): the score card uses its OWN day-end time
+  // (scoreCardDayEndTime), not the app-wide one every other page
+  // uses — same timezone, only dayEndTime overridden. Everything else
+  // in this file (Goals, Calendar, above) still calls
+  // DayLib.effectiveDateKey() with no override at all, i.e. the
+  // app-wide setting, completely unaffected by this.
+  const generalProfile = DayLib.loadProfile();
+  const scoreCardProfile = Object.assign({}, generalProfile, {
+    dayEndTime: generalProfile.scoreCardDayEndTime || generalProfile.dayEndTime,
+  });
+  const todayActive = DayLib.effectiveDateKey(null, scoreCardProfile);
+  const todayPlain = DayLib.effectiveDateKey(null, scoreCardProfile);
   const weekMondayActive = mondayOfKey(todayActive);
-  const weekMondayPlain = mondayOfKey(todayPlain); // matches gym.html's thisWeekMondayKey() (also DayLib-based now)
+  const weekMondayPlain = mondayOfKey(todayPlain); // matches gym.html's thisWeekMondayKey() in SHAPE only — gym.html itself still uses the app-wide cutoff, this is the score-card-specific week
 
   function getSecret() { try { return localStorage.getItem('dashboard:secret') || ''; } catch (e) { return ''; } }
 
@@ -3094,6 +3110,7 @@ document.addEventListener('DOMContentLoaded', function () {
     $('gsTimezone').innerHTML = '<option value="auto">Auto-detect</option>';
     populateTimezoneOptions(profile.timezone);
     $('gsDayEndTime').value = profile.dayEndTime || '00:00';
+    $('gsScoreCardDayEndTime').value = profile.scoreCardDayEndTime || profile.dayEndTime || '00:00';
     Object.keys(gsWeightIds).forEach((k) => { $(gsWeightIds[k]).value = (profile.categoryWeights && profile.categoryWeights[k] != null) ? profile.categoryWeights[k] : 0; });
     updateWeightSum();
     $('generalSettingsModalBg').classList.add('show');
@@ -3115,6 +3132,7 @@ document.addEventListener('DOMContentLoaded', function () {
     if (!updateWeightSum()) { alert('Category weights must sum to 100.'); return; }
     const settings = {
       dayEndTime: $('gsDayEndTime').value || '00:00',
+      scoreCardDayEndTime: $('gsScoreCardDayEndTime').value || '00:00',
       timezone: $('gsTimezone').value || 'auto',
       categoryWeights: {},
     };
