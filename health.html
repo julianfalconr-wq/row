@@ -174,13 +174,28 @@ main {
   display: flex; align-items: center; justify-content: space-between;
   gap: 10px; margin-bottom: 16px;
 }
-.crono-date-select {
-  background: var(--bg-input);
-  border: 1px solid var(--border);
-  color: var(--text-primary);
-  font-family: inherit; font-size: 13px; font-weight: 600;
-  padding: 8px 12px; border-radius: 10px; outline: none;
-  max-width: 200px;
+/* Shared history-navigation pattern (Phase E) — back/forward one day
+   at a time plus a plain date label ("Today" / "Yesterday" / a short
+   date), no jump-to-date picker. Deliberately generic class names
+   (not .crono-*) since this exact same block is meant to be copied
+   verbatim into every other section this phase touches (Habits,
+   Training, Water, Daily Stack) so the pattern reads identically
+   everywhere rather than drifting per page. */
+.day-nav { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.day-nav-btn {
+  flex-shrink: 0; width: 30px; height: 30px; border-radius: 8px;
+  background: transparent; border: 1px solid var(--border-strong);
+  color: var(--text-tertiary); cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: color 0.15s, border-color 0.15s;
+}
+.day-nav-btn:hover { color: var(--text-primary); border-color: var(--text-tertiary); }
+.day-nav-btn:disabled { opacity: 0.35; cursor: default; }
+.day-nav-btn:disabled:hover { color: var(--text-tertiary); border-color: var(--border-strong); }
+.day-nav-label {
+  min-width: 0; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: inherit; font-size: 13px; font-weight: 700; color: var(--text-primary);
+  padding: 0 4px;
 }
 .crono-settings-btn {
   flex-shrink: 0;
@@ -1016,7 +1031,15 @@ main {
 
       <div id="cronoContent" style="display:none">
         <div class="crono-header">
-          <select id="cronoDateSelect" class="crono-date-select"></select>
+          <div class="day-nav">
+            <button type="button" class="day-nav-btn" id="cronoDayPrev" aria-label="Previous day">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg>
+            </button>
+            <span class="day-nav-label" id="cronoDayLabel">Today</span>
+            <button type="button" class="day-nav-btn" id="cronoDayNext" aria-label="Next day">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+            </button>
+          </div>
           <div class="crono-header-actions">
             <a href="cronometer.html" class="crono-settings-btn" aria-label="Sync Cronometer data"><i data-lucide="refresh-cw" class="crono-settings-icon"></i></a>
             <button id="cronoSettingsBtn" class="crono-settings-btn" type="button" aria-label="Configure targets"><i data-lucide="settings" class="crono-settings-icon"></i></button>
@@ -1706,7 +1729,9 @@ document.addEventListener('DOMContentLoaded', function () {
 
   const emptyEl   = document.getElementById('cronoEmpty');
   const contentEl = document.getElementById('cronoContent');
-  const dateSel   = document.getElementById('cronoDateSelect');
+  const dayPrevBtn  = document.getElementById('cronoDayPrev');
+  const dayNextBtn  = document.getElementById('cronoDayNext');
+  const dayLabelEl  = document.getElementById('cronoDayLabel');
   const settingsBtn = document.getElementById('cronoSettingsBtn');
 
   const ringFill = document.getElementById('cronoRingFill');
@@ -1725,7 +1750,42 @@ document.addEventListener('DOMContentLoaded', function () {
   ringFill.setAttribute('stroke-dashoffset', RING_C);
 
   let data = null;      // { rows, headers }
+  let availableDates = []; // dates with actual synced Cronometer rows, newest first
   let targets = Crono.loadTargets();
+
+  // ---------- history navigation (Phase E) — same day-by-day pattern
+  // used across Habits/Training/Water/Daily Stack. Defaults to today
+  // (via DayLib, app-wide day-end — this is NOT the score-card-only
+  // override from main.html's Phase A) rather than the most-recently-
+  // SYNCED date like the old dropdown did, so "today" here always means
+  // the same thing it does everywhere else in the app — including
+  // showing a graceful empty state if today just hasn't synced yet,
+  // instead of silently substituting an older day's numbers unlabeled. ----------
+  let viewDateKey = DayLib.effectiveDateKey();
+  function addDaysToKey(dateKey, n) {
+    const d = DayLib.parseDateKey(dateKey);
+    d.setDate(d.getDate() + n);
+    return DayLib.plainDateKey(d);
+  }
+  function formatDayLabel(dateKey) {
+    const todayKey = DayLib.effectiveDateKey();
+    if (dateKey === todayKey) return 'Today';
+    if (dateKey === addDaysToKey(todayKey, -1)) return 'Yesterday';
+    return DayLib.parseDateKey(dateKey).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+  }
+  function updateDayNavUI() {
+    dayLabelEl.textContent = formatDayLabel(viewDateKey);
+    dayNextBtn.disabled = viewDateKey >= DayLib.effectiveDateKey();
+  }
+  dayPrevBtn.addEventListener('click', () => {
+    viewDateKey = addDaysToKey(viewDateKey, -1);
+    renderForDate(viewDateKey);
+  });
+  dayNextBtn.addEventListener('click', () => {
+    if (viewDateKey >= DayLib.effectiveDateKey()) return;
+    viewDateKey = addDaysToKey(viewDateKey, 1);
+    renderForDate(viewDateKey);
+  });
 
   function fmtNum(n) {
     if (n == null) return '—';
@@ -1760,6 +1820,30 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
   function renderForDate(dateKey) {
+    updateDayNavUI();
+    // A day with no synced Cronometer rows at all (nothing exported/
+    // synced for it yet, e.g. today before this morning's sync, or any
+    // past day that was just never logged) is NOT the same as "you ate
+    // 0 of everything" — sumNutrientsForDate can't tell the difference
+    // itself (it always returns 0 for an unmatched metric), so that
+    // distinction has to be made here, same graceful-no-data convention
+    // as every other auto-sourced category in this app.
+    const hasData = availableDates.indexOf(dateKey) !== -1;
+    energySub.textContent = formatDayLabel(dateKey) + (hasData ? '' : ' — no data synced');
+    if (!hasData) {
+      scoreVal.textContent = '—';
+      ringFill.setAttribute('stroke-dashoffset', RING_C);
+      ringFill.style.stroke = '';
+      ringPct.textContent = '—';
+      energyVal.textContent = '—';
+      energyTarget.textContent = '—';
+      macrosEl.innerHTML = '<div class="crono-empty-metrics">No Cronometer data synced for this day</div>';
+      microsEl.innerHTML = '';
+      otherEl.innerHTML = '';
+      otherWrap.style.display = 'none';
+      return;
+    }
+
     const totals = Crono.sumNutrientsForDate(data.rows, data.headers, dateKey, targets);
     totals.supplements = Crono.getStackCompletionForDate(dateKey);
     const { score } = Crono.computeScore(totals, targets);
@@ -1775,7 +1859,6 @@ document.addEventListener('DOMContentLoaded', function () {
     ringPct.textContent = energyPct + '%';
     energyVal.textContent = fmtNum(energyVal_);
     energyTarget.textContent = (energyMetric.min || '—') + '–' + (energyMetric.max || '—');
-    energySub.textContent = dateKey;
 
     macrosEl.innerHTML = '';
     microsEl.innerHTML = '';
@@ -1802,8 +1885,8 @@ document.addEventListener('DOMContentLoaded', function () {
       return;
     }
     data = { rows: result.rows, headers: result.headers };
-    const dates = Crono.listAvailableDates(data.rows, data.headers);
-    if (!dates.length) {
+    availableDates = Crono.listAvailableDates(data.rows, data.headers);
+    if (!availableDates.length) {
       emptyEl.style.display = 'block';
       contentEl.style.display = 'none';
       return;
@@ -1811,12 +1894,9 @@ document.addEventListener('DOMContentLoaded', function () {
     emptyEl.style.display = 'none';
     contentEl.style.display = 'block';
 
-    dateSel.innerHTML = dates.map((d) => '<option value="' + d + '">' + d + '</option>').join('');
-    dateSel.value = dates[0];
-    renderForDate(dates[0]);
+    viewDateKey = DayLib.effectiveDateKey();
+    renderForDate(viewDateKey);
   }
-
-  dateSel.addEventListener('change', () => renderForDate(dateSel.value));
 
   // ---------- settings modal ----------
   const modalBg = document.getElementById('cronoModalBg');
@@ -1912,7 +1992,7 @@ document.addEventListener('DOMContentLoaded', function () {
     targets = { metrics };
     Crono.saveTargets(targets);
     closeModal();
-    if (data && dateSel.value) renderForDate(dateSel.value);
+    if (data) renderForDate(viewDateKey);
   });
 
   loadAndRender();
