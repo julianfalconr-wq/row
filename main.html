@@ -2,6 +2,13 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<!-- Not deferred, on purpose, and first — before even the theme
+     script below: lock.js must hide the page and decide whether to
+     show a PIN screen BEFORE anything else renders. See lock.js's
+     own header comment for the full reasoning (same load-order
+     lesson as daylib.js/RowIcons, applied to something that actually
+     needs to block, not just be ready in time). -->
+<script src="lock.js"></script>
 <script>
 (function () {
   try {
@@ -1139,6 +1146,14 @@ body::after {
         <h4>Habits &amp; Points</h4>
         <div class="gs-habits-note">The manual habit list and each habit's point value (Level 2 of the daily score) are managed on their own screen.</div>
         <a href="habits.html" class="whoop-mini-btn">Manage Habits →</a>
+      </div>
+
+      <div class="set-divider"></div>
+
+      <div class="set-section">
+        <h4>App Lock</h4>
+        <div class="gs-habits-note">A casual PIN, not real security — just enough to stop a glance at an unlocked phone. See lock.js if you're curious exactly what it does and doesn't protect against.</div>
+        <button type="button" class="whoop-mini-btn" id="gsChangePinBtn">Change PIN</button>
       </div>
 
       <div class="save-btn-row">
@@ -3086,6 +3101,15 @@ document.addEventListener('DOMContentLoaded', function () {
   $('generalSettingsGearBtn').addEventListener('click', openGeneralSettings);
   $('generalSettingsCloseBtn').addEventListener('click', () => $('generalSettingsModalBg').classList.remove('show'));
   $('generalSettingsModalBg').addEventListener('click', (e) => { if (e.target.id === 'generalSettingsModalBg') $('generalSettingsModalBg').classList.remove('show'); });
+  // window.RowLock (lock.js) is defined at that script's top level,
+  // which — being a blocking script at the very top of <head> — always
+  // runs before this page's own DOMContentLoaded handler, so it's
+  // already available here regardless of listener registration order.
+  $('gsChangePinBtn').addEventListener('click', () => {
+    if (!window.RowLock) return;
+    $('generalSettingsModalBg').classList.remove('show');
+    window.RowLock.changePin();
+  });
   Object.values(gsWeightIds).forEach((id) => $(id).addEventListener('input', updateWeightSum));
   $('generalSettingsSaveBtn').addEventListener('click', async () => {
     if (!updateWeightSum()) { alert('Category weights must sum to 100.'); return; }

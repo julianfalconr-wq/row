@@ -15,6 +15,13 @@ Contact: rowan.wisere@gmail.com
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<!-- Not deferred, on purpose, and first — before even the theme
+     script below: lock.js must hide the page and decide whether to
+     show a PIN screen BEFORE anything else renders. See lock.js's
+     own header comment for the full reasoning (same load-order
+     lesson as daylib.js/RowIcons, applied to something that actually
+     needs to block, not just be ready in time). -->
+<script src="lock.js"></script>
 <script>
 (function () {
   try {

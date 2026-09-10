@@ -2,6 +2,13 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<!-- Not deferred, on purpose, and first — before even the theme
+     script below: lock.js must hide the page and decide whether to
+     show a PIN screen BEFORE anything else renders. See lock.js's
+     own header comment for the full reasoning (same load-order
+     lesson as daylib.js/RowIcons, applied to something that actually
+     needs to block, not just be ready in time). -->
+<script src="lock.js"></script>
 <script>
 (function () {
   try {
@@ -16,7 +23,6 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
-<script src="lock.js" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="sync.js" defer></script>
 <script src="https://unpkg.com/lucide@1.43.0/dist/umd/lucide.js" defer></script>
