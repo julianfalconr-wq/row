@@ -181,6 +181,13 @@ body::after {
 .entry-btn.active { background: linear-gradient(180deg, var(--btn-primary-a), var(--btn-primary-b)); color: var(--btn-primary-text); border-color: transparent; }
 .entry-btn.na-btn { color: var(--text-tertiary); font-weight: 600; }
 .entry-btn.na-btn.active { background: var(--text-tertiary); color: var(--surface-2); }
+.entry-num-input {
+  width: 52px; height: 30px; text-align: center; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--inset-bg); color: var(--text-primary);
+  font-family: inherit; font-size: 13px; font-weight: 700; -moz-appearance: textfield;
+}
+.entry-num-input::-webkit-outer-spin-button, .entry-num-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.entry-num-input:disabled { opacity: 0.4; }
 
 /* habit list editor */
 .habit-config-row {
@@ -193,12 +200,19 @@ body::after {
   width: 100%; background: var(--inset-bg); border: 1px solid var(--line); color: var(--text-primary);
   font-family: inherit; font-size: 13px; padding: 8px 10px; border-radius: 8px; outline: none; margin-bottom: 6px;
 }
-.habit-config-meta-row { display: flex; gap: 6px; }
-.habit-config-meta-row select, .habit-config-meta-row input[type="number"] {
+/* flex-wrap so manual_numeric's extra goal-stepper + unit fields (on
+   top of the type select + points input every row already has) wrap
+   to a second line on narrow screens instead of overflowing — same
+   fix as gym.html's day-type tab row (Phase B). */
+.habit-config-meta-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.habit-config-meta-row select, .habit-config-meta-row input[type="number"], .habit-config-meta-row input[type="text"] {
   background: var(--inset-bg); border: 1px solid var(--line); color: var(--text-primary);
   font-family: inherit; font-size: 11.5px; padding: 6px 8px; border-radius: 7px; outline: none;
 }
 .habit-config-meta-row input[type="number"] { width: 60px; -moz-appearance: textfield; }
+.hc-numeric-goal { display: inline-flex; align-items: center; gap: 4px; }
+.hc-numeric-goal .habit-config-icon-btn { width: 22px; height: 22px; font-size: 11px; }
+.hc-numeric-goal input.hc-goal { width: 40px !important; text-align: center; }
 .habit-config-actions { display: flex; flex-direction: column; gap: 4px; flex-shrink: 0; }
 .habit-config-icon-btn {
   width: 26px; height: 26px; border-radius: 6px; border: 1px solid var(--line);
@@ -365,6 +379,11 @@ document.addEventListener('DOMContentLoaded', function () {
   // (daylib.js is the one exception, being pure date math). ----------
   function manualHabitFraction(habit, entryVal) {
     if (habit.type === 'manual_count2') return Math.max(0, Math.min(2, Number(entryVal) || 0)) / 2;
+    if (habit.type === 'manual_numeric') {
+      const goal = Number(habit.goal) || 0;
+      if (goal <= 0) return 0;
+      return Math.max(0, Math.min(1, (Number(entryVal) || 0) / goal));
+    }
     return entryVal ? 1 : 0;
   }
   function weekOccurrenceCount(habitId, entriesByDate, fromKey, toKey) {
@@ -421,6 +440,14 @@ document.addEventListener('DOMContentLoaded', function () {
         [0, 1, 2].map((n) => '<button type="button" class="entry-btn count-btn' + (v === n ? ' active' : '') + '" data-v="' + n + '">' + n + '</button>').join('') +
         '<button type="button" class="entry-btn na-btn' + (na ? ' active' : '') + '" data-v="na">N/A</button></div>';
     }
+    if (h.type === 'manual_numeric') {
+      const v = na ? '' : (existing && existing.value != null ? existing.value : '');
+      return '<div class="entry-habit-controls" data-habit="' + h.id + '" data-type="numeric">' +
+        '<button type="button" class="entry-btn num-btn" data-v="dec">−</button>' +
+        '<input type="number" class="entry-num-input" inputmode="decimal" min="0" placeholder="0" value="' + escapeHtml(String(v)) + '"' + (na ? ' disabled' : '') + '>' +
+        '<button type="button" class="entry-btn num-btn" data-v="inc">+</button>' +
+        '<button type="button" class="entry-btn na-btn' + (na ? ' active' : '') + '" data-v="na">N/A</button></div>';
+    }
     const v = na ? null : (existing ? existing.value : null);
     return '<div class="entry-habit-controls" data-habit="' + h.id + '" data-type="binary">' +
       '<button type="button" class="entry-btn bin-btn' + (v === true ? ' active' : '') + '" data-v="true">Yes</button>' +
@@ -430,7 +457,7 @@ document.addEventListener('DOMContentLoaded', function () {
   function renderNightlyEntry() {
     const existingEntry = entriesByDate[todayActive] || {};
     const html = (currentHabitConfig.habits || []).map((h) => {
-      const label = h.type === 'zero_tolerance' ? escapeHtml(h.label) + ' <small>Zero tolerance</small>' : (h.type === 'weekly_cap' ? escapeHtml(h.label) + ' <small>Cap: ' + h.weeklyCap + '/week</small>' : escapeHtml(h.label));
+      const label = h.type === 'zero_tolerance' ? escapeHtml(h.label) + ' <small>Zero tolerance</small>' : (h.type === 'weekly_cap' ? escapeHtml(h.label) + ' <small>Cap: ' + h.weeklyCap + '/week</small>' : (h.type === 'manual_numeric' ? escapeHtml(h.label) + ' <small>Goal: ' + (h.goal || 0) + (h.unit ? ' ' + escapeHtml(h.unit) : '') + '</small>' : escapeHtml(h.label)));
       return '<div class="entry-habit-row" data-row="' + h.id + '"><span class="entry-habit-label">' + label + '</span>' + habitControlHtml(h, existingEntry[h.id]) + '</div>';
     }).join('');
     $('nightlyEntryList').innerHTML = html;
@@ -438,6 +465,22 @@ document.addEventListener('DOMContentLoaded', function () {
       row.addEventListener('click', (e) => {
         const btn = e.target.closest('button');
         if (!btn) return;
+        if (row.dataset.type === 'numeric') {
+          const input = row.querySelector('.entry-num-input');
+          const naBtn = row.querySelector('.na-btn');
+          if (btn.dataset.v === 'na') {
+            const turningOn = !naBtn.classList.contains('active');
+            naBtn.classList.toggle('active', turningOn);
+            input.disabled = turningOn;
+            return;
+          }
+          naBtn.classList.remove('active');
+          input.disabled = false;
+          const cur = input.value === '' ? 0 : (Number(input.value) || 0);
+          if (btn.dataset.v === 'inc') input.value = String(cur + 1);
+          else if (btn.dataset.v === 'dec') input.value = String(Math.max(0, cur - 1));
+          return;
+        }
         row.querySelectorAll('button').forEach((b) => b.classList.remove('active'));
         btn.classList.add('active');
       });
@@ -447,6 +490,14 @@ document.addEventListener('DOMContentLoaded', function () {
     const entries = {};
     $('nightlyEntryList').querySelectorAll('.entry-habit-controls').forEach((row) => {
       const habitId = row.dataset.habit;
+      if (row.dataset.type === 'numeric') {
+        const naBtn = row.querySelector('.na-btn');
+        if (naBtn && naBtn.classList.contains('active')) { entries[habitId] = { na: true }; return; }
+        const input = row.querySelector('.entry-num-input');
+        if (!input || input.value === '') return; // left unanswered — stays "unlogged"
+        entries[habitId] = { value: Number(input.value) || 0 };
+        return;
+      }
       const activeBtn = row.querySelector('button.active');
       if (!activeBtn) return; // left unanswered — stays "unlogged"
       if (activeBtn.dataset.v === 'na') { entries[habitId] = { na: true }; return; }
@@ -472,10 +523,20 @@ document.addEventListener('DOMContentLoaded', function () {
   // ---------- manage habits ----------
   let settingsDraft = null;
   function typeFieldsHtml(h) {
-    if (h.type !== 'weekly_cap') return '';
-    return '<input type="number" class="wc-cap" min="0" value="' + (h.weeklyCap || 0) + '" title="Weekly cap" style="width:44px">' +
-      '<input type="number" class="wc-weekpen" min="0" value="' + (h.weeklyPenaltyPoints || 0) + '" title="Weekly penalty" style="width:44px">' +
-      '<input type="number" class="wc-daypen" min="0" value="' + (h.perExtraDayPenaltyPoints || 0) + '" title="Per extra day penalty" style="width:44px">';
+    if (h.type === 'weekly_cap') {
+      return '<input type="number" class="wc-cap" min="0" value="' + (h.weeklyCap || 0) + '" title="Weekly cap" style="width:44px">' +
+        '<input type="number" class="wc-weekpen" min="0" value="' + (h.weeklyPenaltyPoints || 0) + '" title="Weekly penalty" style="width:44px">' +
+        '<input type="number" class="wc-daypen" min="0" value="' + (h.perExtraDayPenaltyPoints || 0) + '" title="Per extra day penalty" style="width:44px">';
+    }
+    if (h.type === 'manual_numeric') {
+      return '<span class="hc-numeric-goal" title="Mi meta diaria (daily goal)">' +
+        '<button type="button" class="habit-config-icon-btn hc-goal-dec">−</button>' +
+        '<input type="number" class="hc-goal" min="0" value="' + (h.goal != null ? h.goal : 1) + '" style="width:40px">' +
+        '<button type="button" class="habit-config-icon-btn hc-goal-inc">+</button>' +
+        '</span>' +
+        '<input type="text" class="hc-unit" value="' + escapeHtml(h.unit || '') + '" placeholder="Unidad" style="width:70px">';
+    }
+    return '';
   }
   function renderHabitSettingsList() {
     const html = settingsDraft.habits.map((h, i) => {
@@ -484,7 +545,7 @@ document.addEventListener('DOMContentLoaded', function () {
         '<input type="text" class="habit-config-label-input hc-label" value="' + escapeHtml(h.label) + '">' +
         '<div class="habit-config-meta-row">' +
         '<select class="hc-type">' +
-        ['manual_binary', 'manual_count2', 'zero_tolerance', 'weekly_cap'].map((t) => '<option value="' + t + '"' + (t === h.type ? ' selected' : '') + '>' + t + '</option>').join('') +
+        ['manual_binary', 'manual_count2', 'manual_numeric', 'zero_tolerance', 'weekly_cap'].map((t) => '<option value="' + t + '"' + (t === h.type ? ' selected' : '') + '>' + t + '</option>').join('') +
         '</select>' +
         '<input type="number" class="hc-points" min="0" value="' + h.points + '" title="Points" style="width:50px">' +
         '<span class="hc-typefields">' + typeFieldsHtml(h) + '</span>' +
@@ -507,6 +568,8 @@ document.addEventListener('DOMContentLoaded', function () {
       const cap = row.querySelector('.wc-cap'); if (cap) h.weeklyCap = Number(cap.value) || 0;
       const wp = row.querySelector('.wc-weekpen'); if (wp) h.weeklyPenaltyPoints = Number(wp.value) || 0;
       const dp = row.querySelector('.wc-daypen'); if (dp) h.perExtraDayPenaltyPoints = Number(dp.value) || 0;
+      const goal = row.querySelector('.hc-goal'); if (goal) h.goal = Number(goal.value) || 0;
+      const unit = row.querySelector('.hc-unit'); if (unit) h.unit = unit.value.trim();
     });
   }
   $('habitConfigList').addEventListener('click', (e) => {
@@ -520,6 +583,10 @@ document.addEventListener('DOMContentLoaded', function () {
       const [h] = settingsDraft.habits.splice(idx, 1); settingsDraft.habits.splice(idx + 1, 0, h); renderHabitSettingsList();
     } else if (e.target.closest('.hc-del')) {
       settingsDraft.habits.splice(idx, 1); renderHabitSettingsList();
+    } else if (e.target.closest('.hc-goal-inc')) {
+      settingsDraft.habits[idx].goal = (Number(settingsDraft.habits[idx].goal) || 0) + 1; renderHabitSettingsList();
+    } else if (e.target.closest('.hc-goal-dec')) {
+      settingsDraft.habits[idx].goal = Math.max(0, (Number(settingsDraft.habits[idx].goal) || 0) - 1); renderHabitSettingsList();
     }
   });
   $('habitConfigList').addEventListener('change', (e) => {
