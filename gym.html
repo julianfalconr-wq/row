@@ -427,23 +427,33 @@ img, video, canvas, svg { max-width: 100%; }
   background: rgba(255,255,255,0.04);
   border: 1px solid var(--border);
   border-radius: 12px; padding: 4px; gap: 3px;
+  /* With few tabs (the common case: 2-3 gyms/day-types) flex-basis:0%
+     below still splits them evenly across the full row, unchanged from
+     before. But a routine with 5+ custom day types (e.g. Push/Pull/Legs/
+     Explosiveness/Mobility) no longer has room for that even split once
+     each tab's min-width floor (below) is hit — rather than keep shrinking
+     tabs into unreadable slivers, the row scrolls horizontally so every
+     tab stays at a legible minimum width and is still one swipe away. */
+  overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none;
 }
+.po-seg-control::-webkit-scrollbar { display: none; }
 .po-seg-btn {
-  flex: 1; padding: 10px 8px; border: none; background: transparent;
+  /* flex-basis:0% + grow:1 (unchanged from the old `flex:1`) still splits
+     tabs evenly when they fit; flex-shrink:0 + min-width below is what's
+     new — instead of compressing tabs past readability, they hold this
+     floor and the row scrolls (see .po-seg-control) once they no longer
+     fit. */
+  flex: 1 0 0%; min-width: 76px;
+  padding: 10px 8px; border: none; background: transparent;
   color: var(--text-3); border-radius: 8px;
   font-family: inherit; font-size: 12.5px; font-weight: 600;
   cursor: pointer; transition: background 0.15s, color 0.15s;
   -webkit-tap-highlight-color: transparent;
   /* Custom day types (e.g. "Explosiveness", "Movility" from the routine
-     editor) are single long words that can't wrap — without this, once
-     there are enough tabs that flex:1 shrinks each button below its
-     text's natural width, the label overflows the button's box and
-     visually runs into the next tab, even though the container's own
-     `gap` is still applied underneath. This used to only be fixed inside
-     the max-width:480px media query below, so it broke on anything wider.
-     Truncating with an ellipsis keeps every tab's visible gap intact
-     regardless of viewport width or how many/long the day types are. */
-  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+     editor) are single long words that can't wrap — an exceptionally
+     long name still won't fit even at this min-width, so it truncates
+     with an ellipsis instead of stretching the tab or the row. */
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .po-seg-btn:hover { color: var(--text-2); background: rgba(255,255,255,0.04); }
 .po-seg-btn.active {
@@ -930,12 +940,14 @@ img, video, canvas, svg { max-width: 100%; }
   /* Cards — tighter padding so content has room */
   .card { padding: 16px 14px; margin-bottom: 12px; }
 
-  /* Gym / Day segmented controls — truncation itself now lives in the
-     base .po-seg-btn rule above (it applies at every width); just the
-     tighter mobile sizing stays here. */
+  /* Gym / Day segmented controls — truncation and the scroll-when-crowded
+     behavior itself now live in the base .po-seg-control/.po-seg-btn
+     rules above (they apply at every width); just the tighter mobile
+     sizing stays here, including a slightly smaller min-width to match
+     the tighter padding/font. */
   .po-seg-row { gap: 8px; }
   .po-seg-control { padding: 3px; gap: 2px; }
-  .po-seg-btn { padding: 9px 6px; font-size: 12px; }
+  .po-seg-btn { padding: 9px 6px; font-size: 12px; min-width: 68px; }
 
   /* Exercise picker */
   .po-exercise-bar { gap: 6px; }
