@@ -322,6 +322,47 @@ img, video, canvas, svg { max-width: 100%; }
 .tp-plan-item-value { font-size: 13.5px; font-weight: 700; color: var(--text-1); }
 .tp-plan-item-desc { font-size: 12px; color: var(--text-3); line-height: 1.4; }
 .tp-today-text { font-size: 15px; font-weight: 600; color: var(--text-1); line-height: 1.5; }
+
+/* Shared history-navigation pattern (Phase E) — identical rules to
+   health.html's Cronometer section and habits.html, same generic class
+   names on purpose so the pattern reads identically everywhere. */
+.day-nav { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.day-nav-btn {
+  flex-shrink: 0; width: 30px; height: 30px; border-radius: 8px;
+  background: transparent; border: 1px solid var(--border-strong);
+  color: var(--text-3); cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: color 0.15s, border-color 0.15s;
+}
+.day-nav-btn:hover { color: var(--text-1); border-color: var(--text-3); }
+.day-nav-btn:disabled { opacity: 0.35; cursor: default; }
+.day-nav-btn:disabled:hover { color: var(--text-3); border-color: var(--border-strong); }
+.day-nav-label {
+  min-width: 0; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: inherit; font-size: 13px; font-weight: 700; color: var(--text-1);
+  padding: 0 4px;
+}
+
+/* ----- Training History (Phase E) — read-only day-by-day view of that
+   day's actual logged Strength sets + Running sessions. Deliberately
+   separate from the exercise-centric live-logging UI below (which stays
+   exercise-scoped and always implicitly "today", unchanged) and from
+   "Today's session"/"This week's objectives" above (AI-recommendation
+   cards, out of scope for this phase). ----- */
+.th-empty { font-size: 13px; color: var(--text-3); line-height: 1.5; }
+.th-ex-group { margin-bottom: 12px; }
+.th-ex-group:last-child { margin-bottom: 0; }
+.th-ex-name { font-size: 13px; font-weight: 700; color: var(--text-1); margin-bottom: 4px; }
+.th-set-row {
+  display: flex; justify-content: space-between; font-size: 12.5px; color: var(--text-2);
+  padding: 4px 0; border-bottom: 1px solid var(--border);
+}
+.th-set-row:last-child { border-bottom: none; }
+.th-run-row {
+  display: flex; justify-content: space-between; align-items: baseline; font-size: 12.5px; color: var(--text-2);
+  padding: 6px 0; border-top: 1px dashed var(--border); margin-top: 8px;
+}
+.th-run-label { font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-3); }
 .tp-today-sub { font-size: 11.5px; color: var(--text-3); margin-top: 8px; }
 
 /* ----- Running log ----- */
@@ -1581,6 +1622,25 @@ img, video, canvas, svg { max-width: 100%; }
     </div>
     <div class="tp-today-text" id="ttText">Tap refresh for today's pick.</div>
     <div class="tp-today-sub" id="ttSub"></div>
+  </div>
+
+  <!-- Training History (Phase E) — read-only, shows that day's actual
+       logged Strength sets + Running sessions, reusing state.logs /
+       runEntries exactly as already stored. Visible regardless of which
+       tab (Strength/Running) is active below. -->
+  <div class="card" id="trainingHistoryCard">
+    <div class="tp-card-head">
+      <div class="day-nav" id="trainingDayNav">
+        <button type="button" class="day-nav-btn" id="trainingDayPrev" aria-label="Previous day">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <span class="day-nav-label" id="trainingDayLabel">Today</span>
+        <button type="button" class="day-nav-btn" id="trainingDayNext" aria-label="Next day">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
+      </div>
+    </div>
+    <div id="trainingHistoryBody"></div>
   </div>
 
   <div id="strengthPanel" class="training-panel active">
@@ -4231,6 +4291,85 @@ img, video, canvas, svg { max-width: 100%; }
     reload: () => { runEntries = runLoad(); runRender(); },
     getEntries: () => runEntries.slice(),
   };
+
+  // ---------- Training History (Phase E) — read-only day-by-day view of
+  // that day's actual logged Strength sets + Running sessions. Reuses
+  // state.logs exactly as renderTodaySetsForEx() (Strength side) already
+  // filters it by date, generalized across every exercise instead of
+  // just the currently-selected one — via window.PoCoach.getState(),
+  // the same cross-IIFE accessor already used elsewhere in this file
+  // (Strength's `state` and this block's `runEntries` live in two
+  // separate top-level IIFEs with no shared scope, so this is the
+  // established pattern, not a new one).
+  //
+  // READ-ONLY, not editable, unlike Habits' day-nav: Strength logging
+  // feeds the Rx (coaching) recommendation engine, which assumes
+  // chronological, "most recent = actual last performance" data —
+  // letting this view edit arbitrary past entries risks that
+  // assumption and creeps into Training's AI recommendation logic,
+  // which this phase is explicitly not supposed to touch. Editing a
+  // past set already has a separate, exercise-scoped delete affordance
+  // in the History panel further down (unchanged); this card is purely
+  // for browsing, not a second editing surface for the same data. ----------
+  let trainingViewDateKey = DayLib.effectiveDateKey();
+  const trainingDayPrevBtn = $$('trainingDayPrev');
+  const trainingDayNextBtn = $$('trainingDayNext');
+  const trainingDayLabelEl = $$('trainingDayLabel');
+  function trainingAddDays(dateKeyStr, n) {
+    const d = DayLib.parseDateKey(dateKeyStr);
+    d.setDate(d.getDate() + n);
+    return DayLib.plainDateKey(d);
+  }
+  function trainingFormatDayLabel(dateKeyStr) {
+    const todayKey = DayLib.effectiveDateKey();
+    if (dateKeyStr === todayKey) return 'Today';
+    if (dateKeyStr === trainingAddDays(todayKey, -1)) return 'Yesterday';
+    return DayLib.parseDateKey(dateKeyStr).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+  }
+  function renderTrainingHistory() {
+    trainingDayLabelEl.textContent = trainingFormatDayLabel(trainingViewDateKey);
+    trainingDayNextBtn.disabled = trainingViewDateKey >= DayLib.effectiveDateKey();
+
+    const pcState = (window.PoCoach && window.PoCoach.getState()) || {};
+    const exercises = Array.isArray(pcState.exercises) ? pcState.exercises : [];
+    const logs = pcState.logs || {};
+    const u = pcState.units || 'kg';
+
+    let html = '';
+    exercises.forEach((ex) => {
+      // Same date-matching idiom as renderTodaySetsForEx() (Strength
+      // side): round-trip through a real Date + DayLib, never slice the
+      // ISO string directly (that reads back the wrong local day west
+      // of UTC — the exact bug class this file's date handling was
+      // audited for).
+      const sets = (logs[ex.id] || []).filter((l) => DayLib.effectiveDateKey(new Date(l.date)) === trainingViewDateKey);
+      if (!sets.length) return;
+      html += '<div class="th-ex-group"><div class="th-ex-name">' + escapeHtml(ex.name) + '</div>' +
+        sets.map((l, i) => {
+          const val = ex.bw ? (l.reps + ' reps') : (l.weight + u + ' × ' + l.reps);
+          return '<div class="th-set-row"><span>Set ' + (i + 1) + '</span><span>' + escapeHtml(val) + '</span></div>';
+        }).join('') + '</div>';
+    });
+
+    runEntries.filter((r) => r && r.dateKey === trainingViewDateKey).forEach((r) => {
+      const pace = runFmtPace(r.distanceKm, r.durationMin);
+      html += '<div class="th-run-row"><span><span class="th-run-label">Running</span><br>' +
+        r.distanceKm + ' km · ' + r.durationMin + ' min · ' + pace + '</span>' +
+        (r.effort != null ? '<span>RPE ' + r.effort + '</span>' : '') + '</div>';
+    });
+
+    $$('trainingHistoryBody').innerHTML = html || '<div class="th-empty">Nothing logged this day.</div>';
+  }
+  trainingDayPrevBtn.addEventListener('click', () => {
+    trainingViewDateKey = trainingAddDays(trainingViewDateKey, -1);
+    renderTrainingHistory();
+  });
+  trainingDayNextBtn.addEventListener('click', () => {
+    if (trainingViewDateKey >= DayLib.effectiveDateKey()) return;
+    trainingViewDateKey = trainingAddDays(trainingViewDateKey, 1);
+    renderTrainingHistory();
+  });
+  renderTrainingHistory();
 
   // ---- Log form ----
   let selectedEffort = null;
