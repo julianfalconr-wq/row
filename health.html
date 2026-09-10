@@ -431,6 +431,7 @@ main {
 }
 
 .stack-head { margin-bottom: 12px; }
+#stackDayNav { margin: 4px 0 8px; }
 .sf-eyebrow {
   font-family: var(--font-mono);
   font-size: 11px; font-weight: 600;
@@ -990,6 +991,15 @@ main {
 
     <div class="stack-head">
       <div class="sf-eyebrow">Daily stack</div>
+      <div class="day-nav" id="stackDayNav">
+        <button type="button" class="day-nav-btn" id="stackDayPrev" aria-label="Previous day">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <span class="day-nav-label" id="stackDayLabel">Today</span>
+        <button type="button" class="day-nav-btn" id="stackDayNext" aria-label="Next day">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
+      </div>
       <div class="sf-title">Tap each as you take it</div>
       <div class="stack-progress-text" id="stackProgressText">— / — taken today · resets at day-end</div>
     </div>
@@ -1310,7 +1320,28 @@ main {
     { name: 'Chaga', dose: '1–2g', window: 'morning', note: 'Antioxidant and immune', icon: '🍄', aliases: ['chaga'] },
   ];
 
-  let todayKey = `stack:taken:${getActiveDate()}`;
+  // ---------- history navigation (Phase E) — same day-by-day pattern as
+  // Cronometer/Habits/Training: back/forward arrows only, defaults to
+  // today via DayLib (getActiveDate(), already the app-wide setting —
+  // see its own comment above), forward disabled at today. Editable for
+  // any day, same reasoning as Habits: stack:taken:<date> already
+  // supports arbitrary dates with zero extra work, nothing here depends
+  // on chronological order the way Training's Rx engine does, and
+  // there's no competing edit surface elsewhere for this data. ----------
+  let viewDateKey = getActiveDate();
+  let cachedTodayKey = viewDateKey;
+  function stackTakenKeyFor(dateKeyStr) { return `stack:taken:${dateKeyStr}`; }
+  function addDaysToKey(dateKeyStr, n) {
+    const d = DayLib.parseDateKey(dateKeyStr);
+    d.setDate(d.getDate() + n);
+    return DayLib.plainDateKey(d);
+  }
+  function formatDayLabel(dateKeyStr) {
+    const todayKeyNow = getActiveDate();
+    if (dateKeyStr === todayKeyNow) return 'Today';
+    if (dateKeyStr === addDaysToKey(todayKeyNow, -1)) return 'Yesterday';
+    return DayLib.parseDateKey(dateKeyStr).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+  }
 
   function getItems() {
     const storedVersion = storeGet('stack:version');
@@ -1324,8 +1355,9 @@ main {
     return stored;
   }
   function setItems(items) { storeSet('stack:items', items); }
-  function getTaken() { return storeGet(todayKey) || {}; }
-  function setTaken(map) { storeSet(todayKey, map); }
+  function getTakenFor(dateKeyStr) { return storeGet(stackTakenKeyFor(dateKeyStr)) || {}; }
+  function getTaken() { return getTakenFor(viewDateKey); }
+  function setTaken(map) { storeSet(stackTakenKeyFor(viewDateKey), map); }
   function getLow() { return storeGet('stack:low') || []; }
   function setLow(arr) { storeSet('stack:low', arr); }
 
@@ -1372,13 +1404,18 @@ main {
   }
 
   function render() {
+    document.getElementById('stackDayLabel').textContent = formatDayLabel(viewDateKey);
+    document.getElementById('stackDayNext').disabled = viewDateKey >= getActiveDate();
+
     const items = getItems();
     const taken = getTaken();
     const low = getLow();
     const totalCount = items.length;
     const takenCount = items.filter(i => taken[i.id]).length;
-    document.getElementById('stackProgressText').textContent =
-      `${takenCount} / ${totalCount} taken today · resets at ${formatDayEndTime()}`;
+    const isToday = viewDateKey === getActiveDate();
+    document.getElementById('stackProgressText').textContent = isToday
+      ? `${takenCount} / ${totalCount} taken today · resets at ${formatDayEndTime()}`
+      : `${takenCount} / ${totalCount} taken ${formatDayLabel(viewDateKey)}`;
     const pct = totalCount === 0 ? 0 : (takenCount / totalCount) * 100;
     document.getElementById('stackProgressBar').style.width = pct + '%';
 
@@ -1401,7 +1438,12 @@ main {
           <span class="stack-window-time">${win.time}</span>
         </div>`;
 
-      const isPastCutoff = win.cutoffHour !== null && nowHour > win.cutoffHour;
+      // "Missed" is a same-day, time-of-day nudge ("it's past this
+      // window's cutoff and you still haven't taken it") — meaningless
+      // once you're looking at a past day, which is either fully over
+      // or just a plain historical record either way. Only ever applies
+      // when viewing today.
+      const isPastCutoff = isToday && win.cutoffHour !== null && nowHour > win.cutoffHour;
 
       winItems.forEach(item => {
         const isTaken = !!taken[item.id];
@@ -1451,8 +1493,11 @@ main {
   let cachedIssues = [];
 
   function getStackIssues() {
+    // Always TODAY's real taken map, never viewDateKey — this ticker is
+    // a live "you're behind, go take this" nudge, not a historical
+    // record, so it must not follow the history browser around.
     const items = getItems();
-    const taken = getTaken();
+    const taken = getTakenFor(getActiveDate());
     const low = getLow();
     const now = new Date();
     const nowHour = now.getHours() + (now.getMinutes() / 60);
@@ -1706,11 +1751,28 @@ main {
     });
   });
 
+  // If the calendar day rolls over while the page stays open, follow it
+  // forward ONLY if the user was actually viewing today — someone
+  // browsing history at 11:59pm shouldn't get silently bumped to a new
+  // day mid-scroll.
   setInterval(() => {
-    const newKey = `stack:taken:${getActiveDate()}`;
-    if (newKey !== todayKey) todayKey = newKey;
+    const newToday = getActiveDate();
+    if (newToday !== cachedTodayKey) {
+      if (viewDateKey === cachedTodayKey) viewDateKey = newToday;
+      cachedTodayKey = newToday;
+    }
     render();
   }, 60 * 1000);
+
+  document.getElementById('stackDayPrev').addEventListener('click', () => {
+    viewDateKey = addDaysToKey(viewDateKey, -1);
+    render();
+  });
+  document.getElementById('stackDayNext').addEventListener('click', () => {
+    if (viewDateKey >= getActiveDate()) return;
+    viewDateKey = addDaysToKey(viewDateKey, 1);
+    render();
+  });
 
   render();
   startTicker();
