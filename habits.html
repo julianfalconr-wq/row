@@ -188,6 +188,10 @@ body::after {
 }
 .entry-num-input::-webkit-outer-spin-button, .entry-num-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 .entry-num-input:disabled { opacity: 0.4; }
+.entry-auto-badge {
+  font-size: 11px; font-weight: 700; letter-spacing: 0.04em; color: var(--text-tertiary);
+  background: var(--inset-bg); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px;
+}
 
 /* habit list editor */
 .habit-config-row {
@@ -386,6 +390,25 @@ document.addEventListener('DOMContentLoaded', function () {
     }
     return entryVal ? 1 : 0;
   }
+  // auto_threshold habits are evaluated against real data sources
+  // (WHOOP/Cronometer/Water/Training) that only main.html's score
+  // engine actually fetches (see main.html's computeAutoThresholdSources
+  // — reuses data it's already pulling for the other auto-sourced
+  // categories, plus one gated WHOOP read). This page is manual-entry-
+  // only and has no autoSources to pass in, so these always fall
+  // through to the "unlogged" branch below in THIS page's own summary
+  // widget — an intentional, documented gap: the "Today's Score" circle
+  // on main.html is the one place these habits are actually scored.
+  function compareThreshold(value, operator, threshold) {
+    const v = Number(value), t = Number(threshold);
+    switch (operator) {
+      case '>': return v > t;
+      case '<=': return v <= t;
+      case '<': return v < t;
+      case '==': return v === t;
+      default: return v >= t;
+    }
+  }
   function weekOccurrenceCount(habitId, entriesByDate, fromKey, toKey) {
     let n = 0;
     datesFromTo(fromKey, toKey).forEach((k) => {
@@ -394,11 +417,18 @@ document.addEventListener('DOMContentLoaded', function () {
     });
     return n;
   }
-  function scoreManualHabitsForDate(habitConfig, entriesByDate, dateActiveKey, weekMondayActiveKey) {
+  function scoreManualHabitsForDate(habitConfig, entriesByDate, dateActiveKey, weekMondayActiveKey, autoSources) {
     const entry = entriesByDate[dateActiveKey] || null;
     let earned = 0, possible = 0;
     const flags = [];
     (habitConfig.habits || []).forEach((h) => {
+      if (h.type === 'auto_threshold') {
+        const src = (autoSources && autoSources[h.source]) || { available: false };
+        if (!src.available) return; // see compareThreshold's comment above — always the case on this page
+        if (compareThreshold(src.value, h.operator, h.threshold)) { earned += h.points; }
+        possible += h.points;
+        return;
+      }
       const e = entry && entry[h.id];
       if (!e || e.na === true) return; // unlogged or N/A — excluded, not scored 0
       if (h.type === 'weekly_cap') {
@@ -448,6 +478,13 @@ document.addEventListener('DOMContentLoaded', function () {
         '<button type="button" class="entry-btn num-btn" data-v="inc">+</button>' +
         '<button type="button" class="entry-btn na-btn' + (na ? ' active' : '') + '" data-v="na">N/A</button></div>';
     }
+    if (h.type === 'auto_threshold') {
+      // No manual control — see the comment above compareThreshold():
+      // this page can't evaluate auto-sourced habits itself, so there's
+      // nothing to log here. The "Today's Score" circle on main.html
+      // auto-completes it from the real data source instead.
+      return '<span class="entry-auto-badge">Auto-tracked</span>';
+    }
     const v = na ? null : (existing ? existing.value : null);
     return '<div class="entry-habit-controls" data-habit="' + h.id + '" data-type="binary">' +
       '<button type="button" class="entry-btn bin-btn' + (v === true ? ' active' : '') + '" data-v="true">Yes</button>' +
@@ -457,7 +494,7 @@ document.addEventListener('DOMContentLoaded', function () {
   function renderNightlyEntry() {
     const existingEntry = entriesByDate[todayActive] || {};
     const html = (currentHabitConfig.habits || []).map((h) => {
-      const label = h.type === 'zero_tolerance' ? escapeHtml(h.label) + ' <small>Zero tolerance</small>' : (h.type === 'weekly_cap' ? escapeHtml(h.label) + ' <small>Cap: ' + h.weeklyCap + '/week</small>' : (h.type === 'manual_numeric' ? escapeHtml(h.label) + ' <small>Goal: ' + (h.goal || 0) + (h.unit ? ' ' + escapeHtml(h.unit) : '') + '</small>' : escapeHtml(h.label)));
+      const label = h.type === 'zero_tolerance' ? escapeHtml(h.label) + ' <small>Zero tolerance</small>' : (h.type === 'weekly_cap' ? escapeHtml(h.label) + ' <small>Cap: ' + h.weeklyCap + '/week</small>' : (h.type === 'manual_numeric' ? escapeHtml(h.label) + ' <small>Goal: ' + (h.goal || 0) + (h.unit ? ' ' + escapeHtml(h.unit) : '') + '</small>' : (h.type === 'auto_threshold' ? escapeHtml(h.label) + ' <small>' + escapeHtml(AUTO_SOURCE_LABELS[h.source] || h.source || '') + ' ' + escapeHtml(h.operator || '>=') + ' ' + (h.threshold != null ? h.threshold : 0) + '</small>' : escapeHtml(h.label))));
       return '<div class="entry-habit-row" data-row="' + h.id + '"><span class="entry-habit-label">' + label + '</span>' + habitControlHtml(h, existingEntry[h.id]) + '</div>';
     }).join('');
     $('nightlyEntryList').innerHTML = html;
@@ -522,6 +559,24 @@ document.addEventListener('DOMContentLoaded', function () {
 
   // ---------- manage habits ----------
   let settingsDraft = null;
+  // Fixed list of data sources actually available for auto_threshold —
+  // verified against this app's real, already-working reads before
+  // being offered here (see Phase D report): WHOOP sleep/recovery read
+  // the same /api/whoop-data the app already uses elsewhere (read-only,
+  // date-checked against today so a stale cached record can't silently
+  // count); Cronometer protein/calories are per-metric fractions out of
+  // the same sync already powering the Nutrition category; Water and
+  // Training reuse the same localStorage-backed categories main.html's
+  // score engine already computes. Nothing here is a new, unverified
+  // data path.
+  const AUTO_SOURCE_LABELS = {
+    whoop_sleep: 'WHOOP Sleep %',
+    whoop_recovery: 'WHOOP Recovery %',
+    crono_protein: 'Cronometer Protein %',
+    crono_calories: 'Cronometer Calories %',
+    water: 'Water Completion %',
+    training: 'Training Session Completed',
+  };
   function typeFieldsHtml(h) {
     if (h.type === 'weekly_cap') {
       return '<input type="number" class="wc-cap" min="0" value="' + (h.weeklyCap || 0) + '" title="Weekly cap" style="width:44px">' +
@@ -536,6 +591,17 @@ document.addEventListener('DOMContentLoaded', function () {
         '</span>' +
         '<input type="text" class="hc-unit" value="' + escapeHtml(h.unit || '') + '" placeholder="Unidad" style="width:70px">';
     }
+    if (h.type === 'auto_threshold') {
+      const source = h.source || 'water';
+      const op = h.operator || '>=';
+      return '<select class="at-source">' +
+        Object.keys(AUTO_SOURCE_LABELS).map((k) => '<option value="' + k + '"' + (k === source ? ' selected' : '') + '>' + escapeHtml(AUTO_SOURCE_LABELS[k]) + '</option>').join('') +
+        '</select>' +
+        '<select class="at-op">' +
+        ['>=', '>', '<=', '<', '=='].map((o) => '<option value="' + o + '"' + (o === op ? ' selected' : '') + '>' + o + '</option>').join('') +
+        '</select>' +
+        '<input type="number" class="at-threshold" value="' + (h.threshold != null ? h.threshold : 80) + '" title="Threshold" style="width:50px">';
+    }
     return '';
   }
   function renderHabitSettingsList() {
@@ -545,7 +611,7 @@ document.addEventListener('DOMContentLoaded', function () {
         '<input type="text" class="habit-config-label-input hc-label" value="' + escapeHtml(h.label) + '">' +
         '<div class="habit-config-meta-row">' +
         '<select class="hc-type">' +
-        ['manual_binary', 'manual_count2', 'manual_numeric', 'zero_tolerance', 'weekly_cap'].map((t) => '<option value="' + t + '"' + (t === h.type ? ' selected' : '') + '>' + t + '</option>').join('') +
+        ['manual_binary', 'manual_count2', 'manual_numeric', 'zero_tolerance', 'weekly_cap', 'auto_threshold'].map((t) => '<option value="' + t + '"' + (t === h.type ? ' selected' : '') + '>' + t + '</option>').join('') +
         '</select>' +
         '<input type="number" class="hc-points" min="0" value="' + h.points + '" title="Points" style="width:50px">' +
         '<span class="hc-typefields">' + typeFieldsHtml(h) + '</span>' +
@@ -570,6 +636,9 @@ document.addEventListener('DOMContentLoaded', function () {
       const dp = row.querySelector('.wc-daypen'); if (dp) h.perExtraDayPenaltyPoints = Number(dp.value) || 0;
       const goal = row.querySelector('.hc-goal'); if (goal) h.goal = Number(goal.value) || 0;
       const unit = row.querySelector('.hc-unit'); if (unit) h.unit = unit.value.trim();
+      const source = row.querySelector('.at-source'); if (source) h.source = source.value;
+      const op = row.querySelector('.at-op'); if (op) h.operator = op.value;
+      const threshold = row.querySelector('.at-threshold'); if (threshold) h.threshold = Number(threshold.value) || 0;
     });
   }
   $('habitConfigList').addEventListener('click', (e) => {
