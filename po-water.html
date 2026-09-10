@@ -33,6 +33,14 @@ Contact: rowan.wisere@gmail.com
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0a0a0b">
 <title>Water Coach</title>
+<!-- Not deferred, on purpose (matches gym.html's, main.html's, and
+     health.html's daylib.js tag exactly) — see daylib.js's own header
+     comment. This page's main script is a bare synchronous inline
+     <script> below (not DOMContentLoaded-wrapped), so daylib.js must
+     already be loaded and window.DayLib set BEFORE that script runs —
+     exactly the load-order lesson this project has already been
+     caught by twice (gym.html, then again for lock.js). -->
+<script src="daylib.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="sync.js" defer></script>
 <script src="https://unpkg.com/lucide@1.43.0/dist/umd/lucide.js" defer></script>
@@ -114,19 +122,27 @@ html, body {
 .shell { max-width: 720px; margin: 0 auto; padding: max(24px, env(safe-area-inset-top)) 16px 80px; }
 
 /* ----- Top day pill + header ----- */
-.day-pill {
-  display: inline-flex; align-items: center; gap: 8px;
-  padding: 6px 12px;
-  background: rgba(255,255,255,0.04);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  color: var(--text-2);
-  font-family: var(--font-mono);
-  font-size: 11px; font-weight: 700; letter-spacing: 0.10em;
-  text-transform: uppercase; margin-bottom: 10px;
-  -webkit-tap-highlight-color: transparent;
+/* Shared history-navigation pattern (Phase E) — identical rules to
+   health.html's Cronometer/Daily Stack sections, gym.html's Training
+   History, and habits.html, same generic class names on purpose.
+   Replaces the old static, non-interactive .day-pill (kept the same
+   margin-bottom for identical page-top positioning). */
+.day-nav { display: flex; align-items: center; gap: 4px; min-width: 0; margin-bottom: 10px; }
+.day-nav-btn {
+  flex-shrink: 0; width: 30px; height: 30px; border-radius: 8px;
+  background: transparent; border: 1px solid var(--border-strong);
+  color: var(--text-3); cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: color 0.15s, border-color 0.15s;
 }
-.day-pill .day-sep { color: var(--text-4); }
+.day-nav-btn:hover { color: var(--text-1); border-color: var(--text-3); }
+.day-nav-btn:disabled { opacity: 0.35; cursor: default; }
+.day-nav-btn:disabled:hover { color: var(--text-3); border-color: var(--border-strong); }
+.day-nav-label {
+  min-width: 0; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: inherit; font-size: 13px; font-weight: 700; color: var(--text-1);
+  padding: 0 4px;
+}
 
 .header {
   display: flex; align-items: center; justify-content: space-between;
@@ -489,9 +505,15 @@ html, body {
 
 <div class="shell">
 
-  <button class="day-pill" id="dayPill" type="button">
-    <span id="dayPillLabel">—</span>
-  </button>
+  <div class="day-nav" id="waterDayNav">
+    <button type="button" class="day-nav-btn" id="waterDayPrev" aria-label="Previous day">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg>
+    </button>
+    <span class="day-nav-label" id="dayPillLabel">—</span>
+    <button type="button" class="day-nav-btn" id="waterDayNext" aria-label="Next day">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+    </button>
+  </div>
 
   <div class="header">
     <h1 class="title" id="appTitle">Water Coach</h1>
@@ -738,14 +760,51 @@ html, body {
   let state = loadState();
   $('appTitle').textContent = CONFIG.appTitle || 'Water Coach';
 
-  // Helpers
-  function dateKey(d) {
-    return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+  // Helpers — migrated from a local plain-local-midnight dateKey() to
+  // the shared day-boundary utility (daylib.js), same migration already
+  // done for gym.html/main.html/health.html: this file's "today" now
+  // respects the app-wide "day ends at" setting instead of always
+  // meaning literal local midnight. A day-end of 00:00 (the default)
+  // makes this a no-op — see daylib.js's own header comment on that
+  // default-safety property.
+  function todayKey() { return DayLib.effectiveDateKey(); }
+  // For a Date that already represents a RESOLVED calendar day (e.g.
+  // DayLib.parseDateKey()'s result, shifted by whole days) — never for
+  // a raw "now" moment, which still carries its current time-of-day and
+  // needs effectiveDateKey()'s day-end shifting instead. Kept local
+  // (not read via window.DayLib.addDaysKey, since DayLib doesn't expose
+  // one) — same small helper this project has now written per-file
+  // several times over (habits.html, health.html, gym.html) rather than
+  // adding a new shared export for it.
+  function addDaysToKey(dateKeyStr, n) {
+    const d = DayLib.parseDateKey(dateKeyStr);
+    d.setDate(d.getDate() + n);
+    return DayLib.plainDateKey(d);
   }
-  function todayKey() { return dateKey(new Date()); }
-  function todayCount() { return state.logs[todayKey()] || 0; }
+  // ---------- history navigation (Phase E) — same day-by-day pattern as
+  // Cronometer/Habits/Training/Daily Stack: back/forward arrows only,
+  // defaults to today via todayKey() above, forward disabled at today.
+  // Editable for any day, same reasoning as Habits/Daily Stack: logs is
+  // just a per-day counter with no adaptive logic depending on
+  // chronological order, so retroactively fixing a forgotten day's
+  // count is low-risk and genuinely useful. todayCount()/setTodayCount()
+  // below now read/write whichever day is being VIEWED, not always
+  // literal today — every existing call site (the +/- buttons, history,
+  // sparkline) automatically becomes day-nav-aware as a result, no
+  // separate call sites needed. ----------
+  let viewDateKey = todayKey();
+  function formatDayLabel(dateKeyStr) {
+    const todayK = todayKey();
+    if (dateKeyStr === todayK) return 'Today';
+    if (dateKeyStr === addDaysToKey(todayK, -1)) return 'Yesterday';
+    const d = DayLib.parseDateKey(dateKeyStr);
+    const dows = ['SUN','MON','TUE','WED','THU','FRI','SAT'];
+    const mons = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+    return dows[d.getDay()] + ', ' + mons[d.getMonth()] + ' ' + d.getDate();
+  }
+  function todayCount() { return state.logs[viewDateKey] || 0; }
   function setTodayCount(n) {
-    const k = todayKey();
+    const k = viewDateKey;
     if (n <= 0) delete state.logs[k];
     else state.logs[k] = n;
     saveState();
@@ -803,11 +862,18 @@ html, body {
   // RENDER
   // ============================================================
   function renderDayPill() {
-    const d = new Date();
-    const dows = ['SUN','MON','TUE','WED','THU','FRI','SAT'];
-    const mons = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
-    $('dayPillLabel').textContent = dows[d.getDay()] + ', ' + mons[d.getMonth()] + ' ' + d.getDate();
+    $('dayPillLabel').textContent = formatDayLabel(viewDateKey);
+    $('waterDayNext').disabled = viewDateKey >= todayKey();
   }
+  $('waterDayPrev').addEventListener('click', () => {
+    viewDateKey = addDaysToKey(viewDateKey, -1);
+    renderAll();
+  });
+  $('waterDayNext').addEventListener('click', () => {
+    if (viewDateKey >= todayKey()) return;
+    viewDateKey = addDaysToKey(viewDateKey, 1);
+    renderAll();
+  });
 
   function renderWater() {
     const calc = computeTargetMl();
@@ -815,7 +881,8 @@ html, body {
     const count = todayCount();
     const unitName = unitLabelPlural();
 
-    $('waterUnitLabel').textContent = unitName.toUpperCase() + ' DRANK TODAY';
+    const isToday = viewDateKey === todayKey();
+    $('waterUnitLabel').textContent = unitName.toUpperCase() + ' DRANK ' + (isToday ? 'TODAY' : formatDayLabel(viewDateKey).toUpperCase());
     $('waterNum').textContent = count;
     $('waterTarget').textContent = '/ ' + targetUnits;
     $('waterPlusLabel').textContent = 'Drank a ' + unitLabelSingular();
@@ -832,9 +899,19 @@ html, body {
     $('waterBarZoneStart').style.left = (65 / 1.5) + '%';
     $('waterBarZoneEnd').style.left   = (100 / 1.5) + '%';
 
-    // Helper text
+    // Helper text — the default phrasing below is live, same-day pacing
+    // advice ("drink one in the next hour", "top up if you train this
+    // evening"), which reads oddly once you're looking at a past day
+    // (nothing to hurry for on a day that's already over). Past days get
+    // plainer, retrospective phrasing instead — same reasoning as Daily
+    // Stack's "missed" styling only applying to today.
     const helper = $('waterHelper');
-    if (count === 0) { helper.textContent = 'Start the day — first one in.'; helper.classList.remove('good'); }
+    if (!isToday) {
+      if (count === 0) { helper.textContent = 'Nothing logged this day.'; helper.classList.remove('good'); }
+      else if (pctRaw < 100) { helper.textContent = count + ' / ' + targetUnits + ' — under target.'; helper.classList.remove('good'); }
+      else { helper.textContent = count + ' / ' + targetUnits + ' — target hit.'; helper.classList.add('good'); }
+    }
+    else if (count === 0) { helper.textContent = 'Start the day — first one in.'; helper.classList.remove('good'); }
     else if (pctRaw < 50) { helper.textContent = 'Behind pace — drink one in the next hour.'; helper.classList.remove('good'); }
     else if (pctRaw < 100) { helper.textContent = (targetUnits - count) + ' to go. Pacing well.'; helper.classList.remove('good'); }
     else if (pctRaw < 130) { helper.textContent = '✓ Target hit — top up if you train this evening.'; helper.classList.add('good'); }
@@ -870,14 +947,18 @@ html, body {
   function renderHistory() {
     const list = $('histList');
     const target = Math.ceil(computeTargetMl().total / unitVolMl());
-    // Last 7 days
+    // Last 7 days leading up to the VIEWED day (not always today — see
+    // the day-nav above), anchored via addDaysToKey() rather than
+    // subtracting from a raw `new Date()` that still carries the
+    // current moment's time-of-day. That distinction only shows up once
+    // day-end isn't midnight: e.g. at 1am with a 2am day-end, "6 days
+    // ago" must still be relative to the still-effectively-yesterday
+    // day, not the raw calendar date the device clock happens to show.
     const days = [];
     for (let i = 6; i >= 1; i--) {
-      const d = new Date();
-      d.setDate(d.getDate() - i);
-      const k = dateKey(d);
+      const k = addDaysToKey(viewDateKey, -i);
       const n = state.logs[k] || 0;
-      days.push({ date: d, key: k, count: n });
+      days.push({ date: DayLib.parseDateKey(k), key: k, count: n });
     }
     list.innerHTML = days.map(({date, count}) => {
       const dows = ['Sun','Mon','Tue','Wed','THU','Fri','Sat'];
@@ -898,9 +979,7 @@ html, body {
     const days = 14;
     const data = [];
     for (let i = days - 1; i >= 0; i--) {
-      const d = new Date();
-      d.setDate(d.getDate() - i);
-      const k = dateKey(d);
+      const k = addDaysToKey(viewDateKey, -i);
       data.push(state.logs[k] || 0);
     }
     const maxVal = Math.max(target, Math.max.apply(null, data)) || 1;
