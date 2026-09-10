@@ -110,6 +110,26 @@ body::after {
 }
 .page { max-width: 700px; margin: 0 auto; }
 .dash-header { margin-bottom: 14px; }
+/* Shared history-navigation pattern (Phase E) — identical rules to
+   health.html's Cronometer section, same generic class names on
+   purpose so the pattern reads identically across every section this
+   phase touches. */
+.day-nav { display: flex; align-items: center; gap: 4px; min-width: 0; margin-bottom: 6px; }
+.day-nav-btn {
+  flex-shrink: 0; width: 28px; height: 28px; border-radius: 8px;
+  background: transparent; border: 1px solid var(--line);
+  color: var(--text-tertiary); cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: color 0.15s, border-color 0.15s;
+}
+.day-nav-btn:hover { color: var(--text-primary); border-color: var(--text-tertiary); }
+.day-nav-btn:disabled { opacity: 0.35; cursor: default; }
+.day-nav-btn:disabled:hover { color: var(--text-tertiary); border-color: var(--line); }
+.day-nav-label {
+  min-width: 0; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: inherit; font-size: 13px; font-weight: 700; color: var(--text-primary);
+  padding: 0 4px;
+}
 .dash-eyebrow {
   font-family: var(--font-mono);
   font-size: 10.5px; font-weight: 800;
@@ -241,7 +261,15 @@ body::after {
 <div class="page">
 
   <div class="dash-header">
-    <div class="dash-eyebrow" id="habitsEyebrow">TODAY'S HABITS</div>
+    <div class="day-nav" id="habitsDayNav">
+      <button type="button" class="day-nav-btn" id="habitsDayPrev" aria-label="Previous day">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg>
+      </button>
+      <span class="day-nav-label" id="habitsDayLabel">Today</span>
+      <button type="button" class="day-nav-btn" id="habitsDayNext" aria-label="Next day">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+      </button>
+    </div>
     <h1 class="dash-title">Habits</h1>
   </div>
 
@@ -256,7 +284,7 @@ body::after {
   </div>
 
   <div class="section">
-    <div class="section-title">Tonight's Habits</div>
+    <div class="section-title" id="entrySectionTitle">Today's Habits</div>
     <div class="gm-card">
       <div id="nightlyEntryList"></div>
       <div class="save-btn-row">
@@ -449,16 +477,68 @@ document.addEventListener('DOMContentLoaded', function () {
   let currentHabitConfig = null;
   let entriesByDate = {};
 
+  // ---------- history navigation (Phase E) — same day-by-day pattern as
+  // Cronometer (health.html): back/forward arrows only, defaults to
+  // today via DayLib.effectiveDateKey() (app-wide setting — NOT
+  // main.html's score-card-only override), forward disabled at today.
+  // Governs BOTH the summary card above and the entry list below, since
+  // they're the same underlying data just displayed two ways. Unlike
+  // Cronometer, this is editable for any day, not just viewable — past
+  // entries are stored exactly the same way as today's (saveDailyHabits
+  // already takes an arbitrary date), so retroactively logging a missed
+  // day falls out for free rather than needing a separate read-only mode. ----------
+  let viewDateKey = todayActive;
+  const dayPrevBtn = $('habitsDayPrev');
+  const dayNextBtn = $('habitsDayNext');
+  const dayLabelEl = $('habitsDayLabel');
+  function formatDayLabel(dateKey) {
+    if (dateKey === todayActive) return 'Today';
+    if (dateKey === addDaysKey(todayActive, -1)) return 'Yesterday';
+    return DayLib.parseDateKey(dateKey).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+  }
+  function updateDayNavUI() {
+    dayLabelEl.textContent = formatDayLabel(viewDateKey);
+    dayNextBtn.disabled = viewDateKey >= todayActive;
+    $('entrySectionTitle').textContent = formatDayLabel(viewDateKey) + "'s Habits";
+  }
+  // Entries are fetched a week at a time (see init()'s existing
+  // Monday-to-today range) because weekly_cap habits need the whole
+  // week-so-far to score correctly — not just the single viewed day.
+  // Reused here so navigating to a day outside the already-loaded range
+  // pulls in its whole week rather than one isolated day.
+  const fetchedRangeDates = new Set();
+  function markFetched(fromKey, toKey) { datesFromTo(fromKey, toKey).forEach((k) => fetchedRangeDates.add(k)); }
+  async function ensureEntriesForDate(dateKey) {
+    if (fetchedRangeDates.has(dateKey)) return;
+    const monday = mondayOfKey(dateKey);
+    const fetched = await fetchDailyHabitsRange(monday, dateKey);
+    Object.assign(entriesByDate, fetched);
+    markFetched(monday, dateKey);
+  }
+  async function goToDate(dateKey) {
+    viewDateKey = dateKey;
+    await ensureEntriesForDate(viewDateKey);
+    updateDayNavUI();
+    renderNightlyEntry();
+    await renderSummary();
+  }
+  dayPrevBtn.addEventListener('click', () => goToDate(addDaysKey(viewDateKey, -1)));
+  dayNextBtn.addEventListener('click', () => {
+    if (viewDateKey >= todayActive) return;
+    goToDate(addDaysKey(viewDateKey, 1));
+  });
+
   async function renderSummary() {
-    const manual = scoreManualHabitsForDate(currentHabitConfig, entriesByDate, todayActive, weekMondayActive);
+    const manual = scoreManualHabitsForDate(currentHabitConfig, entriesByDate, viewDateKey, mondayOfKey(viewDateKey));
     const pct = manual.possible > 0 ? Math.round((manual.earned / manual.possible) * 100) : null;
+    const dayWord = viewDateKey === todayActive ? 'today' : 'that day';
     $('habitsSummaryPct').textContent = pct == null ? '—' : pct + '%';
-    $('habitsSummaryTitle').textContent = pct == null ? 'Nothing logged yet today' : (pct >= 85 ? 'Crushing it' : pct >= 65 ? 'Solid' : pct >= 40 ? 'Room to improve' : 'Rough day');
+    $('habitsSummaryTitle').textContent = pct == null ? ('Nothing logged yet ' + dayWord) : (pct >= 85 ? 'Crushing it' : pct >= 65 ? 'Solid' : pct >= 40 ? 'Room to improve' : 'Rough day');
     const loggedCount = (currentHabitConfig.habits || []).filter((h) => {
-      const e = entriesByDate[todayActive] && entriesByDate[todayActive][h.id];
+      const e = entriesByDate[viewDateKey] && entriesByDate[viewDateKey][h.id];
       return e && e.na !== true;
     }).length;
-    $('habitsSummarySub').textContent = loggedCount + ' of ' + (currentHabitConfig.habits || []).length + ' habits logged today' + (manual.flags.length ? ' · ⚠ ' + manual.flags.join(', ') : '');
+    $('habitsSummarySub').textContent = loggedCount + ' of ' + (currentHabitConfig.habits || []).length + ' habits logged ' + dayWord + (manual.flags.length ? ' · ⚠ ' + manual.flags.join(', ') : '');
   }
 
   // ---------- tonight's entry ----------
@@ -492,7 +572,7 @@ document.addEventListener('DOMContentLoaded', function () {
       '<button type="button" class="entry-btn na-btn' + (na ? ' active' : '') + '" data-v="na">N/A</button></div>';
   }
   function renderNightlyEntry() {
-    const existingEntry = entriesByDate[todayActive] || {};
+    const existingEntry = entriesByDate[viewDateKey] || {};
     const html = (currentHabitConfig.habits || []).map((h) => {
       const label = h.type === 'zero_tolerance' ? escapeHtml(h.label) + ' <small>Zero tolerance</small>' : (h.type === 'weekly_cap' ? escapeHtml(h.label) + ' <small>Cap: ' + h.weeklyCap + '/week</small>' : (h.type === 'manual_numeric' ? escapeHtml(h.label) + ' <small>Goal: ' + (h.goal || 0) + (h.unit ? ' ' + escapeHtml(h.unit) : '') + '</small>' : (h.type === 'auto_threshold' ? escapeHtml(h.label) + ' <small>' + escapeHtml(AUTO_SOURCE_LABELS[h.source] || h.source || '') + ' ' + escapeHtml(h.operator || '>=') + ' ' + (h.threshold != null ? h.threshold : 0) + '</small>' : escapeHtml(h.label))));
       return '<div class="entry-habit-row" data-row="' + h.id + '"><span class="entry-habit-label">' + label + '</span>' + habitControlHtml(h, existingEntry[h.id]) + '</div>';
@@ -544,8 +624,8 @@ document.addEventListener('DOMContentLoaded', function () {
     const btn = $('nightlyEntrySaveBtn');
     btn.disabled = true;
     try {
-      await saveDailyHabits(todayActive, entries);
-      entriesByDate[todayActive] = entries;
+      await saveDailyHabits(viewDateKey, entries);
+      entriesByDate[viewDateKey] = entries;
       $('nightlyEntryConfirm').classList.add('show');
       clearTimeout($('nightlyEntryConfirm')._t);
       $('nightlyEntryConfirm')._t = setTimeout(() => $('nightlyEntryConfirm').classList.remove('show'), 1800);
@@ -693,8 +773,10 @@ document.addEventListener('DOMContentLoaded', function () {
     ]);
     currentHabitConfig = habitConfig;
     entriesByDate = entries;
+    markFetched(weekMondayActive, todayActive);
     settingsDraft = JSON.parse(JSON.stringify(habitConfig));
 
+    updateDayNavUI();
     renderNightlyEntry();
     renderHabitSettingsList();
     await renderSummary();
