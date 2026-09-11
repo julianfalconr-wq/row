@@ -4437,9 +4437,11 @@ img, video, canvas, svg { max-width: 100%; }
   // four of which independently fetch WHOOP data. A refresh failure on any
   // one of them sets this, so the others skip retrying too instead of each
   // hammering /api/whoop-refresh on their own next render/page-load — this
-  // is what was producing repeated 500/401 bursts (this page in particular
-  // auto-fires a WHOOP fetch on every load via generateTodayRecommendation()
-  // below, with no backoff of its own before this fix).
+  // is what was producing repeated 500/401 bursts (this page's own
+  // generateTodayRecommendation() below used to auto-fire a WHOOP fetch on
+  // every load with no backoff of its own before this fix; it's now only
+  // called from the explicit Generate/Refresh button, but the cooldown
+  // still matters for repeated manual clicks and the other three callers).
   const WHOOP_REFRESH_COOLDOWN_KEY = 'whoop_refresh_cooldown_until';
   const WHOOP_REFRESH_COOLDOWN_MS = 20 * 60 * 1000; // 20 minutes
   function isWhoopRefreshCoolingDown() { return Date.now() < (Number(localStorage.getItem(WHOOP_REFRESH_COOLDOWN_KEY)) || 0); }
@@ -4694,14 +4696,16 @@ img, video, canvas, svg { max-width: 100%; }
   // `defer` — this file's own script is a plain synchronous inline
   // block (see this file's header/daylib.js's comment on why), which
   // runs DURING document parsing, before any deferred script has had a
-  // chance to execute. generateTodayRecommendation() runs automatically
-  // on load, and when WHOOP isn't connected there's no network round-
-  // trip ahead of this call to incidentally buy time — confirmed by
-  // testing that padel detection silently came back empty on the very
-  // first automatic call but worked correctly on a manual re-click
-  // moments later. A short bounded poll (not an indefinite wait) fixes
-  // the real race without touching this file's non-DOMContentLoaded
-  // structure.
+  // chance to execute. generateTodayRecommendation() used to run
+  // automatically on every load (see the caching comment above it —
+  // it's now only called from the explicit Generate/Refresh button),
+  // and when WHOOP isn't connected there's no network round-trip ahead
+  // of this call to incidentally buy time — confirmed by testing that
+  // padel detection silently came back empty on that automatic call but
+  // worked correctly on a manual re-click moments later. The same race
+  // is still reachable from a fast manual click right after page load,
+  // so the fix stays: a short bounded poll (not an indefinite wait),
+  // without touching this file's non-DOMContentLoaded structure.
   function waitForGatherTodayContext(timeoutMs) {
     return new Promise((resolve) => {
       const deadline = Date.now() + (timeoutMs || 3000);
@@ -4723,6 +4727,39 @@ img, video, canvas, svg { max-width: 100%; }
       return match ? { padelToday: true, padelEventTitle: match.title } : { padelToday: false, padelEventTitle: null };
     } catch (e) {
       return { padelToday: false, padelEventTitle: null };
+    }
+  }
+
+  // ---------- today's recommendation cache ----------
+  // Was calling api/training.js?mode=today automatically on every page
+  // load/navigation — burning an Anthropic API call every time and
+  // generating a possibly-different recommendation each visit instead
+  // of one stable pick for the day. Now only the explicit
+  // Generate/Refresh button calls the API; page load just shows
+  // whatever's cached for TODAY specifically (DayLib-effective — same
+  // dateKey check Phase 2's "Plan my day" already uses to trust this
+  // same cache entry), or a plain prompt if there's nothing cached yet
+  // today. A cached entry from a previous day is never shown — checked
+  // and discarded, not just left stale in storage.
+  const TODAY_REC_CACHE_KEY = 'po_coach_today_recommendation_v1';
+  function loadCachedTodayRecommendation() {
+    let cached = null;
+    try { cached = JSON.parse(localStorage.getItem(TODAY_REC_CACHE_KEY)); } catch (e) {}
+    if (!cached) return null;
+    if (cached.dateKey !== DayLib.effectiveDateKey() || typeof cached.recommendation !== 'string') {
+      try { localStorage.removeItem(TODAY_REC_CACHE_KEY); } catch (e) {}
+      return null;
+    }
+    return cached;
+  }
+  function showCachedTodayRecommendationOrPrompt() {
+    const cached = loadCachedTodayRecommendation();
+    if (cached) {
+      $$('ttText').textContent = cached.recommendation;
+      $$('ttSub').textContent = cached.sub || '';
+    } else {
+      $$('ttText').textContent = 'Tap refresh for today\'s pick.';
+      $$('ttSub').textContent = '';
     }
   }
 
@@ -4764,16 +4801,27 @@ img, video, canvas, svg { max-width: 100%; }
       const json = await res.json();
       if (!res.ok || !json.ok) throw new Error((json && json.error) || ('HTTP ' + res.status));
 
+      const subText = todayCalendar.padelToday
+        ? ('Padel today (' + todayCalendar.padelEventTitle + ')')
+        : (whoopToday && whoopToday.recoveryPct != null)
+        ? ('Recovery ' + whoopToday.recoveryPct + '%')
+        : (whoopTrend.connected && isWhoopRefreshCoolingDown()
+          ? 'WHOOP needs reconnecting — see the Whoop card on Health'
+          : (plan ? '' : "Tip: generate this week's objectives above for a more specific pick."));
+
       // Cache the real recommendation (not the "generate objectives first"
-      // placeholder — only when `plan` was actually present) so main.html's
+      // placeholder — only when `plan` was actually present) both so a
+      // page reload can show it with zero new API calls (see
+      // showCachedTodayRecommendationOrPrompt above) and so main.html's
       // "Plan my day" feature can reuse this exact, already-padel-aware
       // recommendation instead of recomputing Training's logic in a
       // second place. dateKey lets a reader confirm the cached value is
       // actually from today before trusting it.
       if (plan) {
         try {
-          localStorage.setItem('po_coach_today_recommendation_v1', JSON.stringify({
+          localStorage.setItem(TODAY_REC_CACHE_KEY, JSON.stringify({
             recommendation: json.recommendation,
+            sub: subText,
             dateKey: DayLib.effectiveDateKey(),
             generatedAt: new Date().toISOString(),
           }));
@@ -4781,13 +4829,7 @@ img, video, canvas, svg { max-width: 100%; }
       }
 
       $$('ttText').textContent = json.recommendation;
-      $$('ttSub').textContent = todayCalendar.padelToday
-        ? ('Padel today (' + todayCalendar.padelEventTitle + ')')
-        : (whoopToday && whoopToday.recoveryPct != null)
-        ? ('Recovery ' + whoopToday.recoveryPct + '%')
-        : (whoopTrend.connected && isWhoopRefreshCoolingDown()
-          ? 'WHOOP needs reconnecting — see the Whoop card on Health'
-          : (plan ? '' : "Tip: generate this week's objectives above for a more specific pick."));
+      $$('ttSub').textContent = subText;
     } catch (e) {
       $$('ttText').textContent = 'Could not get a recommendation: ' + (e.message || String(e));
     } finally {
@@ -4795,7 +4837,7 @@ img, video, canvas, svg { max-width: 100%; }
     }
   }
   $$('ttRefreshBtn').addEventListener('click', generateTodayRecommendation);
-  generateTodayRecommendation();
+  showCachedTodayRecommendationOrPrompt();
 })();
 </script>
 
