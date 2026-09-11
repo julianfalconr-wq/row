@@ -1023,6 +1023,23 @@ body::after {
 }
 .gs-habits-note { font-size: 12.5px; color: var(--text-tertiary); margin-bottom: 10px; line-height: 1.5; }
 
+.gs-restrictions-list { display: flex; flex-direction: column; gap: 8px; }
+.gs-restriction-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 10px 12px; background: var(--inset-bg); border: 1px solid var(--line); border-radius: 10px;
+}
+.gs-restriction-main { min-width: 0; }
+.gs-restriction-text { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.gs-restriction-meta { font-size: 11px; color: var(--text-tertiary); margin-top: 2px; }
+.gs-restriction-end-btn {
+  flex-shrink: 0; padding: 7px 12px; border-radius: 8px; border: 1px solid var(--line);
+  background: transparent; color: var(--text-secondary);
+  font-family: inherit; font-size: 11.5px; font-weight: 700; cursor: pointer;
+}
+.gs-restriction-end-btn:hover { color: var(--danger); border-color: var(--danger); }
+.gs-restriction-end-btn:disabled { opacity: 0.5; cursor: default; }
+.gs-restrictions-empty { font-size: 12.5px; color: var(--text-tertiary); font-style: italic; }
+
 /* ===== Modal shell (mirrors index.html's settings modal exactly, so
    both pages' gear-icon modals look identical) ===== */
 .modal-bg {
@@ -1181,6 +1198,14 @@ body::after {
         <h4>Habits &amp; Points</h4>
         <div class="gs-habits-note">The manual habit list and each habit's point value (Level 2 of the daily score) are managed on their own screen.</div>
         <a href="habits.html" class="whoop-mini-btn">Manage Habits →</a>
+      </div>
+
+      <div class="set-divider"></div>
+
+      <div class="set-section">
+        <h4>Active Training Restrictions</h4>
+        <div class="gs-habits-note">Set via the chat ("no running this week", etc.) — respected by this week's objectives, Today's session, and Plan my day. End one early here if it's gone stale before its end date.</div>
+        <div id="gsRestrictionsList" class="gs-restrictions-list"></div>
       </div>
 
       <div class="set-divider"></div>
@@ -2538,6 +2563,21 @@ document.addEventListener('DOMContentLoaded', function () {
     } catch (e) { return null; }
   }
 
+  // Active restrictions (chat's propose_restriction tool, saved via
+  // api/sync-state.js's resource=restrictions) — same fetch-fresh-
+  // every-time helper as gym.html's, duplicated here rather than
+  // shared (separate page, separate closure, matching this project's
+  // established small-per-scope-duplication convention).
+  async function fetchActiveRestrictionsForPlan(todayDateKey) {
+    const secret = getSecret();
+    if (!secret) return [];
+    try {
+      const r = await fetch('/api/sync-state?secret=' + encodeURIComponent(secret) + '&resource=restrictions&asOf=' + encodeURIComponent(todayDateKey));
+      const j = await r.json();
+      return (j && j.ok && Array.isArray(j.restrictions)) ? j.restrictions : [];
+    } catch (e) { return []; }
+  }
+
   // gym.html's Training page caches its last real (padel-aware, per
   // Phase 1) recommendation here after generating one — read it rather
   // than recomputing Training's logic a second time in this file. Only
@@ -2620,6 +2660,7 @@ document.addEventListener('DOMContentLoaded', function () {
       const whoopToday = await fetchRecoveryForPlan();
 
       const todayRecommendation = readCachedTrainingRecommendation(todayDateKey);
+      const restrictions = await fetchActiveRestrictionsForPlan(todayDateKey);
 
       $('planDayStatus').textContent = 'Thinking…';
       const res = await fetch('/api/training?mode=day-plan&secret=' + encodeURIComponent(secret), {
@@ -2631,6 +2672,7 @@ document.addEventListener('DOMContentLoaded', function () {
           fixedEvents,
           sleepTargetHours: DEFAULT_SLEEP_TARGET_HOURS,
           wakeUpTime, bedtime,
+          restrictions,
         }),
       });
       const json = await res.json();
@@ -3487,6 +3529,58 @@ document.addEventListener('DOMContentLoaded', function () {
     el.classList.toggle('is-bad', sum !== 100);
     return sum === 100;
   }
+  // Active restrictions manage list — shows whatever's active as of
+  // today (same asOf-filtered GET this file's "Plan my day" and
+  // gym.html's two AI callers already use), with an "End early" button
+  // per row in case one goes stale before its own ends_on date.
+  // Fetched fresh every time the modal opens rather than cached, same
+  // reasoning as those other callers.
+  async function fetchRestrictionsForSettings() {
+    const secret = getSecret();
+    if (!secret) return [];
+    const todayKey = (typeof window.DayLib !== 'undefined') ? window.DayLib.effectiveDateKey() : null;
+    if (!todayKey) return [];
+    try {
+      const r = await fetch('/api/sync-state?secret=' + encodeURIComponent(secret) + '&resource=restrictions&asOf=' + encodeURIComponent(todayKey));
+      const j = await r.json();
+      return (j && j.ok && Array.isArray(j.restrictions)) ? j.restrictions : [];
+    } catch (e) { return []; }
+  }
+  async function renderRestrictionsList() {
+    const el = $('gsRestrictionsList');
+    el.innerHTML = '<div class="gs-restrictions-empty">Loading…</div>';
+    const restrictions = await fetchRestrictionsForSettings();
+    if (!restrictions.length) { el.innerHTML = '<div class="gs-restrictions-empty">No active restrictions.</div>'; return; }
+    el.innerHTML = restrictions.map((r) => (
+      '<div class="gs-restriction-row" data-id="' + escapeHtml(r.id) + '">' +
+        '<div class="gs-restriction-main">' +
+          '<div class="gs-restriction-text">' + escapeHtml(r.text) + '</div>' +
+          '<div class="gs-restriction-meta">' + (r.scope ? escapeHtml(r.scope) + ' · ' : '') + escapeHtml(r.starts_on) + ' – ' + escapeHtml(r.ends_on) + '</div>' +
+        '</div>' +
+        '<button type="button" class="gs-restriction-end-btn" data-id="' + escapeHtml(r.id) + '">End early</button>' +
+      '</div>'
+    )).join('');
+    el.querySelectorAll('.gs-restriction-end-btn').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const secret = getSecret();
+        if (!secret) return;
+        btn.disabled = true;
+        btn.textContent = 'Ending…';
+        try {
+          const r = await fetch('/api/sync-state?secret=' + encodeURIComponent(secret), {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ resource: 'restrictions', action: 'end', id: btn.dataset.id }),
+          });
+          const j = await r.json();
+          if (!r.ok || !j.ok) throw new Error((j && j.error) || ('HTTP ' + r.status));
+          renderRestrictionsList();
+        } catch (e) {
+          btn.disabled = false;
+          btn.textContent = 'Could not end — retry';
+        }
+      });
+    });
+  }
   function openGeneralSettings() {
     const profile = (typeof window.DayLib !== 'undefined') ? window.DayLib.loadProfile() : { dayEndTime: '00:00', timezone: 'auto', categoryWeights: { habits: 35, training: 20, nutrition: 20, water: 10, dailyStack: 10 } };
     $('gsTimezone').innerHTML = '<option value="auto">Auto-detect</option>';
@@ -3495,6 +3589,7 @@ document.addEventListener('DOMContentLoaded', function () {
     $('gsScoreCardDayEndTime').value = profile.scoreCardDayEndTime || profile.dayEndTime || '00:00';
     Object.keys(gsWeightIds).forEach((k) => { $(gsWeightIds[k]).value = (profile.categoryWeights && profile.categoryWeights[k] != null) ? profile.categoryWeights[k] : 0; });
     updateWeightSum();
+    renderRestrictionsList();
     $('generalSettingsModalBg').classList.add('show');
   }
   $('generalSettingsGearBtn').addEventListener('click', openGeneralSettings);

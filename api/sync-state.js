@@ -82,6 +82,43 @@
 //      caller falls back to daylib.js's DEFAULT_PROFILE)
 // POST /api/sync-state?secret=...  { resource: "general-settings", settings: {...} }
 //   -> upserts habit_config's "general" row
+//
+// -------------------------------------------------------------
+// active_restrictions — lets the chat's propose_restriction tool (see
+// api/chat.js) tell all three training AI features (weekly objectives,
+// Today's session, Plan my day) about a temporary constraint ("no
+// running this week", "no padel — recovering from a knee thing") once,
+// instead of each needing to be told separately. A brand new small
+// table, not folded into habit_config, since its shape (a date-ranged
+// list, not a single blob) doesn't fit that table's id/data/updated_at
+// generic-row model.
+//
+// Requires this NEW table in Supabase (SQL editor) — same as
+// habit_config/daily_habits above, no fallback if it doesn't exist:
+//   create table active_restrictions (
+//     id text primary key,
+//     text text not null,
+//     scope text,
+//     starts_on text not null,
+//     ends_on text not null,
+//     created_at timestamptz not null default now()
+//   );
+//
+// "Active as of" is always a date the CLIENT computed (DayLib.
+// effectiveDateKey()) and passes in — this file has no timezone
+// concept of its own, matching daily-habits' date/from/to params
+// above, so there's no new date-boundary logic to get wrong here.
+//
+// GET  /api/sync-state?secret=...&resource=restrictions&asOf=YYYY-MM-DD
+//   -> { ok:true, restrictions: [{id,text,scope,starts_on,ends_on}, ...] }
+//      only rows where starts_on <= asOf <= ends_on (a plain string
+//      range filter — YYYY-MM-DD sorts and compares correctly as text)
+// POST /api/sync-state?secret=...  { resource: "restrictions", action: "create", restriction: { text, scope, starts_on, ends_on } }
+//   -> { ok:true, restriction: {...} }  (id generated server-side)
+// POST /api/sync-state?secret=...  { resource: "restrictions", action: "end", id: "..." }
+//   -> { ok:true }  deletes the row (ending early — no separate
+//      "ended" state to track, and nothing in this feature reads
+//      restriction history, so a delete is simpler than an update)
 // =============================================================
 
 const ALLOWED_KEYS = ['gym', 'finance', 'dailystack'];
@@ -175,6 +212,38 @@ async function saveDailyHabits(date, entries) {
   if (!r.ok) throw new Error('Supabase write failed: ' + (await r.text()).slice(0, 300));
 }
 
+// ---------- active_restrictions ----------
+function makeRestrictionId() {
+  return 'restr_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+}
+async function getActiveRestrictions(asOf) {
+  const r = await fetch(
+    supabaseUrl('active_restrictions?starts_on=lte.' + encodeURIComponent(asOf) + '&ends_on=gte.' + encodeURIComponent(asOf) + '&select=id,text,scope,starts_on,ends_on&order=starts_on.asc'),
+    { headers: supabaseHeaders() }
+  );
+  if (!r.ok) throw new Error('Supabase read failed: ' + (await r.text()).slice(0, 300));
+  const rows = await r.json();
+  return Array.isArray(rows) ? rows : [];
+}
+async function createRestriction(fields) {
+  const row = { id: makeRestrictionId(), text: fields.text, scope: fields.scope || null, starts_on: fields.starts_on, ends_on: fields.ends_on };
+  const r = await fetch(supabaseUrl('active_restrictions'), {
+    method: 'POST',
+    headers: { ...supabaseHeaders(), Prefer: 'return=representation' },
+    body: JSON.stringify([row]),
+  });
+  if (!r.ok) throw new Error('Supabase write failed: ' + (await r.text()).slice(0, 300));
+  const created = await r.json();
+  return (Array.isArray(created) && created[0]) ? created[0] : row;
+}
+async function endRestriction(id) {
+  const r = await fetch(supabaseUrl('active_restrictions?id=eq.' + encodeURIComponent(id)), {
+    method: 'DELETE',
+    headers: supabaseHeaders(),
+  });
+  if (!r.ok) throw new Error('Supabase delete failed: ' + (await r.text()).slice(0, 300));
+}
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -183,7 +252,7 @@ export default async function handler(req, res) {
 
   const resource = req.query && req.query.resource;
 
-  if (resource === 'habit-config' || resource === 'daily-habits' || resource === 'general-settings') {
+  if (resource === 'habit-config' || resource === 'daily-habits' || resource === 'general-settings' || resource === 'restrictions') {
     if (!checkAuth(req, res)) return;
     if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_KEY) {
       return res.status(500).json({ error: 'missing SUPABASE_URL / SUPABASE_SERVICE_KEY' });
@@ -222,6 +291,41 @@ export default async function handler(req, res) {
           }
           await saveGeneralSettings(settings);
           return res.status(200).json({ ok: true });
+        }
+        return res.status(405).json({ error: 'method not allowed' });
+      }
+
+      if (resource === 'restrictions') {
+        if (req.method === 'GET') {
+          const asOf = req.query && req.query.asOf;
+          if (!asOf || !DATE_RE.test(asOf)) return res.status(400).json({ error: 'asOf (YYYY-MM-DD) is required' });
+          const restrictions = await getActiveRestrictions(asOf);
+          return res.status(200).json({ ok: true, restrictions });
+        }
+        if (req.method === 'POST') {
+          let body = req.body;
+          if (typeof body === 'string') { try { body = JSON.parse(body); } catch (e) { body = {}; } }
+          const action = body && body.action;
+          if (action === 'create') {
+            const rr = body.restriction || {};
+            if (!rr.text || typeof rr.text !== 'string') return res.status(400).json({ error: 'restriction.text is required' });
+            if (!DATE_RE.test(rr.starts_on) || !DATE_RE.test(rr.ends_on)) return res.status(400).json({ error: 'restriction.starts_on/ends_on must be YYYY-MM-DD' });
+            if (rr.ends_on < rr.starts_on) return res.status(400).json({ error: 'ends_on must not be before starts_on' });
+            const created = await createRestriction({
+              text: rr.text.slice(0, 300),
+              scope: typeof rr.scope === 'string' ? rr.scope.slice(0, 50) : null,
+              starts_on: rr.starts_on,
+              ends_on: rr.ends_on,
+            });
+            return res.status(200).json({ ok: true, restriction: created });
+          }
+          if (action === 'end') {
+            const id = body.id;
+            if (!id || typeof id !== 'string') return res.status(400).json({ error: 'id is required' });
+            await endRestriction(id);
+            return res.status(200).json({ ok: true });
+          }
+          return res.status(400).json({ error: 'action must be "create" or "end"' });
         }
         return res.status(405).json({ error: 'method not allowed' });
       }

@@ -19,6 +19,20 @@
 // Gated by DASHBOARD_SECRET, same as every other endpoint here.
 // Requires ANTHROPIC_API_KEY.
 //
+// All three modes below also accept:
+//     restrictions: [{ text, scope }] | undefined,
+//   — the CLIENT fetches whatever's active as of today
+//   (GET /api/sync-state?resource=restrictions&asOf=<DayLib today>)
+//   and forwards it here; this file never talks to Supabase itself,
+//   same "client gathers context, server stays stateless" convention
+//   every other input already follows. Set via the chat's
+//   propose_restriction tool (api/chat.js) + saved through
+//   api/sync-state.js's resource=restrictions. scope "running" or
+//   "strength" is enforced in code (see normalizePlan), not just
+//   requested in the prompt; other scopes rely on the model
+//   respecting buildRestrictionsPromptSection's instructions, same as
+//   how padel is already handled in mode=today.
+//
 // MODE 1 — POST /api/training?mode=plan&secret=...
 //   Generates this week's strength + running objectives.
 //   Body: {
@@ -151,6 +165,47 @@ async function callClaude(apiKey, { system, userContent, maxTokens, effort }) {
 }
 
 // ------------------------------------------------------------
+// Active restrictions (see api/chat.js's propose_restriction tool +
+// api/sync-state.js's resource=restrictions) — shared across all
+// three modes below. The client fetches whatever's active as of
+// today (DayLib-effective) and sends it in the request body, same
+// "client gathers context, this endpoint stays stateless" convention
+// every other input here already follows; this file never talks to
+// Supabase itself.
+// ------------------------------------------------------------
+
+function sanitizeRestrictions(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw.slice(0, 20).map((r) => ({
+    text: typeof (r && r.text) === 'string' ? r.text.slice(0, 300) : '',
+    scope: typeof (r && r.scope) === 'string' ? r.scope.toLowerCase().slice(0, 50) : null,
+  })).filter((r) => r.text);
+}
+function restrictedScopeSet(restrictions) {
+  return new Set((restrictions || []).map((r) => r && r.scope).filter(Boolean));
+}
+// Appended to a system prompt when restrictions are present — kept as
+// hard constraints in the model's instructions AND, where a
+// restriction's scope maps directly onto a structured field (running/
+// strength targets), enforced again in code afterward (see
+// normalizePlan/restrictedScopeSet below) rather than trusting the
+// model's compliance alone.
+function buildRestrictionsPromptSection(restrictions) {
+  if (!restrictions || !restrictions.length) return '';
+  return (
+    'ACTIVE RESTRICTIONS — the user explicitly told you about these via the chat (propose_restriction) and ' +
+    'they are currently in effect; treat them as hard constraints, not soft preferences:\n' +
+    JSON.stringify(restrictions, null, 2) + '\n' +
+    'If a restriction\'s scope is "running", do not include or recommend ANY running today or this week ' +
+    '(interval, long run, or easy volume all included) — treat it as fully off-limits for its duration. If ' +
+    'scope is "strength", do not include or recommend strength training at all. If scope is "padel" or ' +
+    'unset/other, use the restriction\'s own text to judge what it rules out. Never silently ignore an ' +
+    'active restriction, and never suggest working around one creatively (e.g. proposing a "light run" when ' +
+    'running is restricted).\n\n'
+  );
+}
+
+// ------------------------------------------------------------
 // MODE: plan
 // ------------------------------------------------------------
 
@@ -163,7 +218,7 @@ const EQUIPMENT_NOTE =
   'bench press variations, tempo/pause reps, or bodyweight movements to fill gaps). Never suggest ' +
   'exercises that require equipment the user does not have.';
 
-function buildPlanSystemPrompt() {
+function buildPlanSystemPrompt(restrictions) {
   return (
     'You are a training coach generating ONE week of concrete objectives for a personal dashboard. ' +
     'The user does two kinds of training: strength (equipment-limited, see below) and running, with two ' +
@@ -174,6 +229,7 @@ function buildPlanSystemPrompt() {
     'progressively-longer long run building toward and past 10km, and additional easy Zone 2 volume. ' +
     'Do not neglect either goal in favor of the other.\n\n' +
     EQUIPMENT_NOTE + '\n\n' +
+    buildRestrictionsPromptSection(restrictions) +
     'Use the recent history you are given (recent strength session frequency, recent running distances/' +
     'paces/effort, and recent Whoop recovery/strain trends if present) to calibrate — e.g. progress the ' +
     'long run distance gradually past whatever the recent longest run was, don\'t suddenly jump volume, ' +
@@ -199,30 +255,41 @@ function num(v, fallback) {
   return isNaN(n) ? fallback : n;
 }
 
-function normalizePlan(raw) {
+function normalizePlan(raw, restrictions) {
+  const restricted = restrictedScopeSet(restrictions);
   const r = raw || {};
   const strength = r.strength || {};
   const running = r.running || {};
   const interval = running.interval || {};
   const longRun = running.longRun || {};
   const easyVolume = running.easyVolume || {};
+  // Enforced here in code, not just requested in the prompt above — a
+  // hard override to exactly 0 (same pattern as runningRestricted
+  // below), not merely a relaxed floor: an earlier version of this
+  // only dropped the normal Math.max(1, ...) floor to 0 without
+  // actually zeroing a noncompliant model's own number, so a model
+  // that ignored the restriction and returned targetSessions:4 sailed
+  // straight through. Caught by testing a deliberately noncompliant
+  // mocked response before trusting this.
+  const strengthRestricted = restricted.has('strength');
+  const runningRestricted = restricted.has('running');
   return {
     strength: {
-      targetSessions: Math.max(1, Math.round(num(strength.targetSessions, 3))),
+      targetSessions: strengthRestricted ? 0 : Math.max(1, Math.round(num(strength.targetSessions, 3))),
       focus: typeof strength.focus === 'string' ? strength.focus.slice(0, 200) : '',
     },
     running: {
       interval: {
-        targetSessions: Math.max(0, Math.round(num(interval.targetSessions, 1))),
-        targetMinutes: Math.max(0, Math.round(num(interval.targetMinutes, 25))),
+        targetSessions: runningRestricted ? 0 : Math.max(0, Math.round(num(interval.targetSessions, 1))),
+        targetMinutes: runningRestricted ? 0 : Math.max(0, Math.round(num(interval.targetMinutes, 25))),
         description: typeof interval.description === 'string' ? interval.description.slice(0, 300) : '',
       },
       longRun: {
-        targetKm: Math.max(0, num(longRun.targetKm, 8)),
+        targetKm: runningRestricted ? 0 : Math.max(0, num(longRun.targetKm, 8)),
         description: typeof longRun.description === 'string' ? longRun.description.slice(0, 300) : '',
       },
       easyVolume: {
-        targetKm: Math.max(0, num(easyVolume.targetKm, 10)),
+        targetKm: runningRestricted ? 0 : Math.max(0, num(easyVolume.targetKm, 10)),
         description: typeof easyVolume.description === 'string' ? easyVolume.description.slice(0, 300) : '',
       },
     },
@@ -231,29 +298,31 @@ function normalizePlan(raw) {
 }
 
 async function handlePlan(req, res, apiKey, body) {
+  const restrictions = sanitizeRestrictions(body.restrictions);
   const context = {
     recentStrengthSessions: Array.isArray(body.strengthSessions) ? body.strengthSessions.slice(0, 30) : [],
     recentExerciseNames: Array.isArray(body.recentExerciseNames) ? body.recentExerciseNames.slice(0, 30) : [],
     recentRunningSessions: Array.isArray(body.runningSessions) ? body.runningSessions.slice(0, 30) : [],
     whoop: body.whoop && typeof body.whoop === 'object' ? body.whoop : null,
+    activeRestrictions: restrictions,
   };
 
   const text = await callClaude(apiKey, {
-    system: buildPlanSystemPrompt(),
+    system: buildPlanSystemPrompt(restrictions),
     userContent: 'Recent history:\n' + JSON.stringify(context, null, 2),
     maxTokens: 800,
   });
   const parsed = extractJson(text);
   if (!parsed) return res.status(502).json({ ok: false, error: 'Model did not return valid JSON.' });
 
-  return res.status(200).json({ ok: true, plan: normalizePlan(parsed) });
+  return res.status(200).json({ ok: true, plan: normalizePlan(parsed, restrictions) });
 }
 
 // ------------------------------------------------------------
 // MODE: today
 // ------------------------------------------------------------
 
-function buildTodaySystemPrompt() {
+function buildTodaySystemPrompt(restrictions) {
   return (
     'You recommend today\'s training on a personal dashboard. This week\'s plan (weekPlan) always covers ' +
     'BOTH strength and running — evaluate the two independently, then combine whichever pieces are ' +
@@ -297,10 +366,11 @@ function buildTodaySystemPrompt() {
     'padel and low recovery both apply, that is an even stronger case for pure rest, not a reason to ' +
     'reconsider. If todayCalendar is missing or todayCalendar.padelToday is false, ignore padel entirely ' +
     'and reason from WHOOP/strength/running as usual.\n\n' +
+    buildRestrictionsPromptSection(restrictions) +
     'FORMAT — this is the most important rule: the recommendation is a SHORT LABEL, not a paragraph. One ' +
     'line, naming only the split day and/or the run type/distance from this week\'s plan — nothing else. ' +
     'Good examples: "Push", "Push + 5K run", "Push + long run", "10K long run", "Rest — recovery is low", ' +
-    '"Easy 5K + Legs", "Rest — padel today", "Easy walk only — padel today". Bad (never do this): listing individual exercises, sets, reps, or weights; ' +
+    '"Easy 5K + Legs", "Rest — padel today", "Easy walk only — padel today", "Push — running restricted". Bad (never do this): listing individual exercises, sets, reps, or weights; ' +
     'explaining "no prior weights logged, so start conservative"; multi-sentence reasoning. The exercise-' +
     'by-exercise detail for whatever day you name is already visible on the Strength tab itself once the ' +
     'user gets there — your only job is telling them WHICH one(s) to do today, not repeating what\'s ' +
@@ -312,6 +382,7 @@ function buildTodaySystemPrompt() {
 }
 
 async function handleToday(req, res, apiKey, body) {
+  const restrictions = sanitizeRestrictions(body.restrictions);
   const context = {
     weekPlan: body.weekPlan && typeof body.weekPlan === 'object' ? body.weekPlan : null,
     progress: body.progress && typeof body.progress === 'object' ? body.progress : null,
@@ -321,6 +392,7 @@ async function handleToday(req, res, apiKey, body) {
     todayCalendar: body.todayCalendar && typeof body.todayCalendar === 'object'
       ? { padelToday: !!body.todayCalendar.padelToday, padelEventTitle: typeof body.todayCalendar.padelEventTitle === 'string' ? body.todayCalendar.padelEventTitle.slice(0, 200) : null }
       : null,
+    activeRestrictions: restrictions,
   };
 
   if (!context.weekPlan) {
@@ -336,7 +408,7 @@ async function handleToday(req, res, apiKey, body) {
   // this kind of simple, short-output, latency-sensitive task, and lets
   // the model skip thinking entirely on inputs this straightforward.
   const text = await callClaude(apiKey, {
-    system: buildTodaySystemPrompt(),
+    system: buildTodaySystemPrompt(restrictions),
     userContent: 'Context:\n' + JSON.stringify(context, null, 2),
     maxTokens: 800,
     effort: 'low',
@@ -352,7 +424,7 @@ async function handleToday(req, res, apiKey, body) {
 // MODE: day-plan
 // ------------------------------------------------------------
 
-function buildDayPlanSystemPrompt() {
+function buildDayPlanSystemPrompt(restrictions) {
   return (
     'You are planning ONE user\'s day on a personal dashboard, producing a concrete schedule of time ' +
     'blocks that will be created as real Google Calendar events only after the user reviews and explicitly ' +
@@ -381,6 +453,7 @@ function buildDayPlanSystemPrompt() {
     'anything beyond the items above, and lean toward the shorter end of the work block\'s duration; the ' +
     'training recommendation itself is already adjusted for recovery, so do not second-guess it further ' +
     'here.\n\n' +
+    buildRestrictionsPromptSection(restrictions) +
     'Reply with ONLY valid JSON, no markdown fences, no commentary, in exactly this shape:\n' +
     JSON.stringify({
       blocks: [
@@ -429,6 +502,7 @@ async function handleDayPlan(req, res, apiKey, body) {
     return res.status(400).json({ ok: false, error: 'todayDateKey and tomorrowDateKey (YYYY-MM-DD) are required' });
   }
 
+  const restrictions = sanitizeRestrictions(body.restrictions);
   const context = {
     todayDateKey,
     tomorrowDateKey,
@@ -444,10 +518,11 @@ async function handleDayPlan(req, res, apiKey, body) {
     sleepTargetHours: Math.max(4, Math.min(12, numOrNull(body.sleepTargetHours) || 8)),
     wakeUpTime: typeof body.wakeUpTime === 'string' && HHMM_RE.test(body.wakeUpTime) ? body.wakeUpTime : '07:00',
     bedtime: typeof body.bedtime === 'string' && HHMM_RE.test(body.bedtime) ? body.bedtime : '23:00',
+    activeRestrictions: restrictions,
   };
 
   const text = await callClaude(apiKey, {
-    system: buildDayPlanSystemPrompt(),
+    system: buildDayPlanSystemPrompt(restrictions),
     userContent: 'Context:\n' + JSON.stringify(context, null, 2),
     maxTokens: 1500,
   });

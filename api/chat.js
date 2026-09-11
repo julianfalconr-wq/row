@@ -150,6 +150,40 @@ const PROPOSE_CALENDAR_EVENT_TOOL = {
     },
     required: ['summary', 'date', 'startTime', 'endTime'],
   },
+};
+
+// ---------- propose_restriction tool ----------
+// Lets the user tell the chat about a temporary training constraint
+// ("no running this week", "no padel — knee recovery") ONCE and have
+// it apply everywhere instead of repeating it to each feature: saved
+// restrictions are fetched and respected by all three training AI
+// surfaces (api/training.js's mode=plan and mode=today, plus
+// main.html's Plan my day) via the shared active_restrictions table
+// (see api/sync-state.js's resource=restrictions). This endpoint only
+// proposes — same explicit-confirmation pattern as
+// propose_training_objectives/propose_calendar_event, nothing is
+// saved until the user taps Save on the card.
+const PROPOSE_RESTRICTION_TOOL = {
+  name: 'propose_restriction',
+  description:
+    'Propose a temporary training restriction (e.g. "no running this week", "no padel — recovering from a ' +
+    'knee thing") for the user to review. This does NOT save anything by itself — the user sees the ' +
+    'proposal in the chat and explicitly chooses to save it or not. Once saved, this week\'s objectives, ' +
+    'Today\'s session, and Plan my day will all respect it automatically until it expires or the user ends ' +
+    'it early — they do not need to repeat it to each feature separately. Ask clarifying questions first if ' +
+    'the request is vague about WHAT is restricted or for HOW LONG (e.g. "no running" — for how many days? ' +
+    'just this week? until they say otherwise?) — never guess a duration or scope. Resolve relative dates ' +
+    '("this week", "a few days") against TODAY\'S DATA\'s own "date" field, never guess today\'s date.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      text: { type: 'string', description: 'Short human-readable summary, e.g. "No running this week" or "No padel — knee recovery"' },
+      scope: { type: 'string', description: 'One of: running, strength, padel — only when the restriction clearly maps to one of these. Omit entirely for anything else (a general/other restriction) rather than forcing a bad fit.' },
+      starts_on: { type: 'string', description: 'YYYY-MM-DD, usually today' },
+      ends_on: { type: 'string', description: 'YYYY-MM-DD, inclusive — the last day the restriction still applies' },
+    },
+    required: ['text', 'starts_on', 'ends_on'],
+  },
   // Last tool in the tools array -> caches every tool definition up to
   // and including this one (see the prompt-caching note in the handler
   // below). Tool definitions never change between requests, so this is
@@ -213,6 +247,21 @@ function normalizeProposedEvent(raw) {
     date: typeof r.date === 'string' ? r.date.slice(0, 10) : '',
     startTime: typeof r.startTime === 'string' ? r.startTime.slice(0, 5) : '',
     endTime: typeof r.endTime === 'string' ? r.endTime.slice(0, 5) : '',
+  };
+}
+
+// Defensive normalization for propose_restriction, same spirit as the
+// two above — guarantees the frontend always gets the exact
+// {text, scope, starts_on, ends_on} shape api/sync-state.js's
+// resource=restrictions POST (action:"create") expects.
+function normalizeProposedRestriction(raw) {
+  const r = raw || {};
+  const scope = typeof r.scope === 'string' ? r.scope.trim().toLowerCase().slice(0, 50) : '';
+  return {
+    text: typeof r.text === 'string' ? r.text.slice(0, 300) : '',
+    scope: scope || null,
+    starts_on: typeof r.starts_on === 'string' ? r.starts_on.slice(0, 10) : '',
+    ends_on: typeof r.ends_on === 'string' ? r.ends_on.slice(0, 10) : '',
   };
 }
 
@@ -446,6 +495,16 @@ function buildStaticSystemPrompt() {
     'call it speculatively. When you do call it, also say a short summary sentence in your normal reply ' +
     'text (the proposal is shown as its own card with a Create button, so don\'t repeat every detail in ' +
     'prose).\n\n' +
+    'RESTRICTIONS: the user can tell you about a temporary training constraint — an injury, "no running ' +
+    'this week", a padel tournament, anything that should make the OTHER training AI features (this ' +
+    'week\'s objectives, Today\'s session, Plan my day) back off a specific activity for a while. Ask what ' +
+    'exactly is restricted and for how long if either is unclear — never guess a duration or scope. Once ' +
+    'you have both, call propose_restriction with a concrete starts_on/ends_on (resolve relative terms ' +
+    'like "this week" or "a few days" against TODAY\'S DATA\'s own "date" field, never guess today\'s ' +
+    'date). Only set scope to "running", "strength", or "padel" when the restriction clearly maps to one ' +
+    'of those; leave it unset for anything else (e.g. an injury affecting several activities at once) ' +
+    'rather than forcing a bad fit. When you do call it, also say a short summary sentence in your normal ' +
+    'reply text (the proposal is shown as its own card with a Save button).\n\n' +
     'CHARTS: when a chart would clearly help — trends over time, comparisons between days or ' +
     'metrics — you may include, inside your normal reply text, exactly one fenced block like this:\n' +
     '```chart\n' +
@@ -540,7 +599,7 @@ export default async function handler(req, res) {
           max_tokens: 1024,
           system: systemBlocks,
           messages,
-          tools: [{ type: 'memory_20250818', name: 'memory' }, PROPOSE_OBJECTIVES_TOOL, PROPOSE_CALENDAR_EVENT_TOOL],
+          tools: [{ type: 'memory_20250818', name: 'memory' }, PROPOSE_OBJECTIVES_TOOL, PROPOSE_CALENDAR_EVENT_TOOL, PROPOSE_RESTRICTION_TOOL],
         }),
       });
 
@@ -572,6 +631,7 @@ export default async function handler(req, res) {
       // another model turn once a proposal is found.
       let proposedObjectives = null;
       let proposedCalendarEvent = null;
+      let proposedRestriction = null;
       const toolResults = [];
       for (const toolUse of toolUses) {
         if (toolUse.name === 'propose_training_objectives') {
@@ -592,6 +652,15 @@ export default async function handler(req, res) {
           });
           continue;
         }
+        if (toolUse.name === 'propose_restriction') {
+          proposedRestriction = normalizeProposedRestriction(toolUse.input);
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: toolUse.id,
+            content: 'Proposal shown to the user in the chat UI for review. Not saved automatically — only the user can save it.',
+          });
+          continue;
+        }
         const result = await handleMemoryCommand(toolUse.input);
         toolResults.push({
           type: 'tool_result',
@@ -602,11 +671,12 @@ export default async function handler(req, res) {
       }
       messages.push({ role: 'user', content: toolResults });
 
-      if (proposedObjectives || proposedCalendarEvent) {
+      if (proposedObjectives || proposedCalendarEvent || proposedRestriction) {
         const textBlock = (data.content || []).find((b) => b.type === 'text');
         const responseBody = { reply: textBlock ? textBlock.text : '', history: messages };
         if (proposedObjectives) responseBody.proposedObjectives = proposedObjectives;
         if (proposedCalendarEvent) responseBody.proposedCalendarEvent = proposedCalendarEvent;
+        if (proposedRestriction) responseBody.proposedRestriction = proposedRestriction;
         return res.status(200).json(responseBody);
       }
     }

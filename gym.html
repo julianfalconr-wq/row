@@ -4197,6 +4197,22 @@ img, video, canvas, svg { max-width: 100%; }
   function getSecret() {
     try { return localStorage.getItem('dashboard:secret') || ''; } catch (e) { return ''; }
   }
+  // Active restrictions (chat's propose_restriction tool, saved via
+  // api/sync-state.js's resource=restrictions) — fetched fresh before
+  // each AI call rather than cached, since a restriction can be added
+  // or ended at any time (via the chat or General Settings' manage
+  // list) and a stale client-side cache could keep respecting or
+  // ignoring one past its actual lifetime. Shared by both
+  // generateWeeklyPlan() and generateTodayRecommendation() below.
+  async function fetchActiveRestrictions() {
+    const secret = getSecret();
+    if (!secret) return [];
+    try {
+      const r = await fetch('/api/sync-state?secret=' + encodeURIComponent(secret) + '&resource=restrictions&asOf=' + encodeURIComponent(DayLib.effectiveDateKey()));
+      const j = await r.json();
+      return (j && j.ok && Array.isArray(j.restrictions)) ? j.restrictions : [];
+    } catch (e) { return []; }
+  }
   function dateKey(d) {
     return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
   }
@@ -4598,10 +4614,11 @@ img, video, canvas, svg { max-width: 100%; }
 
       const whoopTrend = await fetchWhoopTrend(14);
       const whoop = whoopTrend.connected ? { recentRecovery: whoopTrend.recentRecovery, recentStrain: whoopTrend.recentStrain } : null;
+      const restrictions = await fetchActiveRestrictions();
 
       const res = await fetch('/api/training?mode=plan&secret=' + encodeURIComponent(secret), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ strengthSessions, recentExerciseNames, runningSessions, whoop }),
+        body: JSON.stringify({ strengthSessions, recentExerciseNames, runningSessions, whoop, restrictions }),
       });
       const json = await res.json();
       if (!res.ok || !json.ok) throw new Error((json && json.error) || ('HTTP ' + res.status));
@@ -4780,6 +4797,7 @@ img, video, canvas, svg { max-width: 100%; }
       const whoopToday = whoopTrend.connected ? whoopTrend.today : null;
       const strengthContext = buildTodayStrengthContext();
       const todayCalendar = await detectPadelToday();
+      const restrictions = await fetchActiveRestrictions();
 
       const res = await fetch('/api/training?mode=today&secret=' + encodeURIComponent(secret), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -4796,6 +4814,7 @@ img, video, canvas, svg { max-width: 100%; }
           whoopToday,
           whoopRecentStrain: whoopTrend.connected ? whoopTrend.recentStrain : null,
           todayCalendar,
+          restrictions,
         }),
       });
       const json = await res.json();

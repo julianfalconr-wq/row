@@ -1328,13 +1328,68 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
       container.appendChild(card);
     }
 
-    function addBubble(role, text, proposedObjectives, proposedCalendarEvent) {
+    // ---------- restriction proposal (see api/chat.js's
+    // propose_restriction tool) ----------
+    // Same explicit-confirmation pattern as the two cards above. Saving
+    // just writes the row via api/sync-state.js's resource=restrictions
+    // — no Google/WHOOP tokens involved here, unlike the calendar card,
+    // so there's no refresh-and-retry plumbing to duplicate.
+    function renderRestrictionCard(container, restriction) {
+      const card = document.createElement('div');
+      card.className = 'chat-plan-card';
+
+      card.appendChild(planRow('Restriction', restriction.text, restriction.scope ? ('Scope: ' + restriction.scope) : ''));
+      card.appendChild(planRow('Dates', restriction.starts_on + ' – ' + restriction.ends_on, ''));
+
+      const actions = document.createElement('div');
+      actions.className = 'chat-plan-actions';
+      const saveBtn = document.createElement('button');
+      saveBtn.type = 'button'; saveBtn.className = 'chat-plan-save-btn';
+      saveBtn.textContent = 'Save restriction';
+      const dismissBtn = document.createElement('button');
+      dismissBtn.type = 'button'; dismissBtn.className = 'chat-plan-dismiss-btn';
+      dismissBtn.textContent = 'Not now';
+      actions.appendChild(saveBtn);
+      actions.appendChild(dismissBtn);
+      card.appendChild(actions);
+
+      function showStatus(text, isSaved) {
+        actions.remove();
+        const status = document.createElement('div');
+        status.className = 'chat-plan-status ' + (isSaved ? 'is-saved' : 'is-dismissed');
+        status.textContent = text;
+        card.appendChild(status);
+      }
+
+      saveBtn.addEventListener('click', async () => {
+        const secret = getSecret();
+        if (!secret) { showStatus('Set your dashboard secret first (on the Cronometer page).', false); return; }
+        saveBtn.disabled = true;
+        try {
+          const r = await fetch('/api/sync-state?secret=' + encodeURIComponent(secret), {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ resource: 'restrictions', action: 'create', restriction: restriction }),
+          });
+          const j = await r.json();
+          if (!r.ok || !j.ok) throw new Error((j && j.error) || ('HTTP ' + r.status));
+          showStatus('Saved ✓ — Training will respect this', true);
+        } catch (e) {
+          showStatus('Could not save: ' + (e.message || String(e)), false);
+        }
+      });
+      dismissBtn.addEventListener('click', () => showStatus('Not saved', false));
+
+      container.appendChild(card);
+    }
+
+    function addBubble(role, text, proposedObjectives, proposedCalendarEvent, proposedRestriction) {
       emptyEl.style.display = 'none';
       const el = document.createElement('div');
       el.className = 'chat-bubble ' + role;
       renderBubbleContent(el, text);
       if (proposedObjectives) renderPlanCard(el, proposedObjectives);
       if (proposedCalendarEvent) renderCalendarEventCard(el, proposedCalendarEvent);
+      if (proposedRestriction) renderRestrictionCard(el, proposedRestriction);
       messagesEl.appendChild(el);
       messagesEl.scrollTop = messagesEl.scrollHeight;
       return el;
@@ -1640,8 +1695,8 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
         saveChatHistory(chatHistory);
         const fallbackText = json.proposedObjectives
           ? "Here's what I'm proposing for this week:"
-          : (json.proposedCalendarEvent ? "Here's the event I'm proposing:" : '(no reply)');
-        addBubble('assistant', json.reply || fallbackText, json.proposedObjectives || null, json.proposedCalendarEvent || null);
+          : (json.proposedCalendarEvent ? "Here's the event I'm proposing:" : (json.proposedRestriction ? "Here's the restriction I'm proposing:" : '(no reply)'));
+        addBubble('assistant', json.reply || fallbackText, json.proposedObjectives || null, json.proposedCalendarEvent || null, json.proposedRestriction || null);
         archiveToServer(chatTodayKey(), chatHistory); // best-effort, doesn't block the UI
       } catch (e) {
         typingEl.remove();
