@@ -4658,6 +4658,74 @@ img, video, canvas, svg { max-width: 100%; }
     };
   }
 
+  // Padel awareness (see api/training.js's PADEL prompt section) — reuses
+  // topbar.js's window.gatherTodayContext() for the actual Calendar fetch
+  // (it already live-fetches the next several days via
+  // /api/google-callback?action=list and returns calendar.upcoming, the
+  // same data source api/chat.js's propose_calendar_event tool uses) so
+  // this file adds no second calendar-fetching implementation — just
+  // filters that same list down to today and checks the titles.
+  //
+  // "Today" here is computed the same day-end-aware way as everywhere
+  // else in this file (DayLib.effectiveDateKey()), NOT plain local
+  // midnight — with a default 00:00 day-end this is a no-op (see
+  // daylib.js's own header comment on that default-safety property),
+  // but it means a padel event booked, say, 1am with a 3am day-end still
+  // correctly counts as "today" instead of silently falling into
+  // yesterday's or tomorrow's bucket.
+  function todayCalendarWindow() {
+    const profile = DayLib.loadProfile();
+    const todayKey = DayLib.effectiveDateKey(null, profile);
+    const [endH, endM] = String(profile.dayEndTime || '00:00').split(':').map(Number);
+    const start = DayLib.parseDateKey(todayKey);
+    start.setHours(endH, endM, 0, 0);
+    const end = new Date(start);
+    end.setDate(end.getDate() + 1);
+    return { todayKey, startMs: start.getTime(), endMs: end.getTime() };
+  }
+  function isEventToday(ev, win) {
+    if (!ev || !ev.start) return false;
+    if (ev.allDay) return String(ev.start).slice(0, 10) === win.todayKey;
+    const t = new Date(ev.start).getTime();
+    return !isNaN(t) && t >= win.startMs && t < win.endMs;
+  }
+  const PADEL_RE = /p[aá]del/i;
+  // window.gatherTodayContext is defined by topbar.js, loaded with
+  // `defer` — this file's own script is a plain synchronous inline
+  // block (see this file's header/daylib.js's comment on why), which
+  // runs DURING document parsing, before any deferred script has had a
+  // chance to execute. generateTodayRecommendation() runs automatically
+  // on load, and when WHOOP isn't connected there's no network round-
+  // trip ahead of this call to incidentally buy time — confirmed by
+  // testing that padel detection silently came back empty on the very
+  // first automatic call but worked correctly on a manual re-click
+  // moments later. A short bounded poll (not an indefinite wait) fixes
+  // the real race without touching this file's non-DOMContentLoaded
+  // structure.
+  function waitForGatherTodayContext(timeoutMs) {
+    return new Promise((resolve) => {
+      const deadline = Date.now() + (timeoutMs || 3000);
+      (function poll() {
+        if (typeof window.gatherTodayContext === 'function') return resolve(true);
+        if (Date.now() >= deadline) return resolve(false);
+        setTimeout(poll, 50);
+      })();
+    });
+  }
+  async function detectPadelToday() {
+    try {
+      const ready = await waitForGatherTodayContext(3000);
+      if (!ready) return { padelToday: false, padelEventTitle: null };
+      const ctx = await window.gatherTodayContext();
+      const upcoming = (ctx && ctx.calendar && Array.isArray(ctx.calendar.upcoming)) ? ctx.calendar.upcoming : [];
+      const win = todayCalendarWindow();
+      const match = upcoming.find((ev) => isEventToday(ev, win) && PADEL_RE.test(ev.title || ''));
+      return match ? { padelToday: true, padelEventTitle: match.title } : { padelToday: false, padelEventTitle: null };
+    } catch (e) {
+      return { padelToday: false, padelEventTitle: null };
+    }
+  }
+
   async function generateTodayRecommendation() {
     const secret = getSecret();
     if (!secret) { $$('ttText').textContent = 'Set your dashboard secret first (on the Cronometer page) to use AI features.'; return; }
@@ -4674,6 +4742,7 @@ img, video, canvas, svg { max-width: 100%; }
       const whoopTrend = await fetchWhoopTrend(7);
       const whoopToday = whoopTrend.connected ? whoopTrend.today : null;
       const strengthContext = buildTodayStrengthContext();
+      const todayCalendar = await detectPadelToday();
 
       const res = await fetch('/api/training?mode=today&secret=' + encodeURIComponent(secret), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -4689,13 +4758,16 @@ img, video, canvas, svg { max-width: 100%; }
           strengthContext,
           whoopToday,
           whoopRecentStrain: whoopTrend.connected ? whoopTrend.recentStrain : null,
+          todayCalendar,
         }),
       });
       const json = await res.json();
       if (!res.ok || !json.ok) throw new Error((json && json.error) || ('HTTP ' + res.status));
 
       $$('ttText').textContent = json.recommendation;
-      $$('ttSub').textContent = (whoopToday && whoopToday.recoveryPct != null)
+      $$('ttSub').textContent = todayCalendar.padelToday
+        ? ('Padel today (' + todayCalendar.padelEventTitle + ')')
+        : (whoopToday && whoopToday.recoveryPct != null)
         ? ('Recovery ' + whoopToday.recoveryPct + '%')
         : (whoopTrend.connected && isWhoopRefreshCoolingDown()
           ? 'WHOOP needs reconnecting — see the Whoop card on Health'

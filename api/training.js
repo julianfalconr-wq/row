@@ -51,6 +51,14 @@
 //     } | null,
 //     whoopToday: { recoveryPct: Number|null, strain: Number|null } | null,
 //     whoopRecentStrain: [{ date, strain }] | null,
+//     todayCalendar: { padelToday: Boolean, padelEventTitle: String|null } | null,
+//     // padelToday is computed client-side (gym.html) from a live Google
+//     // Calendar fetch (reusing topbar.js's gatherTodayContext(), not a
+//     // second calendar-fetch implementation) filtered to the user's
+//     // DayLib-effective "today" and matched case-insensitively against
+//     // "padel"/"pádel". Treated as a high-intensity commitment, same
+//     // spirit as low Whoop recovery — see buildTodaySystemPrompt's PADEL
+//     // section.
 //   }
 //   -> { ok: true, recommendation: String }
 // =============================================================
@@ -255,13 +263,20 @@ function buildTodaySystemPrompt() {
     'recommending if recovery allows — never suggest a piece that\'s already been done this week. ' +
     'progress.runningKmDone vs progress.runningKmTarget is a secondary volume signal only, not a ' +
     'substitute for checking which specific piece is still due.\n\n' +
-    'NOT TRACKED YET: padel (or anything else outside this app) is not tracked anywhere in this data — ' +
-    'do not mention padel, assume a padel day, or factor it into the recommendation in any way. Reason ' +
-    'only from weekPlan, progress, strengthContext, and Whoop.\n\n' +
+    'PADEL — todayCalendar tells you whether the user has a real padel session on their Google Calendar ' +
+    'today (todayCalendar.padelToday, with the actual matched event title in ' +
+    'todayCalendar.padelEventTitle when true). Padel is a genuinely demanding session physically — treat a ' +
+    'padel day the same way you treat low WHOOP recovery (see WHOOP-ADJUSTMENT above): do NOT recommend ' +
+    'strength or a running session on top of it. Prefer explicit rest, or at most very light active ' +
+    'recovery (an easy walk, light mobility) — never combine padel with Explosiveness, the interval ' +
+    'session, a long run, or a full strength split, even if the weekly plan has those outstanding. If ' +
+    'padel and low recovery both apply, that is an even stronger case for pure rest, not a reason to ' +
+    'reconsider. If todayCalendar is missing or todayCalendar.padelToday is false, ignore padel entirely ' +
+    'and reason from WHOOP/strength/running as usual.\n\n' +
     'FORMAT — this is the most important rule: the recommendation is a SHORT LABEL, not a paragraph. One ' +
     'line, naming only the split day and/or the run type/distance from this week\'s plan — nothing else. ' +
     'Good examples: "Push", "Push + 5K run", "Push + long run", "10K long run", "Rest — recovery is low", ' +
-    '"Easy 5K + Legs". Bad (never do this): listing individual exercises, sets, reps, or weights; ' +
+    '"Easy 5K + Legs", "Rest — padel today", "Easy walk only — padel today". Bad (never do this): listing individual exercises, sets, reps, or weights; ' +
     'explaining "no prior weights logged, so start conservative"; multi-sentence reasoning. The exercise-' +
     'by-exercise detail for whatever day you name is already visible on the Strength tab itself once the ' +
     'user gets there — your only job is telling them WHICH one(s) to do today, not repeating what\'s ' +
@@ -279,6 +294,9 @@ async function handleToday(req, res, apiKey, body) {
     strengthContext: body.strengthContext && typeof body.strengthContext === 'object' ? body.strengthContext : null,
     whoopToday: body.whoopToday && typeof body.whoopToday === 'object' ? body.whoopToday : null,
     whoopRecentStrain: Array.isArray(body.whoopRecentStrain) ? body.whoopRecentStrain.slice(0, 14) : null,
+    todayCalendar: body.todayCalendar && typeof body.todayCalendar === 'object'
+      ? { padelToday: !!body.todayCalendar.padelToday, padelEventTitle: typeof body.todayCalendar.padelEventTitle === 'string' ? body.todayCalendar.padelEventTitle.slice(0, 200) : null }
+      : null,
   };
 
   if (!context.weekPlan) {
