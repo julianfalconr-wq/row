@@ -4764,6 +4764,22 @@ img, video, canvas, svg { max-width: 100%; }
       const json = await res.json();
       if (!res.ok || !json.ok) throw new Error((json && json.error) || ('HTTP ' + res.status));
 
+      // Cache the real recommendation (not the "generate objectives first"
+      // placeholder — only when `plan` was actually present) so main.html's
+      // "Plan my day" feature can reuse this exact, already-padel-aware
+      // recommendation instead of recomputing Training's logic in a
+      // second place. dateKey lets a reader confirm the cached value is
+      // actually from today before trusting it.
+      if (plan) {
+        try {
+          localStorage.setItem('po_coach_today_recommendation_v1', JSON.stringify({
+            recommendation: json.recommendation,
+            dateKey: DayLib.effectiveDateKey(),
+            generatedAt: new Date().toISOString(),
+          }));
+        } catch (e) {}
+      }
+
       $$('ttText').textContent = json.recommendation;
       $$('ttSub').textContent = todayCalendar.padelToday
         ? ('Padel today (' + todayCalendar.padelEventTitle + ')')

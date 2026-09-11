@@ -577,6 +577,36 @@ body::after {
   .cal-add-row { grid-template-columns: 1fr; }
 }
 
+/* ----- Plan My Day ----- */
+.plan-day-intro { font-size: 12.5px; color: var(--text-tertiary); line-height: 1.5; margin-bottom: 12px; }
+.plan-day-status { font-size: 12.5px; color: var(--text-tertiary); margin-top: 10px; min-height: 14px; }
+.plan-day-blocks { margin-top: 12px; }
+.plan-day-block-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 0; border-bottom: 1px solid var(--line);
+}
+.plan-day-block-row:last-child { border-bottom: none; }
+.plan-day-block-check { width: 17px; height: 17px; flex-shrink: 0; accent-color: var(--success); cursor: pointer; }
+.plan-day-block-time {
+  font-family: var(--font-mono); font-size: 11px; color: var(--text-tertiary);
+  min-width: 92px; flex-shrink: 0; white-space: nowrap;
+}
+.plan-day-block-main { flex: 1; min-width: 0; }
+.plan-day-block-title { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.plan-day-block-cat {
+  display: inline-block; margin-top: 2px;
+  font-size: 9.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+.plan-day-cancel-btn {
+  padding: 11px 22px; border-radius: 12px; border: 1px solid var(--line);
+  background: transparent; color: var(--text-secondary);
+  font-family: inherit; font-size: 13px; font-weight: 700; cursor: pointer;
+}
+.plan-day-result { font-size: 12.5px; margin-top: 10px; line-height: 1.6; }
+.plan-day-result .ok { color: var(--success); }
+.plan-day-result .err { color: var(--danger); }
+
 .gm-header {
   display: flex; align-items: flex-start; justify-content: space-between;
   flex-wrap: wrap; gap: 12px;
@@ -1213,6 +1243,29 @@ body::after {
         </div>
         <div id="calAddStatus" class="cal-add-status"></div>
       </div>
+    </div>
+  </div>
+
+  <!-- Plan My Day — proposes a full schedule (training, meals, work
+       block, tonight's wind-down, tomorrow's wake-up) around the
+       user's real Calendar. Never creates anything until "Create
+       selected events" is explicitly clicked, same confirm-first
+       pattern as propose_training_objectives/propose_calendar_event
+       in the chat. Placed right after Calendar since it depends on it
+       (fixed events) and reads more naturally as "here's your actual
+       day" right below "here's what's already on it". -->
+  <div class="section" id="planDaySection">
+    <div class="section-title">Plan My Day</div>
+    <div class="gm-card">
+      <div class="plan-day-intro" id="planDayIntro">Proposes today's training, meals, a work block, and tonight's wind-down around your real calendar. Nothing is created until you confirm.</div>
+      <button type="button" class="save-btn" id="planDayGenerateBtn">Generate today's plan</button>
+      <div id="planDayStatus" class="plan-day-status"></div>
+      <div id="planDayBlocks" class="plan-day-blocks" style="display:none"></div>
+      <div id="planDayActions" class="save-btn-row" style="display:none">
+        <button type="button" class="save-btn" id="planDayConfirmBtn">Create selected events</button>
+        <button type="button" class="plan-day-cancel-btn" id="planDayCancelBtn">Cancel</button>
+      </div>
+      <div id="planDayResult" class="plan-day-result"></div>
     </div>
   </div>
 
@@ -2430,6 +2483,250 @@ document.addEventListener('DOMContentLoaded', function () {
       $('calAddStatus').textContent = 'Could not create event: ' + (e.message || String(e));
     } finally {
       btn.disabled = false;
+    }
+  });
+
+  // =============================================================
+  // PLAN MY DAY — proposes a full schedule around the user's real
+  // Calendar, never creating anything until explicitly confirmed
+  // (same pattern as the chat's propose_training_objectives/
+  // propose_calendar_event). Lives in this same closure specifically
+  // so it can reuse calFetch/loadTokens/refreshToken/localMidnightOffset/
+  // getSecret directly instead of a second Calendar-fetch
+  // implementation, per this feature's own "reuse, don't rebuild"
+  // requirement.
+  // =============================================================
+
+  // No configurable sleep-duration-target setting exists yet anywhere
+  // in General Settings/profile — verified before assuming one. Using
+  // a fixed, documented default instead; a future addition could
+  // expose this in General Settings the same way day-end-time and
+  // category weights already are.
+  const DEFAULT_SLEEP_TARGET_HOURS = 8;
+  // Buffer before tomorrow's earliest fixed commitment to allow
+  // getting ready — a documented assumption (no per-user prep-time
+  // setting exists either), not derived from real routine data.
+  const WAKE_PREP_BUFFER_MINUTES = 45;
+  const DEFAULT_WAKE_UP_TIME = '07:00'; // used only if tomorrow has no fixed events at all
+
+  function toLocalDateAndTime(iso) {
+    const d = new Date(iso);
+    const date = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    const time = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+    return { date, time };
+  }
+  function subtractMinutesFromTime(hhmm, minutes) {
+    const [h, m] = hhmm.split(':').map(Number);
+    let total = ((h * 60 + m - minutes) % 1440 + 1440) % 1440;
+    return String(Math.floor(total / 60)).padStart(2, '0') + ':' + String(total % 60).padStart(2, '0');
+  }
+
+  // Read-only best-effort WHOOP recovery, same convention as
+  // loadWhoopInfo() elsewhere in this file (own scope, no token
+  // refresh — see that function's comment for why this pattern is
+  // already established rather than a bug).
+  async function fetchRecoveryForPlan() {
+    let t = null;
+    try { t = JSON.parse(localStorage.getItem('whoop_tokens_v1')); } catch (e) {}
+    if (!t || !t.access || (t.expires && Date.now() > t.expires)) return null;
+    try {
+      const r = await fetch('/api/whoop-data?path=' + encodeURIComponent('/recovery') + '&limit=1', { headers: { Authorization: 'Bearer ' + t.access } });
+      if (!r.ok) return null;
+      const j = await r.json();
+      const score = j && j.records && j.records[0] && j.records[0].score;
+      return score ? { recoveryPct: Math.round(score.recovery_score || 0) } : null;
+    } catch (e) { return null; }
+  }
+
+  // gym.html's Training page caches its last real (padel-aware, per
+  // Phase 1) recommendation here after generating one — read it rather
+  // than recomputing Training's logic a second time in this file. Only
+  // trusted if it's actually from today (DayLib-effective), so a stale
+  // cached string from a previous day is never silently reused.
+  function readCachedTrainingRecommendation(todayDateKey) {
+    try {
+      const cached = JSON.parse(localStorage.getItem('po_coach_today_recommendation_v1'));
+      if (cached && cached.dateKey === todayDateKey && typeof cached.recommendation === 'string') return cached.recommendation;
+    } catch (e) {}
+    return null;
+  }
+
+  let planDayBlocksState = null; // [{date,start,end,title,category}] from the last generated proposal
+
+  function planCatLabel(cat) {
+    return { sleep: 'Sleep', training: 'Training', work: 'Work', meal: 'Meal', walk: 'Walk' }[cat] || 'Other';
+  }
+  function renderPlanDayBlocks(blocks) {
+    const el = $('planDayBlocks');
+    el.innerHTML = blocks.map((b, i) => (
+      '<div class="plan-day-block-row">' +
+        '<input type="checkbox" class="plan-day-block-check" data-idx="' + i + '" checked>' +
+        '<div class="plan-day-block-time">' + escapeHtml(b.start) + '–' + escapeHtml(b.end) + '</div>' +
+        '<div class="plan-day-block-main">' +
+          '<div class="plan-day-block-title">' + escapeHtml(b.title) + '</div>' +
+          '<div class="plan-day-block-cat">' + escapeHtml(planCatLabel(b.category)) + '</div>' +
+        '</div>' +
+      '</div>'
+    )).join('');
+    el.style.display = 'block';
+    $('planDayActions').style.display = 'flex';
+  }
+
+  $('planDayGenerateBtn').addEventListener('click', async () => {
+    const secret = getSecret();
+    if (!secret) { $('planDayStatus').textContent = 'Set your dashboard secret first (on the Cronometer page) to use AI features.'; return; }
+    const t = loadTokens();
+    if (!t || !t.access) { $('planDayStatus').textContent = 'Connect Google Calendar above first — the plan needs to see what\'s already on it.'; return; }
+
+    const btn = $('planDayGenerateBtn');
+    btn.disabled = true;
+    $('planDayStatus').textContent = 'Gathering today + tomorrow\'s calendar…';
+    $('planDayResult').innerHTML = '';
+    $('planDayBlocks').style.display = 'none';
+    $('planDayActions').style.display = 'none';
+    try {
+      const todayDateKey = DayLib.effectiveDateKey();
+      const tomorrowDateKeyDate = DayLib.parseDateKey(todayDateKey);
+      tomorrowDateKeyDate.setDate(tomorrowDateKeyDate.getDate() + 1);
+      const tomorrowDateKey = DayLib.plainDateKey(tomorrowDateKeyDate);
+
+      // Today through the end of tomorrow — both days' ALREADY-FIXED
+      // events, treated as immovable by the model.
+      const timeMin = localMidnightOffset(0);
+      const timeMax = localMidnightOffset(2);
+      const qs = new URLSearchParams({ timeMin: timeMin.toISOString(), timeMax: timeMax.toISOString() }).toString();
+      const data = await calFetch(qs, t);
+      const rawEvents = Array.isArray(data.items) ? data.items : [];
+      const fixedEvents = rawEvents.map((ev) => {
+        const isAllDay = !!(ev.start && ev.start.date);
+        if (isAllDay) {
+          return { date: ev.start.date, start: '', end: '', title: ev.summary || '(untitled)', allDay: true };
+        }
+        const s = toLocalDateAndTime(ev.start.dateTime);
+        const e = ev.end && ev.end.dateTime ? toLocalDateAndTime(ev.end.dateTime) : s;
+        return { date: s.date, start: s.time, end: e.time, title: ev.summary || '(untitled)', allDay: false };
+      });
+
+      // Wake-up: WAKE_PREP_BUFFER_MINUTES before tomorrow's earliest
+      // TIMED fixed event (all-day entries don't have a clock time to
+      // anchor to); DEFAULT_WAKE_UP_TIME if tomorrow has nothing fixed
+      // at all. Computed here in plain code, not by the model — see
+      // api/training.js's mode=day-plan comment on why.
+      const tomorrowTimed = fixedEvents.filter((e) => e.date === tomorrowDateKey && !e.allDay && e.start).sort((a, b) => a.start.localeCompare(b.start));
+      const wakeUpTime = tomorrowTimed.length ? subtractMinutesFromTime(tomorrowTimed[0].start, WAKE_PREP_BUFFER_MINUTES) : DEFAULT_WAKE_UP_TIME;
+      const bedtime = subtractMinutesFromTime(wakeUpTime, DEFAULT_SLEEP_TARGET_HOURS * 60);
+
+      $('planDayStatus').textContent = 'Checking WHOOP recovery…';
+      const whoopToday = await fetchRecoveryForPlan();
+
+      const todayRecommendation = readCachedTrainingRecommendation(todayDateKey);
+
+      $('planDayStatus').textContent = 'Thinking…';
+      const res = await fetch('/api/training?mode=day-plan&secret=' + encodeURIComponent(secret), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          todayDateKey, tomorrowDateKey,
+          todayRecommendation,
+          whoopToday,
+          fixedEvents,
+          sleepTargetHours: DEFAULT_SLEEP_TARGET_HOURS,
+          wakeUpTime, bedtime,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.ok) throw new Error((json && json.error) || ('HTTP ' + res.status));
+
+      planDayBlocksState = json.blocks;
+      renderPlanDayBlocks(json.blocks);
+      $('planDayStatus').textContent = todayRecommendation
+        ? 'Review below, then confirm.'
+        : 'Review below, then confirm. (No cached Training recommendation for today yet — visit the Training tab first if you want a training block included.)';
+    } catch (e) {
+      $('planDayStatus').textContent = 'Could not generate a plan: ' + (e.message || String(e));
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  $('planDayCancelBtn').addEventListener('click', () => {
+    planDayBlocksState = null;
+    $('planDayBlocks').style.display = 'none';
+    $('planDayBlocks').innerHTML = '';
+    $('planDayActions').style.display = 'none';
+    $('planDayStatus').textContent = '';
+    $('planDayResult').innerHTML = '';
+  });
+
+  $('planDayConfirmBtn').addEventListener('click', async () => {
+    if (!planDayBlocksState) return;
+    const t = loadTokens();
+    if (!t || !t.access) { $('planDayResult').innerHTML = '<span class="err">Google Calendar isn\'t connected.</span>'; return; }
+
+    const checks = Array.from($('planDayBlocks').querySelectorAll('.plan-day-block-check'));
+    const selected = checks.filter((c) => c.checked).map((c) => planDayBlocksState[Number(c.dataset.idx)]);
+    if (!selected.length) { $('planDayResult').innerHTML = '<span class="err">Nothing selected.</span>'; return; }
+
+    const tz = DayLib.resolveTimeZone();
+    const confirmBtn = $('planDayConfirmBtn');
+    confirmBtn.disabled = true;
+    $('planDayCancelBtn').disabled = true;
+
+    async function doCreate(block, tok) {
+      const r = await fetch('/api/google-callback?action=create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok.access },
+        body: JSON.stringify({
+          summary: block.title,
+          start: { dateTime: block.date + 'T' + block.start + ':00', timeZone: tz },
+          end: { dateTime: block.date + 'T' + block.end + ':00', timeZone: tz },
+        }),
+      });
+      if (r.status === 401) {
+        const n = await refreshToken(tok);
+        if (n) return doCreate(block, n);
+        throw new Error('unauthorized');
+      }
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    }
+
+    // Sequential, not Promise.all — so a per-event failure is reported
+    // against the one that actually failed, and events already created
+    // before it stay created (never rolled back or hidden) rather than
+    // the whole batch failing silently together.
+    const results = [];
+    let tok = t;
+    for (const block of selected) {
+      try {
+        await doCreate(block, tok);
+        results.push({ block, ok: true });
+      } catch (e) {
+        results.push({ block, ok: false, error: e.message || String(e) });
+      }
+    }
+
+    const okCount = results.filter((r) => r.ok).length;
+    const failCount = results.length - okCount;
+    let html = '<div class="' + (failCount ? 'err' : 'ok') + '">' + okCount + ' of ' + results.length + ' event(s) created.</div>';
+    results.filter((r) => !r.ok).forEach((r) => {
+      html += '<div class="err">✕ ' + escapeHtml(r.block.title) + ' — ' + escapeHtml(r.error) + '</div>';
+    });
+    $('planDayResult').innerHTML = html;
+    if (!failCount) {
+      $('planDayBlocks').style.display = 'none';
+      $('planDayActions').style.display = 'none';
+      planDayBlocksState = null;
+    } else {
+      confirmBtn.disabled = false;
+      $('planDayCancelBtn').disabled = false;
+      // Leave only the failed ones checked, so a retry (clicking
+      // Create again) doesn't re-create the ones that already succeeded.
+      checks.forEach((c) => {
+        const b = planDayBlocksState[Number(c.dataset.idx)];
+        const wasSelected = selected.indexOf(b) !== -1;
+        const failed = results.find((r) => r.block === b && !r.ok);
+        if (wasSelected) c.checked = !!failed;
+      });
     }
   });
 

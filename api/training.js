@@ -1,18 +1,20 @@
 // =============================================================
-// Combined endpoint for gym.html's Training page AI features.
-// Two modes, one file — same dual-mode-in-one-endpoint pattern
-// api/cronometer-data.js already uses (there: presence/absence of a
-// "type" param; here: an explicit "mode" param), kept as ONE file
-// deliberately: Vercel's Hobby plan caps a deployment at 12
-// Serverless Functions, and this repo is already at that ceiling, so
-// api/training-plan.js + api/training-today.js as two separate files
-// pushed it over and broke the last deployment. Do not split this
-// back into two files without first removing another function.
+// Combined endpoint for gym.html's Training page AI features, plus
+// main.html's "Plan my day" feature (mode=day-plan, added later —
+// same file for the same reason). Three modes, one file — same
+// dual-mode-in-one-endpoint pattern api/cronometer-data.js already
+// uses (there: presence/absence of a "type" param; here: an explicit
+// "mode" param), kept as ONE file deliberately: Vercel's Hobby plan
+// caps a deployment at 12 Serverless Functions, and this repo is
+// already at that ceiling, so api/training-plan.js + api/training-
+// today.js as two separate files pushed it over and broke a deploy
+// once already. Do not split this back into separate files without
+// first removing another function.
 //
-// Both modes are stateless — gym.html gathers recent history
-// client-side (including a live Whoop fetch, same pattern topbar.js's
-// gatherTodayContext() already uses) and POSTs a compact summary;
-// nothing is persisted server-side by this file.
+// All modes are stateless — the client gathers recent history/
+// context client-side (including a live Whoop fetch, same pattern
+// topbar.js's gatherTodayContext() already uses) and POSTs a compact
+// summary; nothing is persisted server-side by this file.
 //
 // Gated by DASHBOARD_SECRET, same as every other endpoint here.
 // Requires ANTHROPIC_API_KEY.
@@ -61,6 +63,28 @@
 //     // section.
 //   }
 //   -> { ok: true, recommendation: String }
+//
+// MODE 3 — POST /api/training?mode=day-plan&secret=...
+//   Proposes a full day's schedule (main.html's "Plan my day"). Never
+//   creates anything itself — returns a list of candidate blocks for
+//   the client to render and the user to explicitly confirm before any
+//   real Google Calendar event is created.
+//   Body: {
+//     todayDateKey: 'YYYY-MM-DD', tomorrowDateKey: 'YYYY-MM-DD',   // from DayLib.effectiveDateKey(), client-side
+//     todayRecommendation: String | null,   // gym.html's cached mode=today result (Phase 1, padel-aware) — reused verbatim, NOT recomputed here
+//     whoopToday: { recoveryPct: Number|null } | null,
+//     fixedEvents: [{ date, start, end, title, allDay }],   // today + tomorrow's REAL existing Calendar events — immovable
+//     sleepTargetHours: Number,   // default 8 (no configurable setting for this yet — see main.html's comment)
+//     wakeUpTime: 'HH:MM', bedtime: 'HH:MM',
+//     // Both pre-computed CLIENT-SIDE (plain arithmetic on tomorrow's
+//     // earliest fixedEvents entry, not by this endpoint) rather than
+//     // asked of the model — exact clock-arithmetic is a poor fit for an
+//     // LLM to get reliably right, whereas fitting flexible blocks
+//     // (training/work/meals/walks) around fixed anchors is exactly the
+//     // kind of judgment call worth spending a model call on. See
+//     // buildDayPlanSystemPrompt's FIXED section below.
+//   }
+//   -> { ok: true, blocks: [{ date, start, end, title, category }] }
 // =============================================================
 
 const MAX_BODY_CHARS = 30000;
@@ -325,6 +349,117 @@ async function handleToday(req, res, apiKey, body) {
 }
 
 // ------------------------------------------------------------
+// MODE: day-plan
+// ------------------------------------------------------------
+
+function buildDayPlanSystemPrompt() {
+  return (
+    'You are planning ONE user\'s day on a personal dashboard, producing a concrete schedule of time ' +
+    'blocks that will be created as real Google Calendar events only after the user reviews and explicitly ' +
+    'confirms them — nothing is created automatically, so propose a genuinely usable, non-overlapping plan.\n\n' +
+    'FIXED, NON-NEGOTIABLE — never overlap these, and never move or omit them:\n' +
+    '- fixedEvents: the user\'s ACTUAL existing calendar events for today and tomorrow (meetings, padel, ' +
+    'appointments, etc. — already-booked real time). Every block you propose must fit strictly around these.\n' +
+    '- wakeUpTime and bedtime are already computed (from tomorrow\'s earliest fixed commitment and the ' +
+    'user\'s sleep-duration target) — do NOT recalculate them yourself. Output a short "Wake up" block on ' +
+    'tomorrowDateKey starting at wakeUpTime, and a "Wind-down" block on todayDateKey ending exactly at ' +
+    'bedtime, using the exact given times. Never schedule anything else between bedtime and wakeUpTime.\n\n' +
+    'WHAT YOU DECIDE — fit these into whatever open time remains around the fixed items above, on ' +
+    'todayDateKey unless noted:\n' +
+    '1. Today\'s training session — todayRecommendation is the exact, already-decided session (it already ' +
+    'accounts for WHOOP recovery and any padel commitment today — do not re-evaluate or change WHAT it ' +
+    'says, just place it once, in a sensible open slot). If todayRecommendation is null, skip the training ' +
+    'block entirely rather than inventing one.\n' +
+    '2. One focused productivity/work block — a reasonable default length (about 1 hour) since no specific ' +
+    'preference is configured.\n' +
+    '3. Three generic meal blocks — "Breakfast", "Lunch", "Dinner" only, no recipes or macros — at ' +
+    'reasonable times relative to wake-up, the fixed events, and each other (breakfast shortly after ' +
+    'waking, lunch around midday, dinner in the evening; several hours apart; never overlapping the ' +
+    'training block or a fixed event).\n' +
+    '4. A short post-meal walk (10-15 minutes) shortly after each of the three meal blocks.\n\n' +
+    'If whoopToday shows low recovery (recoveryPct below 34), keep the rest of the day light — do not add ' +
+    'anything beyond the items above, and lean toward the shorter end of the work block\'s duration; the ' +
+    'training recommendation itself is already adjusted for recovery, so do not second-guess it further ' +
+    'here.\n\n' +
+    'Reply with ONLY valid JSON, no markdown fences, no commentary, in exactly this shape:\n' +
+    JSON.stringify({
+      blocks: [
+        {
+          date: 'YYYY-MM-DD (must be todayDateKey or tomorrowDateKey, whichever the block actually falls on)',
+          start: 'HH:MM 24-hour',
+          end: 'HH:MM 24-hour',
+          title: 'short, e.g. "Training: Push + 5K run", "Wake up", "Breakfast", "Walk", "Wind-down"',
+          category: 'one of: sleep, training, work, meal, walk',
+        },
+      ],
+    }, null, 2) +
+    '\n\nEvery block\'s start must be strictly before its end, blocks must not overlap each other or any ' +
+    'fixedEvents entry, and the list should be in chronological order.'
+  );
+}
+
+function numOrNull(v) {
+  const n = Number(v);
+  return isNaN(n) ? null : n;
+}
+
+const DAY_PLAN_CATEGORIES = ['sleep', 'training', 'work', 'meal', 'walk'];
+const HHMM_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+function normalizeDayPlanBlocks(raw, todayDateKey, tomorrowDateKey) {
+  const blocks = Array.isArray(raw && raw.blocks) ? raw.blocks : [];
+  return blocks
+    .map((b) => {
+      b = b || {};
+      const date = (b.date === todayDateKey || b.date === tomorrowDateKey) ? b.date : todayDateKey;
+      const start = typeof b.start === 'string' ? b.start.slice(0, 5) : '';
+      const end = typeof b.end === 'string' ? b.end.slice(0, 5) : '';
+      const title = typeof b.title === 'string' ? b.title.trim().slice(0, 200) : '';
+      const category = DAY_PLAN_CATEGORIES.indexOf(b.category) !== -1 ? b.category : 'other';
+      return { date, start, end, title, category };
+    })
+    .filter((b) => b.title && HHMM_RE.test(b.start) && HHMM_RE.test(b.end) && b.start < b.end)
+    .sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start));
+}
+
+async function handleDayPlan(req, res, apiKey, body) {
+  const todayDateKey = typeof body.todayDateKey === 'string' ? body.todayDateKey.slice(0, 10) : '';
+  const tomorrowDateKey = typeof body.tomorrowDateKey === 'string' ? body.tomorrowDateKey.slice(0, 10) : '';
+  if (!todayDateKey || !tomorrowDateKey) {
+    return res.status(400).json({ ok: false, error: 'todayDateKey and tomorrowDateKey (YYYY-MM-DD) are required' });
+  }
+
+  const context = {
+    todayDateKey,
+    tomorrowDateKey,
+    todayRecommendation: typeof body.todayRecommendation === 'string' ? body.todayRecommendation.slice(0, 300) : null,
+    whoopToday: body.whoopToday && typeof body.whoopToday === 'object' ? { recoveryPct: numOrNull(body.whoopToday.recoveryPct) } : null,
+    fixedEvents: Array.isArray(body.fixedEvents) ? body.fixedEvents.slice(0, 40).map((e) => ({
+      date: typeof (e && e.date) === 'string' ? e.date.slice(0, 10) : '',
+      start: typeof (e && e.start) === 'string' ? e.start.slice(0, 5) : '',
+      end: typeof (e && e.end) === 'string' ? e.end.slice(0, 5) : '',
+      title: typeof (e && e.title) === 'string' ? e.title.slice(0, 200) : '',
+      allDay: !!(e && e.allDay),
+    })) : [],
+    sleepTargetHours: Math.max(4, Math.min(12, numOrNull(body.sleepTargetHours) || 8)),
+    wakeUpTime: typeof body.wakeUpTime === 'string' && HHMM_RE.test(body.wakeUpTime) ? body.wakeUpTime : '07:00',
+    bedtime: typeof body.bedtime === 'string' && HHMM_RE.test(body.bedtime) ? body.bedtime : '23:00',
+  };
+
+  const text = await callClaude(apiKey, {
+    system: buildDayPlanSystemPrompt(),
+    userContent: 'Context:\n' + JSON.stringify(context, null, 2),
+    maxTokens: 1500,
+  });
+  const parsed = extractJson(text);
+  if (!parsed) return res.status(502).json({ ok: false, error: 'Model did not return valid JSON.' });
+  const blocks = normalizeDayPlanBlocks(parsed, todayDateKey, tomorrowDateKey);
+  if (!blocks.length) return res.status(502).json({ ok: false, error: 'Model did not return any usable blocks.' });
+
+  return res.status(200).json({ ok: true, blocks });
+}
+
+// ------------------------------------------------------------
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ ok: false, error: 'method not allowed' });
@@ -334,8 +469,8 @@ export default async function handler(req, res) {
   if (!apiKey) return res.status(500).json({ ok: false, error: 'Server not configured (missing ANTHROPIC_API_KEY env var).' });
 
   const mode = req.query && req.query.mode;
-  if (mode !== 'plan' && mode !== 'today') {
-    return res.status(400).json({ ok: false, error: 'mode must be "plan" or "today"' });
+  if (mode !== 'plan' && mode !== 'today' && mode !== 'day-plan') {
+    return res.status(400).json({ ok: false, error: 'mode must be "plan", "today", or "day-plan"' });
   }
 
   let body = req.body;
@@ -347,6 +482,7 @@ export default async function handler(req, res) {
 
   try {
     if (mode === 'plan') return await handlePlan(req, res, apiKey, body);
+    if (mode === 'day-plan') return await handleDayPlan(req, res, apiKey, body);
     return await handleToday(req, res, apiKey, body);
   } catch (e) {
     return res.status(500).json({ ok: false, error: 'Unexpected error: ' + (e && e.message) });
