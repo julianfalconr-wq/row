@@ -341,23 +341,56 @@ document.addEventListener('DOMContentLoaded', function () {
 
   // ---------- default habit config — kept identical to main.html's
   // score hero card, which is the other reader of this same
-  // habit_config row. If you change the defaults, change both. ----------
+  // habit_config row. If you change the defaults, change both. New
+  // unified schema (Phase 1 of the Habits redesign): no more internal
+  // "type" — every habit is buildOrQuit + frequency + dailyGoal + unit
+  // + points, with an optional "advanced" object for the three power-
+  // user behaviors (zeroTolerance / weeklyCap / autoThreshold) that
+  // used to be their own "types". ----------
   function defaultHabitConfig() {
     return {
       habits: [
-        { id: 'sleep_wake',   label: 'Slept early & woke early',    points: 10, type: 'manual_count2' },
-        { id: 'brush_teeth',  label: 'Brush teeth (AM + PM)',       points: 4,  type: 'manual_count2' },
-        { id: 'productivity', label: '1h focused productivity',     points: 8,  type: 'manual_binary' },
-        { id: 'screen_time',  label: 'Screen time under 6h',        points: 8,  type: 'manual_binary' },
-        { id: 'plan_day',     label: 'Plan the day',                points: 5,  type: 'manual_binary' },
-        { id: 'walk_dog',     label: 'Walk the dog (AM + PM)',      points: 6,  type: 'manual_count2' },
-        { id: 'no_phone_30',  label: 'No phone first 30 min',       points: 6,  type: 'manual_binary' },
-        { id: 'no_porn',      label: 'No porn',                     points: 15, type: 'zero_tolerance' },
-        { id: 'no_fap',       label: 'No fap',                      points: 15, type: 'weekly_cap', weeklyCap: 2, weeklyPenaltyPoints: 15, perExtraDayPenaltyPoints: 5 },
-        { id: 'read',         label: 'Read',                        points: 4,  type: 'manual_binary' },
-        { id: 'stretch',      label: 'Stretching (morning + night)',points: 6,  type: 'manual_count2' },
+        { id: 'sleep_wake',   name: 'Slept early & woke early',    points: 10, buildOrQuit: 'build', frequency: { type: 'daily' }, dailyGoal: 2, unit: 'times', advanced: null },
+        { id: 'brush_teeth',  name: 'Brush teeth (AM + PM)',       points: 4,  buildOrQuit: 'build', frequency: { type: 'daily' }, dailyGoal: 2, unit: 'times', advanced: null },
+        { id: 'productivity', name: '1h focused productivity',     points: 8,  buildOrQuit: 'build', frequency: { type: 'daily' }, dailyGoal: 1, unit: 'times', advanced: null },
+        { id: 'screen_time',  name: 'Screen time under 6h',        points: 8,  buildOrQuit: 'build', frequency: { type: 'daily' }, dailyGoal: 1, unit: 'times', advanced: null },
+        { id: 'plan_day',     name: 'Plan the day',                points: 5,  buildOrQuit: 'build', frequency: { type: 'daily' }, dailyGoal: 1, unit: 'times', advanced: null },
+        { id: 'walk_dog',     name: 'Walk the dog (AM + PM)',      points: 6,  buildOrQuit: 'build', frequency: { type: 'daily' }, dailyGoal: 2, unit: 'times', advanced: null },
+        { id: 'no_phone_30',  name: 'No phone first 30 min',       points: 6,  buildOrQuit: 'build', frequency: { type: 'daily' }, dailyGoal: 1, unit: 'times', advanced: null },
+        { id: 'no_porn',      name: 'No porn',                     points: 15, buildOrQuit: 'quit',  frequency: { type: 'daily' }, dailyGoal: 1, unit: 'times', advanced: { zeroTolerance: true } },
+        { id: 'no_fap',       name: 'No fap',                      points: 15, buildOrQuit: 'quit',  frequency: { type: 'daily' }, dailyGoal: 1, unit: 'times', advanced: { weeklyCap: { allowedPerWeek: 2, weeklyPenalty: 15, dailyPenalty: 5 } } },
+        { id: 'read',         name: 'Read',                        points: 4,  buildOrQuit: 'build', frequency: { type: 'daily' }, dailyGoal: 1, unit: 'times', advanced: null },
+        { id: 'stretch',      name: 'Stretching (morning + night)',points: 6,  buildOrQuit: 'build', frequency: { type: 'daily' }, dailyGoal: 2, unit: 'times', advanced: null },
       ],
     };
+  }
+
+  // Defensive adapter — same mapping the one-time production migration
+  // used to convert the user's real habit_config to this shape, kept
+  // here permanently as a safety net (e.g. a stale cached copy from
+  // before the migration). See main.html's identical copy for the
+  // full reasoning.
+  function normalizeHabit(h) {
+    h = h || {};
+    if (h.dailyGoal != null || h.buildOrQuit || h.advanced !== undefined) {
+      return {
+        id: h.id,
+        name: h.name || h.label || '',
+        points: Number(h.points) || 0,
+        buildOrQuit: h.buildOrQuit === 'quit' ? 'quit' : 'build',
+        frequency: h.frequency || { type: 'daily' },
+        dailyGoal: Number(h.dailyGoal) || 1,
+        unit: typeof h.unit === 'string' ? h.unit : 'times',
+        advanced: h.advanced || null,
+      };
+    }
+    const base = { id: h.id, name: h.label || '', points: Number(h.points) || 0, frequency: { type: 'daily' } };
+    if (h.type === 'manual_count2') return { ...base, buildOrQuit: 'build', dailyGoal: 2, unit: 'times', advanced: null };
+    if (h.type === 'manual_numeric') return { ...base, buildOrQuit: 'build', dailyGoal: Number(h.goal) || 1, unit: (h.unit != null ? h.unit : ''), advanced: null };
+    if (h.type === 'zero_tolerance') return { ...base, buildOrQuit: 'quit', dailyGoal: 1, unit: 'times', advanced: { zeroTolerance: true } };
+    if (h.type === 'weekly_cap') return { ...base, buildOrQuit: 'quit', dailyGoal: 1, unit: 'times', advanced: { weeklyCap: { allowedPerWeek: h.weeklyCap, weeklyPenalty: h.weeklyPenaltyPoints, dailyPenalty: h.perExtraDayPenaltyPoints } } };
+    if (h.type === 'auto_threshold') return { ...base, buildOrQuit: 'build', dailyGoal: 1, unit: 'times', advanced: { autoThreshold: { source: h.source, operator: h.operator, value: h.threshold } } };
+    return { ...base, buildOrQuit: 'build', dailyGoal: 1, unit: 'times', advanced: null };
   }
 
   // ---------- server: habit_config + daily_habits (api/sync-state.js's
@@ -365,12 +398,14 @@ document.addEventListener('DOMContentLoaded', function () {
   async function fetchHabitConfig() {
     const secret = getSecret();
     if (!secret) return defaultHabitConfig();
+    let config = null;
     try {
       const r = await fetch('/api/sync-state?resource=habit-config&secret=' + encodeURIComponent(secret));
       const j = await r.json();
-      if (j && j.ok && j.config && Array.isArray(j.config.habits) && j.config.habits.length) return j.config;
+      if (j && j.ok && j.config && Array.isArray(j.config.habits) && j.config.habits.length) config = j.config;
     } catch (e) {}
-    return defaultHabitConfig();
+    if (!config) config = defaultHabitConfig();
+    return { habits: config.habits.map(normalizeHabit) };
   }
   async function saveHabitConfig(config) {
     const secret = getSecret();
@@ -409,14 +444,14 @@ document.addEventListener('DOMContentLoaded', function () {
   // zero_tolerance/weekly_cap); kept in sync by hand, not shared, per
   // this project's no-shared-module convention for page-specific logic
   // (daylib.js is the one exception, being pure date math). ----------
+  // Unified formula for the new schema (no more internal "type" — see
+  // main.html's identical copy for the full reasoning): a boolean
+  // entryVal (still how former-binary/zero_tolerance/weekly_cap habits
+  // store "done") coerces via Number() to 1 or 0, reproducing the old
+  // binary formula exactly; a numeric entryVal against its matching
+  // dailyGoal reproduces the old count2/numeric formulas exactly.
   function manualHabitFraction(habit, entryVal) {
-    if (habit.type === 'manual_count2') return Math.max(0, Math.min(2, Number(entryVal) || 0)) / 2;
-    if (habit.type === 'manual_numeric') {
-      const goal = Number(habit.goal) || 0;
-      if (goal <= 0) return 0;
-      return Math.max(0, Math.min(1, (Number(entryVal) || 0) / goal));
-    }
-    return entryVal ? 1 : 0;
+    return Math.max(0, Math.min(1, (Number(entryVal) || 0) / (Number(habit.dailyGoal) || 1)));
   }
   // auto_threshold habits are evaluated against real data sources
   // (WHOOP/Cronometer/Water/Training) that only main.html's score
@@ -437,11 +472,20 @@ document.addEventListener('DOMContentLoaded', function () {
       default: return v >= t;
     }
   }
-  function weekOccurrenceCount(habitId, entriesByDate, fromKey, toKey) {
+  // Takes the habit itself now (not just its id) — needs dailyGoal to
+  // judge "occurred" the same fraction-based way manualHabitFraction
+  // does, since entries can now be either a legacy boolean (true/false,
+  // from before this migration) or a new number typed into the unified
+  // stepper. Falling short of dailyGoal (fraction < 1) is "occurred"
+  // either way: Number(false)=0 -> 0/1=0 -> <1; Number(true)=1 -> 1/1=1
+  // -> not <1; a new "0" entry -> 0/1=0 -> <1 — all three read as
+  // intended without special-casing which format a given day's entry
+  // happens to be in.
+  function weekOccurrenceCount(habit, entriesByDate, fromKey, toKey) {
     let n = 0;
     datesFromTo(fromKey, toKey).forEach((k) => {
-      const e = entriesByDate[k] && entriesByDate[k][habitId];
-      if (e && e.na !== true && e.value === false) n++;
+      const e = entriesByDate[k] && entriesByDate[k][habit.id];
+      if (e && e.na !== true && manualHabitFraction(habit, e.value) < 1) n++;
     });
     return n;
   }
@@ -450,26 +494,32 @@ document.addEventListener('DOMContentLoaded', function () {
     let earned = 0, possible = 0;
     const flags = [];
     (habitConfig.habits || []).forEach((h) => {
-      if (h.type === 'auto_threshold') {
-        const src = (autoSources && autoSources[h.source]) || { available: false };
+      const advanced = h.advanced || null;
+      if (advanced && advanced.autoThreshold) {
+        const cfg = advanced.autoThreshold;
+        const src = (autoSources && autoSources[cfg.source]) || { available: false };
         if (!src.available) return; // see compareThreshold's comment above — always the case on this page
-        if (compareThreshold(src.value, h.operator, h.threshold)) { earned += h.points; }
+        if (compareThreshold(src.value, cfg.operator, cfg.value)) { earned += h.points; }
         possible += h.points;
         return;
       }
       const e = entry && entry[h.id];
       if (!e || e.na === true) return; // unlogged or N/A — excluded, not scored 0
-      if (h.type === 'weekly_cap') {
+      if (advanced && advanced.weeklyCap) {
+        const cfg = advanced.weeklyCap;
         possible += h.points;
-        if (e.value === true) { earned += h.points; return; }
-        const countThroughToday = weekOccurrenceCount(h.id, entriesByDate, weekMondayActiveKey, dateActiveKey);
-        const over = Math.max(0, countThroughToday - (h.weeklyCap || 0));
-        earned += Math.max(0, h.points - over * (h.perExtraDayPenaltyPoints || 0));
+        // "Abstained today" = hit the daily goal (fraction 1), same
+        // fraction check as everywhere else — handles both a legacy
+        // boolean {value:true} and a new numeric {value:1} entry.
+        if (manualHabitFraction(h, e.value) >= 1) { earned += h.points; return; }
+        const countThroughToday = weekOccurrenceCount(h, entriesByDate, weekMondayActiveKey, dateActiveKey);
+        const over = Math.max(0, countThroughToday - (cfg.allowedPerWeek || 0));
+        earned += Math.max(0, h.points - over * (cfg.dailyPenalty || 0));
         return;
       }
       const frac = manualHabitFraction(h, e.value);
       earned += frac * h.points; possible += h.points;
-      if (h.type === 'zero_tolerance' && frac === 0) flags.push(h.label);
+      if (advanced && advanced.zeroTolerance && frac === 0) flags.push(h.name);
     });
     return { earned, possible, flags };
   }
@@ -542,39 +592,42 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
   // ---------- tonight's entry ----------
+  // One unified numeric-stepper control for every habit now (no more
+  // separate binary/count2/numeric controls — see manualHabitFraction's
+  // comment): dailyGoal:1 behaves like the old Yes/No toggle (0 or 1),
+  // dailyGoal:N like a free numeric goal. A legacy boolean entry
+  // (existing.value === true/false, from before the Phase 1 migration)
+  // displays as 1/0 here — reading it back through manualHabitFraction
+  // scores it identically either way.
   function habitControlHtml(h, existing) {
     const na = existing && existing.na === true;
-    if (h.type === 'manual_count2') {
-      const v = na ? null : (existing ? existing.value : null);
-      return '<div class="entry-habit-controls" data-habit="' + h.id + '" data-type="count2">' +
-        [0, 1, 2].map((n) => '<button type="button" class="entry-btn count-btn' + (v === n ? ' active' : '') + '" data-v="' + n + '">' + n + '</button>').join('') +
-        '<button type="button" class="entry-btn na-btn' + (na ? ' active' : '') + '" data-v="na">N/A</button></div>';
-    }
-    if (h.type === 'manual_numeric') {
-      const v = na ? '' : (existing && existing.value != null ? existing.value : '');
-      return '<div class="entry-habit-controls" data-habit="' + h.id + '" data-type="numeric">' +
-        '<button type="button" class="entry-btn num-btn" data-v="dec">−</button>' +
-        '<input type="number" class="entry-num-input" inputmode="decimal" min="0" placeholder="0" value="' + escapeHtml(String(v)) + '"' + (na ? ' disabled' : '') + '>' +
-        '<button type="button" class="entry-btn num-btn" data-v="inc">+</button>' +
-        '<button type="button" class="entry-btn na-btn' + (na ? ' active' : '') + '" data-v="na">N/A</button></div>';
-    }
-    if (h.type === 'auto_threshold') {
-      // No manual control — see the comment above compareThreshold():
-      // this page can't evaluate auto-sourced habits itself, so there's
-      // nothing to log here. The "Today's Score" circle on main.html
-      // auto-completes it from the real data source instead.
+    if (h.advanced && h.advanced.autoThreshold) {
+      // No manual control — this page can't evaluate auto-sourced
+      // habits itself (see the comment above compareThreshold above).
+      // The "Today's Score" circle on main.html auto-completes it from
+      // the real data source instead.
       return '<span class="entry-auto-badge">Auto-tracked</span>';
     }
-    const v = na ? null : (existing ? existing.value : null);
-    return '<div class="entry-habit-controls" data-habit="' + h.id + '" data-type="binary">' +
-      '<button type="button" class="entry-btn bin-btn' + (v === true ? ' active' : '') + '" data-v="true">Yes</button>' +
-      '<button type="button" class="entry-btn bin-btn' + (v === false ? ' active' : '') + '" data-v="false">No</button>' +
+    let v = '';
+    if (!na && existing && existing.value != null) {
+      v = existing.value === true ? 1 : existing.value === false ? 0 : existing.value;
+    }
+    return '<div class="entry-habit-controls" data-habit="' + h.id + '" data-type="numeric">' +
+      '<button type="button" class="entry-btn num-btn" data-v="dec">−</button>' +
+      '<input type="number" class="entry-num-input" inputmode="decimal" min="0" placeholder="0" value="' + escapeHtml(String(v)) + '"' + (na ? ' disabled' : '') + '>' +
+      '<button type="button" class="entry-btn num-btn" data-v="inc">+</button>' +
       '<button type="button" class="entry-btn na-btn' + (na ? ' active' : '') + '" data-v="na">N/A</button></div>';
   }
   function renderNightlyEntry() {
     const existingEntry = entriesByDate[viewDateKey] || {};
     const html = (currentHabitConfig.habits || []).map((h) => {
-      const label = h.type === 'zero_tolerance' ? escapeHtml(h.label) + ' <small>Zero tolerance</small>' : (h.type === 'weekly_cap' ? escapeHtml(h.label) + ' <small>Cap: ' + h.weeklyCap + '/week</small>' : (h.type === 'manual_numeric' ? escapeHtml(h.label) + ' <small>Goal: ' + (h.goal || 0) + (h.unit ? ' ' + escapeHtml(h.unit) : '') + '</small>' : (h.type === 'auto_threshold' ? escapeHtml(h.label) + ' <small>' + escapeHtml(AUTO_SOURCE_LABELS[h.source] || h.source || '') + ' ' + escapeHtml(h.operator || '>=') + ' ' + (h.threshold != null ? h.threshold : 0) + '</small>' : escapeHtml(h.label))));
+      const adv = h.advanced || null;
+      const goalNote = ' <small>Goal: ' + (h.dailyGoal || 1) + (h.unit ? ' ' + escapeHtml(h.unit) : '') + '</small>';
+      const advNote = adv && adv.zeroTolerance ? ' <small>Zero tolerance</small>'
+        : adv && adv.weeklyCap ? ' <small>Cap: ' + adv.weeklyCap.allowedPerWeek + '/week</small>'
+        : adv && adv.autoThreshold ? ' <small>' + escapeHtml(AUTO_SOURCE_LABELS[adv.autoThreshold.source] || adv.autoThreshold.source || '') + ' ' + escapeHtml(adv.autoThreshold.operator || '>=') + ' ' + (adv.autoThreshold.value != null ? adv.autoThreshold.value : 0) + '</small>'
+        : goalNote;
+      const label = escapeHtml(h.name) + advNote;
       return '<div class="entry-habit-row" data-row="' + h.id + '"><span class="entry-habit-label">' + label + '</span>' + habitControlHtml(h, existingEntry[h.id]) + '</div>';
     }).join('');
     $('nightlyEntryList').innerHTML = html;
@@ -582,24 +635,19 @@ document.addEventListener('DOMContentLoaded', function () {
       row.addEventListener('click', (e) => {
         const btn = e.target.closest('button');
         if (!btn) return;
-        if (row.dataset.type === 'numeric') {
-          const input = row.querySelector('.entry-num-input');
-          const naBtn = row.querySelector('.na-btn');
-          if (btn.dataset.v === 'na') {
-            const turningOn = !naBtn.classList.contains('active');
-            naBtn.classList.toggle('active', turningOn);
-            input.disabled = turningOn;
-            return;
-          }
-          naBtn.classList.remove('active');
-          input.disabled = false;
-          const cur = input.value === '' ? 0 : (Number(input.value) || 0);
-          if (btn.dataset.v === 'inc') input.value = String(cur + 1);
-          else if (btn.dataset.v === 'dec') input.value = String(Math.max(0, cur - 1));
+        const input = row.querySelector('.entry-num-input');
+        const naBtn = row.querySelector('.na-btn');
+        if (btn.dataset.v === 'na') {
+          const turningOn = !naBtn.classList.contains('active');
+          naBtn.classList.toggle('active', turningOn);
+          input.disabled = turningOn;
           return;
         }
-        row.querySelectorAll('button').forEach((b) => b.classList.remove('active'));
-        btn.classList.add('active');
+        naBtn.classList.remove('active');
+        input.disabled = false;
+        const cur = input.value === '' ? 0 : (Number(input.value) || 0);
+        if (btn.dataset.v === 'inc') input.value = String(cur + 1);
+        else if (btn.dataset.v === 'dec') input.value = String(Math.max(0, cur - 1));
       });
     });
   }
@@ -607,19 +655,11 @@ document.addEventListener('DOMContentLoaded', function () {
     const entries = {};
     $('nightlyEntryList').querySelectorAll('.entry-habit-controls').forEach((row) => {
       const habitId = row.dataset.habit;
-      if (row.dataset.type === 'numeric') {
-        const naBtn = row.querySelector('.na-btn');
-        if (naBtn && naBtn.classList.contains('active')) { entries[habitId] = { na: true }; return; }
-        const input = row.querySelector('.entry-num-input');
-        if (!input || input.value === '') return; // left unanswered — stays "unlogged"
-        entries[habitId] = { value: Number(input.value) || 0 };
-        return;
-      }
-      const activeBtn = row.querySelector('button.active');
-      if (!activeBtn) return; // left unanswered — stays "unlogged"
-      if (activeBtn.dataset.v === 'na') { entries[habitId] = { na: true }; return; }
-      if (row.dataset.type === 'count2') { entries[habitId] = { value: Number(activeBtn.dataset.v) }; return; }
-      entries[habitId] = { value: activeBtn.dataset.v === 'true' };
+      const naBtn = row.querySelector('.na-btn');
+      if (naBtn && naBtn.classList.contains('active')) { entries[habitId] = { na: true }; return; }
+      const input = row.querySelector('.entry-num-input');
+      if (!input || input.value === '') return; // left unanswered — stays "unlogged"
+      entries[habitId] = { value: Number(input.value) || 0 };
     });
     const btn = $('nightlyEntrySaveBtn');
     btn.disabled = true;
@@ -657,43 +697,57 @@ document.addEventListener('DOMContentLoaded', function () {
     water: 'Water Completion %',
     training: 'Training Session Completed',
   };
+  // Advanced-type dropdown value for a habit — derived from which (if
+  // any) of the three mutually-exclusive advanced.* keys is present.
+  function advancedTypeOf(h) {
+    if (h.advanced && h.advanced.zeroTolerance) return 'zeroTolerance';
+    if (h.advanced && h.advanced.weeklyCap) return 'weeklyCap';
+    if (h.advanced && h.advanced.autoThreshold) return 'autoThreshold';
+    return 'none';
+  }
   function typeFieldsHtml(h) {
-    if (h.type === 'weekly_cap') {
-      return '<input type="number" class="wc-cap" min="0" value="' + (h.weeklyCap || 0) + '" title="Weekly cap" style="width:44px">' +
-        '<input type="number" class="wc-weekpen" min="0" value="' + (h.weeklyPenaltyPoints || 0) + '" title="Weekly penalty" style="width:44px">' +
-        '<input type="number" class="wc-daypen" min="0" value="' + (h.perExtraDayPenaltyPoints || 0) + '" title="Per extra day penalty" style="width:44px">';
+    const advType = advancedTypeOf(h);
+    if (advType === 'weeklyCap') {
+      const wc = h.advanced.weeklyCap || {};
+      return '<label class="hc-field-label">Allowed/week<input type="number" class="wc-cap" min="0" value="' + (wc.allowedPerWeek || 0) + '" style="width:44px"></label>' +
+        '<label class="hc-field-label">Weekly penalty<input type="number" class="wc-weekpen" min="0" value="' + (wc.weeklyPenalty || 0) + '" style="width:44px"></label>' +
+        '<label class="hc-field-label">Daily penalty<input type="number" class="wc-daypen" min="0" value="' + (wc.dailyPenalty || 0) + '" style="width:44px"></label>';
     }
-    if (h.type === 'manual_numeric') {
-      return '<span class="hc-numeric-goal" title="Mi meta diaria (daily goal)">' +
-        '<button type="button" class="habit-config-icon-btn hc-goal-dec">−</button>' +
-        '<input type="number" class="hc-goal" min="0" value="' + (h.goal != null ? h.goal : 1) + '" style="width:40px">' +
-        '<button type="button" class="habit-config-icon-btn hc-goal-inc">+</button>' +
-        '</span>' +
-        '<input type="text" class="hc-unit" value="' + escapeHtml(h.unit || '') + '" placeholder="Unidad" style="width:70px">';
-    }
-    if (h.type === 'auto_threshold') {
-      const source = h.source || 'water';
-      const op = h.operator || '>=';
+    if (advType === 'autoThreshold') {
+      const at = h.advanced.autoThreshold || {};
+      const source = at.source || 'water';
+      const op = at.operator || '>=';
       return '<select class="at-source">' +
         Object.keys(AUTO_SOURCE_LABELS).map((k) => '<option value="' + k + '"' + (k === source ? ' selected' : '') + '>' + escapeHtml(AUTO_SOURCE_LABELS[k]) + '</option>').join('') +
         '</select>' +
         '<select class="at-op">' +
         ['>=', '>', '<=', '<', '=='].map((o) => '<option value="' + o + '"' + (o === op ? ' selected' : '') + '>' + o + '</option>').join('') +
         '</select>' +
-        '<input type="number" class="at-threshold" value="' + (h.threshold != null ? h.threshold : 80) + '" title="Threshold" style="width:50px">';
+        '<input type="number" class="at-threshold" value="' + (at.value != null ? at.value : 80) + '" title="Threshold" style="width:50px">';
     }
     return '';
   }
   function renderHabitSettingsList() {
     const html = settingsDraft.habits.map((h, i) => {
+      const advType = advancedTypeOf(h);
       return '<div class="habit-config-row" data-idx="' + i + '">' +
         '<div class="habit-config-main">' +
-        '<input type="text" class="habit-config-label-input hc-label" value="' + escapeHtml(h.label) + '">' +
+        '<input type="text" class="habit-config-label-input hc-label" value="' + escapeHtml(h.name) + '">' +
         '<div class="habit-config-meta-row">' +
-        '<select class="hc-type">' +
-        ['manual_binary', 'manual_count2', 'manual_numeric', 'zero_tolerance', 'weekly_cap', 'auto_threshold'].map((t) => '<option value="' + t + '"' + (t === h.type ? ' selected' : '') + '>' + t + '</option>').join('') +
+        '<select class="hc-buildorquit" title="Build or quit">' +
+        '<option value="build"' + (h.buildOrQuit !== 'quit' ? ' selected' : '') + '>Build</option>' +
+        '<option value="quit"' + (h.buildOrQuit === 'quit' ? ' selected' : '') + '>Quit</option>' +
         '</select>' +
+        '<span class="hc-numeric-goal" title="Daily goal">' +
+        '<button type="button" class="habit-config-icon-btn hc-goal-dec">−</button>' +
+        '<input type="number" class="hc-goal" min="0" value="' + h.dailyGoal + '" style="width:40px">' +
+        '<button type="button" class="habit-config-icon-btn hc-goal-inc">+</button>' +
+        '</span>' +
+        '<input type="text" class="hc-unit" value="' + escapeHtml(h.unit || '') + '" placeholder="Unit" style="width:70px">' +
         '<input type="number" class="hc-points" min="0" value="' + h.points + '" title="Points" style="width:50px">' +
+        '<select class="hc-advanced-type" title="Advanced">' +
+        ['none', 'zeroTolerance', 'weeklyCap', 'autoThreshold'].map((t) => '<option value="' + t + '"' + (t === advType ? ' selected' : '') + '>' + t + '</option>').join('') +
+        '</select>' +
         '<span class="hc-typefields">' + typeFieldsHtml(h) + '</span>' +
         '</div></div>' +
         '<div class="habit-config-actions">' +
@@ -708,17 +762,35 @@ document.addEventListener('DOMContentLoaded', function () {
     $('habitConfigList').querySelectorAll('.habit-config-row').forEach((row, i) => {
       const h = settingsDraft.habits[i];
       if (!h) return;
-      h.label = row.querySelector('.hc-label').value.trim() || h.label;
-      h.type = row.querySelector('.hc-type').value;
+      h.name = row.querySelector('.hc-label').value.trim() || h.name;
+      h.buildOrQuit = row.querySelector('.hc-buildorquit').value === 'quit' ? 'quit' : 'build';
       h.points = Number(row.querySelector('.hc-points').value) || 0;
-      const cap = row.querySelector('.wc-cap'); if (cap) h.weeklyCap = Number(cap.value) || 0;
-      const wp = row.querySelector('.wc-weekpen'); if (wp) h.weeklyPenaltyPoints = Number(wp.value) || 0;
-      const dp = row.querySelector('.wc-daypen'); if (dp) h.perExtraDayPenaltyPoints = Number(dp.value) || 0;
-      const goal = row.querySelector('.hc-goal'); if (goal) h.goal = Number(goal.value) || 0;
+      const goal = row.querySelector('.hc-goal'); if (goal) h.dailyGoal = Number(goal.value) || 0;
       const unit = row.querySelector('.hc-unit'); if (unit) h.unit = unit.value.trim();
-      const source = row.querySelector('.at-source'); if (source) h.source = source.value;
-      const op = row.querySelector('.at-op'); if (op) h.operator = op.value;
-      const threshold = row.querySelector('.at-threshold'); if (threshold) h.threshold = Number(threshold.value) || 0;
+      const advType = row.querySelector('.hc-advanced-type').value;
+      if (advType === 'zeroTolerance') {
+        h.advanced = { zeroTolerance: true };
+      } else if (advType === 'weeklyCap') {
+        const cap = row.querySelector('.wc-cap'); const wp = row.querySelector('.wc-weekpen'); const dp = row.querySelector('.wc-daypen');
+        h.advanced = {
+          weeklyCap: {
+            allowedPerWeek: cap ? (Number(cap.value) || 0) : ((h.advanced && h.advanced.weeklyCap && h.advanced.weeklyCap.allowedPerWeek) || 0),
+            weeklyPenalty: wp ? (Number(wp.value) || 0) : ((h.advanced && h.advanced.weeklyCap && h.advanced.weeklyCap.weeklyPenalty) || 0),
+            dailyPenalty: dp ? (Number(dp.value) || 0) : ((h.advanced && h.advanced.weeklyCap && h.advanced.weeklyCap.dailyPenalty) || 0),
+          },
+        };
+      } else if (advType === 'autoThreshold') {
+        const source = row.querySelector('.at-source'); const op = row.querySelector('.at-op'); const threshold = row.querySelector('.at-threshold');
+        h.advanced = {
+          autoThreshold: {
+            source: source ? source.value : ((h.advanced && h.advanced.autoThreshold && h.advanced.autoThreshold.source) || 'water'),
+            operator: op ? op.value : ((h.advanced && h.advanced.autoThreshold && h.advanced.autoThreshold.operator) || '>='),
+            value: threshold ? (Number(threshold.value) || 0) : ((h.advanced && h.advanced.autoThreshold && h.advanced.autoThreshold.value) || 0),
+          },
+        };
+      } else {
+        h.advanced = null;
+      }
     });
   }
   $('habitConfigList').addEventListener('click', (e) => {
@@ -733,17 +805,17 @@ document.addEventListener('DOMContentLoaded', function () {
     } else if (e.target.closest('.hc-del')) {
       settingsDraft.habits.splice(idx, 1); renderHabitSettingsList();
     } else if (e.target.closest('.hc-goal-inc')) {
-      settingsDraft.habits[idx].goal = (Number(settingsDraft.habits[idx].goal) || 0) + 1; renderHabitSettingsList();
+      settingsDraft.habits[idx].dailyGoal = (Number(settingsDraft.habits[idx].dailyGoal) || 0) + 1; renderHabitSettingsList();
     } else if (e.target.closest('.hc-goal-dec')) {
-      settingsDraft.habits[idx].goal = Math.max(0, (Number(settingsDraft.habits[idx].goal) || 0) - 1); renderHabitSettingsList();
+      settingsDraft.habits[idx].dailyGoal = Math.max(0, (Number(settingsDraft.habits[idx].dailyGoal) || 0) - 1); renderHabitSettingsList();
     }
   });
   $('habitConfigList').addEventListener('change', (e) => {
-    if (e.target.classList.contains('hc-type')) { readHabitSettingsListIntoDraft(); renderHabitSettingsList(); }
+    if (e.target.classList.contains('hc-advanced-type')) { readHabitSettingsListIntoDraft(); renderHabitSettingsList(); }
   });
   $('habitConfigAddBtn').addEventListener('click', () => {
     readHabitSettingsListIntoDraft();
-    settingsDraft.habits.push({ id: 'custom_' + Date.now().toString(36), label: 'New habit', points: 5, type: 'manual_binary' });
+    settingsDraft.habits.push({ id: 'custom_' + Date.now().toString(36), name: 'New habit', points: 5, buildOrQuit: 'build', frequency: { type: 'daily' }, dailyGoal: 1, unit: 'times', advanced: null });
     renderHabitSettingsList();
   });
   $('habitSettingsSaveBtn').addEventListener('click', async () => {

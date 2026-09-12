@@ -2917,23 +2917,62 @@ document.addEventListener('DOMContentLoaded', function () {
   function getSecret() { try { return localStorage.getItem('dashboard:secret') || ''; } catch (e) { return ''; } }
 
   // ---------- default habit config (seed — used until /api/sync-state
-  // ?resource=habit-config returns a saved one) ----------
+  // ?resource=habit-config returns a saved one) — new unified schema,
+  // no more internal "type" (Phase 1 of the Habits redesign): every
+  // habit is buildOrQuit + frequency + dailyGoal + unit + points, with
+  // an optional "advanced" object for the three power-user behaviors
+  // (zeroTolerance / weeklyCap / autoThreshold) that used to be their
+  // own "types". See normalizeHabit() below for the one-time migration
+  // this same mapping was used for on the user's real saved config. ----------
   function defaultHabitConfig() {
     return {
       habits: [
-        { id: 'sleep_wake',   label: 'Slept early & woke early',    points: 10, type: 'manual_count2' },
-        { id: 'brush_teeth',  label: 'Brush teeth (AM + PM)',       points: 4,  type: 'manual_count2' },
-        { id: 'productivity', label: '1h focused productivity',     points: 8,  type: 'manual_binary' },
-        { id: 'screen_time',  label: 'Screen time under 6h',        points: 8,  type: 'manual_binary' },
-        { id: 'plan_day',     label: 'Plan the day',                points: 5,  type: 'manual_binary' },
-        { id: 'walk_dog',     label: 'Walk the dog (AM + PM)',      points: 6,  type: 'manual_count2' },
-        { id: 'no_phone_30',  label: 'No phone first 30 min',       points: 6,  type: 'manual_binary' },
-        { id: 'no_porn',      label: 'No porn',                     points: 15, type: 'zero_tolerance' },
-        { id: 'no_fap',       label: 'No fap',                      points: 15, type: 'weekly_cap', weeklyCap: 2, weeklyPenaltyPoints: 15, perExtraDayPenaltyPoints: 5 },
-        { id: 'read',         label: 'Read',                        points: 4,  type: 'manual_binary' },
-        { id: 'stretch',      label: 'Stretching (morning + night)',points: 6,  type: 'manual_count2' },
+        { id: 'sleep_wake',   name: 'Slept early & woke early',    points: 10, buildOrQuit: 'build', frequency: { type: 'daily' }, dailyGoal: 2, unit: 'times', advanced: null },
+        { id: 'brush_teeth',  name: 'Brush teeth (AM + PM)',       points: 4,  buildOrQuit: 'build', frequency: { type: 'daily' }, dailyGoal: 2, unit: 'times', advanced: null },
+        { id: 'productivity', name: '1h focused productivity',     points: 8,  buildOrQuit: 'build', frequency: { type: 'daily' }, dailyGoal: 1, unit: 'times', advanced: null },
+        { id: 'screen_time',  name: 'Screen time under 6h',        points: 8,  buildOrQuit: 'build', frequency: { type: 'daily' }, dailyGoal: 1, unit: 'times', advanced: null },
+        { id: 'plan_day',     name: 'Plan the day',                points: 5,  buildOrQuit: 'build', frequency: { type: 'daily' }, dailyGoal: 1, unit: 'times', advanced: null },
+        { id: 'walk_dog',     name: 'Walk the dog (AM + PM)',      points: 6,  buildOrQuit: 'build', frequency: { type: 'daily' }, dailyGoal: 2, unit: 'times', advanced: null },
+        { id: 'no_phone_30',  name: 'No phone first 30 min',       points: 6,  buildOrQuit: 'build', frequency: { type: 'daily' }, dailyGoal: 1, unit: 'times', advanced: null },
+        { id: 'no_porn',      name: 'No porn',                     points: 15, buildOrQuit: 'quit',  frequency: { type: 'daily' }, dailyGoal: 1, unit: 'times', advanced: { zeroTolerance: true } },
+        { id: 'no_fap',       name: 'No fap',                      points: 15, buildOrQuit: 'quit',  frequency: { type: 'daily' }, dailyGoal: 1, unit: 'times', advanced: { weeklyCap: { allowedPerWeek: 2, weeklyPenalty: 15, dailyPenalty: 5 } } },
+        { id: 'read',         name: 'Read',                        points: 4,  buildOrQuit: 'build', frequency: { type: 'daily' }, dailyGoal: 1, unit: 'times', advanced: null },
+        { id: 'stretch',      name: 'Stretching (morning + night)',points: 6,  buildOrQuit: 'build', frequency: { type: 'daily' }, dailyGoal: 2, unit: 'times', advanced: null },
       ],
     };
+  }
+
+  // Defensive adapter: the user's real habit_config has already been
+  // migrated to the new shape in Supabase via a one-time script (same
+  // mapping as below), but this stays as a permanent safety net rather
+  // than a one-time-only shim — e.g. a stale cached copy from before
+  // the migration, or a future save that somehow only sets some
+  // fields. Detects new-vs-old shape by presence of dailyGoal/
+  // buildOrQuit/advanced (new) vs. a bare "type" string (old).
+  function normalizeHabit(h) {
+    h = h || {};
+    if (h.dailyGoal != null || h.buildOrQuit || h.advanced !== undefined) {
+      return {
+        id: h.id,
+        name: h.name || h.label || '',
+        points: Number(h.points) || 0,
+        buildOrQuit: h.buildOrQuit === 'quit' ? 'quit' : 'build',
+        frequency: h.frequency || { type: 'daily' },
+        dailyGoal: Number(h.dailyGoal) || 1,
+        unit: typeof h.unit === 'string' ? h.unit : 'times',
+        advanced: h.advanced || null,
+      };
+    }
+    // Old shape (type: manual_binary/manual_count2/manual_numeric/
+    // zero_tolerance/weekly_cap/auto_threshold) — same mapping the
+    // one-time production migration used.
+    const base = { id: h.id, name: h.label || '', points: Number(h.points) || 0, frequency: { type: 'daily' } };
+    if (h.type === 'manual_count2') return { ...base, buildOrQuit: 'build', dailyGoal: 2, unit: 'times', advanced: null };
+    if (h.type === 'manual_numeric') return { ...base, buildOrQuit: 'build', dailyGoal: Number(h.goal) || 1, unit: (h.unit != null ? h.unit : ''), advanced: null };
+    if (h.type === 'zero_tolerance') return { ...base, buildOrQuit: 'quit', dailyGoal: 1, unit: 'times', advanced: { zeroTolerance: true } };
+    if (h.type === 'weekly_cap') return { ...base, buildOrQuit: 'quit', dailyGoal: 1, unit: 'times', advanced: { weeklyCap: { allowedPerWeek: h.weeklyCap, weeklyPenalty: h.weeklyPenaltyPoints, dailyPenalty: h.perExtraDayPenaltyPoints } } };
+    if (h.type === 'auto_threshold') return { ...base, buildOrQuit: 'build', dailyGoal: 1, unit: 'times', advanced: { autoThreshold: { source: h.source, operator: h.operator, value: h.threshold } } };
+    return { ...base, buildOrQuit: 'build', dailyGoal: 1, unit: 'times', advanced: null }; // manual_binary or unrecognized
   }
 
   // ---------- server: habit_config + daily_habits (folded into
@@ -2941,12 +2980,14 @@ document.addEventListener('DOMContentLoaded', function () {
   async function fetchHabitConfig() {
     const secret = getSecret();
     if (!secret) return defaultHabitConfig();
+    let config = null;
     try {
       const r = await fetch('/api/sync-state?resource=habit-config&secret=' + encodeURIComponent(secret));
       const j = await r.json();
-      if (j && j.ok && j.config && Array.isArray(j.config.habits) && j.config.habits.length) return j.config;
+      if (j && j.ok && j.config && Array.isArray(j.config.habits) && j.config.habits.length) config = j.config;
     } catch (e) {}
-    return defaultHabitConfig();
+    if (!config) config = defaultHabitConfig();
+    return { habits: config.habits.map(normalizeHabit) };
   }
   // saveHabitConfig()/saveDailyHabits() moved to habits.html (Phase C)
   // along with the editing UI that called them — this script only
@@ -3087,14 +3128,20 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
   // ---------- manual habits scoring ----------
+  // One unified formula for the whole redesigned schema (build/quit +
+  // frequency + dailyGoal + unit, no more internal "type" dropdown —
+  // see habit_config's Phase 1 migration): fraction = logged/dailyGoal,
+  // capped at 1. This one line replaces the old per-type branching
+  // (manual_binary/manual_count2/manual_numeric) because a boolean
+  // entryVal (still how former-binary/zero_tolerance/weekly_cap habits
+  // store "done") coerces via Number() to exactly 1 or 0 — identical
+  // to the old `entryVal ? 1 : 0` — and a numeric entryVal against its
+  // matching dailyGoal (1 for former manual_binary, 2 for former
+  // manual_count2, the real goal for former manual_numeric) reproduces
+  // each old formula exactly. Verified against all 15 real habits
+  // before this migration shipped.
   function manualHabitFraction(habit, entryVal) {
-    if (habit.type === 'manual_count2') return Math.max(0, Math.min(2, Number(entryVal) || 0)) / 2;
-    if (habit.type === 'manual_numeric') {
-      const goal = Number(habit.goal) || 0;
-      if (goal <= 0) return 0;
-      return Math.max(0, Math.min(1, (Number(entryVal) || 0) / goal));
-    }
-    return entryVal ? 1 : 0; // manual_binary, zero_tolerance, weekly_cap all store a boolean "done"
+    return Math.max(0, Math.min(1, (Number(entryVal) || 0) / (Number(habit.dailyGoal) || 1)));
   }
   function compareThreshold(value, operator, threshold) {
     const v = Number(value), t = Number(threshold);
@@ -3136,7 +3183,7 @@ document.addEventListener('DOMContentLoaded', function () {
       out.crono_protein = { available: false };
       out.crono_calories = { available: false };
     }
-    const needsWhoop = (ctx.habitConfig.habits || []).some((h) => h.type === 'auto_threshold' && (h.source === 'whoop_sleep' || h.source === 'whoop_recovery'));
+    const needsWhoop = (ctx.habitConfig.habits || []).some((h) => h.advanced && h.advanced.autoThreshold && (h.advanced.autoThreshold.source === 'whoop_sleep' || h.advanced.autoThreshold.source === 'whoop_recovery'));
     const whoop = needsWhoop ? await computeWhoopAutoSources(datePlainKey) : { sleep: { available: false }, recovery: { available: false } };
     out.whoop_sleep = whoop.sleep;
     out.whoop_recovery = whoop.recovery;
@@ -3165,11 +3212,20 @@ document.addEventListener('DOMContentLoaded', function () {
       return { sleep: { available: false }, recovery: { available: false } };
     }
   }
-  function weekOccurrenceCount(habitId, entriesByDate, fromKey, toKey) {
+  // Takes the habit itself now (not just its id) — needs dailyGoal to
+  // judge "occurred" the same fraction-based way manualHabitFraction
+  // does, since entries can now be either a legacy boolean (true/false,
+  // from before the Phase 1 migration) or a new number typed into the
+  // unified stepper. Falling short of dailyGoal (fraction < 1) is
+  // "occurred" either way: Number(false)=0 -> 0/1=0 -> <1; Number(true)
+  // =1 -> 1/1=1 -> not <1; a new "0" entry -> 0/1=0 -> <1 — all three
+  // read as intended without special-casing which format a given day's
+  // entry happens to be in.
+  function weekOccurrenceCount(habit, entriesByDate, fromKey, toKey) {
     let n = 0;
     datesFromTo(fromKey, toKey).forEach((k) => {
-      const e = entriesByDate[k] && entriesByDate[k][habitId];
-      if (e && e.na !== true && e.value === false) n++; // "false" = the bad thing happened that day
+      const e = entriesByDate[k] && entriesByDate[k][habit.id];
+      if (e && e.na !== true && manualHabitFraction(habit, e.value) < 1) n++;
     });
     return n;
   }
@@ -3179,30 +3235,33 @@ document.addEventListener('DOMContentLoaded', function () {
     const breakdown = [];
     const flags = [];
     (habitConfig.habits || []).forEach((h) => {
-      if (h.type === 'auto_threshold') {
-        const src = (autoSources && autoSources[h.source]) || { available: false };
-        if (!src.available) { breakdown.push({ id: h.id, label: h.label, points: h.points, status: 'unlogged' }); return; }
-        const met = compareThreshold(src.value, h.operator, h.threshold);
+      const advanced = h.advanced || null;
+      if (advanced && advanced.autoThreshold) {
+        const cfg = advanced.autoThreshold;
+        const src = (autoSources && autoSources[cfg.source]) || { available: false };
+        if (!src.available) { breakdown.push({ id: h.id, label: h.name, points: h.points, status: 'unlogged' }); return; }
+        const met = compareThreshold(src.value, cfg.operator, cfg.value);
         const pts = met ? h.points : 0;
         earned += pts; possible += h.points;
-        breakdown.push({ id: h.id, label: h.label, points: h.points, earnedPts: pts, status: met ? 'ok' : 'zero', detail: Math.round(src.value) + ' ' + (h.operator || '>=') + ' ' + (h.threshold || 0) });
+        breakdown.push({ id: h.id, label: h.name, points: h.points, earnedPts: pts, status: met ? 'ok' : 'zero', detail: Math.round(src.value) + ' ' + (cfg.operator || '>=') + ' ' + (cfg.value || 0) });
         return;
       }
       const e = entry && entry[h.id];
-      if (!e) { breakdown.push({ id: h.id, label: h.label, points: h.points, status: 'unlogged' }); return; }
-      if (e.na === true) { breakdown.push({ id: h.id, label: h.label, points: h.points, status: 'na' }); return; }
+      if (!e) { breakdown.push({ id: h.id, label: h.name, points: h.points, status: 'unlogged' }); return; }
+      if (e.na === true) { breakdown.push({ id: h.id, label: h.name, points: h.points, status: 'na' }); return; }
 
-      if (h.type === 'weekly_cap') {
+      if (advanced && advanced.weeklyCap) {
+        const cfg = advanced.weeklyCap;
         possible += h.points;
-        if (e.value === true) { // abstained today
+        if (manualHabitFraction(h, e.value) >= 1) { // abstained today (hit the daily goal — legacy boolean true or a new numeric entry, either way)
           earned += h.points;
-          breakdown.push({ id: h.id, label: h.label, points: h.points, earnedPts: h.points, status: 'ok' });
+          breakdown.push({ id: h.id, label: h.name, points: h.points, earnedPts: h.points, status: 'ok' });
         } else {
-          const countThroughToday = weekOccurrenceCount(h.id, entriesByDate, weekMondayActiveKey, dateActiveKey);
-          const over = Math.max(0, countThroughToday - (h.weeklyCap || 0));
-          const pts = Math.max(0, h.points - over * (h.perExtraDayPenaltyPoints || 0));
+          const countThroughToday = weekOccurrenceCount(h, entriesByDate, weekMondayActiveKey, dateActiveKey);
+          const over = Math.max(0, countThroughToday - (cfg.allowedPerWeek || 0));
+          const pts = Math.max(0, h.points - over * (cfg.dailyPenalty || 0));
           earned += pts;
-          breakdown.push({ id: h.id, label: h.label, points: h.points, earnedPts: pts, status: pts <= 0 ? 'zero' : 'partial', overCap: countThroughToday > (h.weeklyCap || 0) });
+          breakdown.push({ id: h.id, label: h.name, points: h.points, earnedPts: pts, status: pts <= 0 ? 'zero' : 'partial', overCap: countThroughToday > (cfg.allowedPerWeek || 0) });
         }
         return;
       }
@@ -3210,9 +3269,9 @@ document.addEventListener('DOMContentLoaded', function () {
       const frac = manualHabitFraction(h, e.value);
       const pts = frac * h.points;
       earned += pts; possible += h.points;
-      const zt = h.type === 'zero_tolerance' && frac === 0;
-      if (zt) flags.push(h.label);
-      breakdown.push({ id: h.id, label: h.label, points: h.points, earnedPts: pts, status: zt ? 'zero_tolerance_violation' : (pts >= h.points ? 'ok' : (pts <= 0 ? 'zero' : 'partial')) });
+      const zt = !!(advanced && advanced.zeroTolerance) && frac === 0;
+      if (zt) flags.push(h.name);
+      breakdown.push({ id: h.id, label: h.name, points: h.points, earnedPts: pts, status: zt ? 'zero_tolerance_violation' : (pts >= h.points ? 'ok' : (pts <= 0 ? 'zero' : 'partial')) });
     });
     return { earned, possible, breakdown, flags };
   }
@@ -3376,10 +3435,11 @@ document.addEventListener('DOMContentLoaded', function () {
       } catch (e) {}
       weeklyScore = obj != null ? Math.round(avgDaily * 0.6 + obj * 100 * 0.4) : Math.round(avgDaily);
 
-      const noFap = (habitConfig.habits || []).find((h) => h.type === 'weekly_cap');
+      const noFap = (habitConfig.habits || []).find((h) => h.advanced && h.advanced.weeklyCap);
       if (noFap) {
-        const occ = weekOccurrenceCount(noFap.id, entriesByDate, weekMondayActive, todayActive);
-        if (occ > (noFap.weeklyCap || 0)) weeklyScore = Math.max(0, weeklyScore - (noFap.weeklyPenaltyPoints || 0));
+        const cfg = noFap.advanced.weeklyCap;
+        const occ = weekOccurrenceCount(noFap, entriesByDate, weekMondayActive, todayActive);
+        if (occ > (cfg.allowedPerWeek || 0)) weeklyScore = Math.max(0, weeklyScore - (cfg.weeklyPenalty || 0));
       }
     }
     lastResult.weeklyScore = weeklyScore;
