@@ -84,6 +84,27 @@
 //   -> upserts habit_config's "general" row
 //
 // -------------------------------------------------------------
+// activity-types (Training/Activities generalization, Phase 1) — the
+// configurable list of loggable cardio/other activity types (Running,
+// Cycling, Swimming, ...), each with a unit/unitKind for its logging
+// form and a "recommendable" toggle so This week's objectives/Today's
+// session (api/training.js) know which types they're allowed to
+// suggest. Reuses habit_config as a third row (id: "activityTypes"),
+// same reasoning as general-settings reusing it as "general" — no new
+// table needed, and this project is already at Vercel's Hobby-plan
+// 12-function cap so this MUST live in this file, not a new one.
+//
+// Unlike habit-config/general-settings (a single object blob), this
+// row's data is a plain ARRAY (the list itself), since there's no
+// other per-user field to nest it under.
+//
+// GET  /api/sync-state?secret=...&resource=activity-types
+//   -> { ok:true, types: [...] | null }  (null if never saved yet —
+//      caller falls back to its own built-in default: just Running)
+// POST /api/sync-state?secret=...  { resource: "activity-types", types: [...] }
+//   -> upserts habit_config's "activityTypes" row
+//
+// -------------------------------------------------------------
 // active_restrictions — lets the chat's propose_restriction tool (see
 // api/chat.js) tell all three training AI features (weekly objectives,
 // Today's session, Plan my day) about a temporary constraint ("no
@@ -186,6 +207,8 @@ const getHabitConfig = () => getConfigRow('config');
 const saveHabitConfig = (config) => saveConfigRow('config', config);
 const getGeneralSettings = () => getConfigRow('general');
 const saveGeneralSettings = (settings) => saveConfigRow('general', settings);
+const getActivityTypes = () => getConfigRow('activityTypes');
+const saveActivityTypes = (types) => saveConfigRow('activityTypes', types);
 
 // ---------- daily_habits ----------
 async function getDailyHabits(date) {
@@ -252,7 +275,7 @@ export default async function handler(req, res) {
 
   const resource = req.query && req.query.resource;
 
-  if (resource === 'habit-config' || resource === 'daily-habits' || resource === 'general-settings' || resource === 'restrictions') {
+  if (resource === 'habit-config' || resource === 'daily-habits' || resource === 'general-settings' || resource === 'restrictions' || resource === 'activity-types') {
     if (!checkAuth(req, res)) return;
     if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_KEY) {
       return res.status(500).json({ error: 'missing SUPABASE_URL / SUPABASE_SERVICE_KEY' });
@@ -290,6 +313,24 @@ export default async function handler(req, res) {
             return res.status(400).json({ error: 'settings must be a plain object' });
           }
           await saveGeneralSettings(settings);
+          return res.status(200).json({ ok: true });
+        }
+        return res.status(405).json({ error: 'method not allowed' });
+      }
+
+      if (resource === 'activity-types') {
+        if (req.method === 'GET') {
+          const types = await getActivityTypes();
+          return res.status(200).json({ ok: true, types });
+        }
+        if (req.method === 'POST') {
+          let body = req.body;
+          if (typeof body === 'string') { try { body = JSON.parse(body); } catch (e) { body = {}; } }
+          const types = body && body.types;
+          if (!Array.isArray(types)) {
+            return res.status(400).json({ error: 'types must be an array' });
+          }
+          await saveActivityTypes(types);
           return res.status(200).json({ ok: true });
         }
         return res.status(405).json({ error: 'method not allowed' });

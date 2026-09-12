@@ -365,9 +365,11 @@ img, video, canvas, svg { max-width: 100%; }
 .th-run-label { font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-3); }
 .tp-today-sub { font-size: 11.5px; color: var(--text-3); margin-top: 8px; }
 
-/* ----- Running log ----- */
+/* ----- Activity log (generalized from a running-only log, Phase 1
+   of the multi-activity-type feature) ----- */
 .run-log-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
 .run-field { display: flex; flex-direction: column; gap: 8px; }
+.run-field[hidden] { display: none !important; }
 .run-field > label {
   font-size: 10.5px; color: var(--text-3); font-weight: 700;
   letter-spacing: 0.14em; text-transform: uppercase;
@@ -1568,7 +1570,7 @@ img, video, canvas, svg { max-width: 100%; }
     <h1 class="training-title">Training</h1>
     <div class="training-tabs" id="trainingTabs" role="tablist">
       <button type="button" class="training-tab active" data-panel="strengthPanel" role="tab" aria-selected="true">Strength</button>
-      <button type="button" class="training-tab" data-panel="runningPanel" role="tab" aria-selected="false">Running</button>
+      <button type="button" class="training-tab" data-panel="activitiesPanel" role="tab" aria-selected="false">Activities</button>
     </div>
   </div>
 
@@ -1624,10 +1626,11 @@ img, video, canvas, svg { max-width: 100%; }
     <div class="tp-today-sub" id="ttSub"></div>
   </div>
 
-  <!-- Training History (Phase E) — read-only, shows that day's actual
-       logged Strength sets + Running sessions, reusing state.logs /
-       runEntries exactly as already stored. Visible regardless of which
-       tab (Strength/Running) is active below. -->
+  <!-- Training History (Phase E; generalized in Phase 1 of the
+       multi-activity-type feature) — read-only, shows that day's actual
+       logged Strength sets + any activity type, reusing state.logs /
+       activityEntries exactly as already stored. Visible regardless of
+       which tab (Strength/Activities) is active below. -->
   <div class="card" id="trainingHistoryCard">
     <div class="tp-card-head">
       <div class="day-nav" id="trainingDayNav">
@@ -2075,24 +2078,32 @@ img, video, canvas, svg { max-width: 100%; }
 
   </div><!-- /#strengthPanel -->
 
-  <div id="runningPanel" class="training-panel">
+  <div id="activitiesPanel" class="training-panel">
     <div class="card">
       <div class="po-sub-section" style="margin-top:0">
-        <div class="po-sub-title">Log a run</div>
+        <div class="po-sub-title">Log an activity</div>
+        <div class="run-field" style="margin-bottom:14px">
+          <label>Activity type</label>
+          <select id="runActivityTypeSelect"></select>
+        </div>
         <div class="run-log-grid">
           <div class="run-field">
             <label>Date</label>
             <input type="date" id="runDateInput">
           </div>
-          <div class="run-field">
-            <label>Distance (km)</label>
+          <div class="run-field" id="runDistanceField">
+            <label id="runDistanceLabel">Distance (km)</label>
             <input type="number" id="runDistanceInput" step="0.01" inputmode="decimal" placeholder="0">
           </div>
-          <div class="run-field">
+          <div class="run-field" id="runCountField" hidden>
+            <label id="runCountLabel">Count</label>
+            <input type="number" id="runCountInput" step="1" inputmode="decimal" placeholder="0">
+          </div>
+          <div class="run-field" id="runDurationField">
             <label>Duration (min)</label>
             <input type="number" id="runDurationInput" step="0.5" inputmode="decimal" placeholder="0">
           </div>
-          <div class="run-field">
+          <div class="run-field" id="runPaceField">
             <label>Pace</label>
             <input type="text" id="runPaceDisplay" placeholder="—" disabled>
           </div>
@@ -2111,7 +2122,7 @@ img, video, canvas, svg { max-width: 100%; }
           <label>Notes</label>
           <textarea id="runNotesInput" placeholder="Optional — how it felt, route, weather, etc."></textarea>
         </div>
-        <button type="button" class="po-btn-primary" id="runSaveBtn">Save run</button>
+        <button type="button" class="po-btn-primary" id="runSaveBtn">Save activity</button>
       </div>
 
       <div class="run-history-title">History</div>
@@ -3860,7 +3871,14 @@ img, video, canvas, svg { max-width: 100%; }
   const SUPABASE_URL = 'https://dfxjlneohhgfdussomou.supabase.co';
   const SUPABASE_KEY = 'sb_publishable_9a1GD4OaqszZSnXW80PFTA_JvHi533e';
   const APP_KEY = 'po-coach';
-  const PC_SYNCED_KEYS = ['po_coach_v1', 'po_coach_workout_done', 'po_coach_weights', 'po_coach_photos', 'po_coach_runs'];
+  // po_coach_runs stays in this list even though po_coach_activities is
+  // now the canonical store — it's kept as a derived, running-only
+  // mirror (see deriveRunEntries() below) purely so main.html's
+  // computeRunningCategory and this file's own buildGymSummary (both
+  // untouched by this generalization) keep reading exactly the shape
+  // they already expect, on every device, without needing their own
+  // migration.
+  const PC_SYNCED_KEYS = ['po_coach_v1', 'po_coach_workout_done', 'po_coach_weights', 'po_coach_photos', 'po_coach_runs', 'po_coach_activities'];
 
   let pcSupa = null;
   let pcPushTimer = null;
@@ -4025,11 +4043,13 @@ img, video, canvas, svg { max-width: 100%; }
     try { renderAll(); } catch {}
     try { wtRender(); } catch {}
     try { photosRender(); } catch {}
-    // RunLog is defined in the separate <script> block below this one
-    // (kept apart so the Running tab is additive, not interleaved into
-    // this file's existing IIFE) — reload it too so a remote pull is
-    // reflected in the Running tab immediately, same as weight/photos above.
-    try { if (window.RunLog) window.RunLog.reload(); } catch {}
+    // ActivityLog (formerly RunLog — generalized in Phase 1 of the
+    // multi-activity-type feature) is defined in the separate <script>
+    // block below this one (kept apart so the Activities tab is
+    // additive, not interleaved into this file's existing IIFE) —
+    // reload it too so a remote pull is reflected in the Activities tab
+    // immediately, same as weight/photos above.
+    try { if (window.ActivityLog) window.ActivityLog.reload(); } catch {}
   }
 
   function pcApplyRemoteState(remote) {
@@ -4186,8 +4206,8 @@ img, video, canvas, svg { max-width: 100%; }
      interleaved into the block above, so the existing strength-
      tracking IIFE (and everything it's already carefully wired to)
      stays completely untouched — this only reaches into it through
-     the small window.PoCoach / window.RunLog getters defined on both
-     sides.
+     the small window.PoCoach / window.ActivityLog getters defined on
+     both sides.
      ============================================================= -->
 <script>
 (function () {
@@ -4248,28 +4268,81 @@ img, video, canvas, svg { max-width: 100%; }
   });
 
   // ============================================================
-  // RUNNING LOG — mirrors gym.html's own po_coach_weights pattern
-  // exactly: a flat JSON array in localStorage, sorted, re-saved
-  // wholesale on every change. localStorage.setItem is already
-  // wrapped by the script above (for 'po_coach_runs', added to its
-  // PC_SYNCED_KEYS list) so saving here automatically triggers both
-  // the cross-device raw mirror and the compact api/sync-state.js
-  // summary push — nothing extra needed here for either.
-  //   po_coach_runs : [{ id, dateKey, distanceKm, durationMin, effort, notes }]
+  // ACTIVITY LOG (Phase 1 of the multi-activity-type generalization —
+  // was a running-only "RUNNING LOG"). Canonical storage is now a flat
+  // JSON array like po_coach_weights, sorted, re-saved wholesale on
+  // every change:
+  //   po_coach_activities : [{ id, dateKey, activityTypeId, distanceKm?, count?, durationMin?, effort, notes }]
+  // distanceKm/count are present only when the entry's type's unitKind
+  // is 'distance'/'count' respectively; durationMin/effort/notes are
+  // present on every entry regardless of type (duration-only types just
+  // have no distanceKm/count at all).
+  //
+  // po_coach_runs is kept too, but purely as a DERIVED, running-only
+  // mirror (see deriveRunEntries()) — so main.html's
+  // computeRunningCategory and this file's own buildGymSummary, neither
+  // touched by this generalization, keep reading exactly the shape
+  // they already expect, unchanged, on every device.
   // ============================================================
+  const ACTIVITY_KEY = 'po_coach_activities';
   const RUN_KEY = 'po_coach_runs';
-  let runEntries = runLoad();
 
-  function runLoad() {
+  // Seed default — the one built-in type, used until the real
+  // configured list arrives from api/sync-state.js's resource=
+  // activity-types (see fetchActivityTypes below), and permanently on
+  // any device with no dashboard secret set (same fallback-to-defaults
+  // convention as habits.html's fetchHabitConfig).
+  let activityTypes = [{ id: 'running', name: 'Running', unit: 'km', unitKind: 'distance', recommendable: true }];
+  function activityTypeById(id) {
+    return activityTypes.find((t) => t.id === id) || activityTypes[0] || activityTypes.find((t) => t.id === 'running');
+  }
+
+  function deriveRunEntries(activities) {
+    return activities.filter((a) => a && a.activityTypeId === 'running')
+      .map((a) => ({ id: a.id, dateKey: a.dateKey, distanceKm: a.distanceKm, durationMin: a.durationMin, effort: a.effort, notes: a.notes }));
+  }
+  function activityLoad() {
     try {
-      const raw = localStorage.getItem(RUN_KEY);
-      const arr = raw ? JSON.parse(raw) : [];
-      return Array.isArray(arr) ? arr.sort((a, b) => b.dateKey.localeCompare(a.dateKey)) : [];
-    } catch (e) { return []; }
+      const raw = localStorage.getItem(ACTIVITY_KEY);
+      if (raw != null) {
+        const arr = JSON.parse(raw);
+        return Array.isArray(arr) ? arr.sort((a, b) => b.dateKey.localeCompare(a.dateKey)) : [];
+      }
+    } catch (e) {}
+    // One-time migration: no po_coach_activities yet — every existing
+    // po_coach_runs entry becomes a "running" activity, verbatim
+    // otherwise (nothing about its own fields changes, nothing lost).
+    let legacy = [];
+    try { legacy = JSON.parse(localStorage.getItem(RUN_KEY)) || []; } catch (e) { legacy = []; }
+    const migrated = (Array.isArray(legacy) ? legacy : []).map((r) => ({ ...r, activityTypeId: 'running' }));
+    migrated.sort((a, b) => b.dateKey.localeCompare(a.dateKey));
+    try { localStorage.setItem(ACTIVITY_KEY, JSON.stringify(migrated)); } catch (e) {}
+    return migrated;
   }
-  function runSave(arr) {
-    try { localStorage.setItem(RUN_KEY, JSON.stringify(arr)); } catch (e) {}
+  function activitySave(arr) {
+    try { localStorage.setItem(ACTIVITY_KEY, JSON.stringify(arr)); } catch (e) {}
+    runEntries = deriveRunEntries(arr);
+    try { localStorage.setItem(RUN_KEY, JSON.stringify(runEntries)); } catch (e) {}
   }
+
+  let activityEntries = activityLoad();
+  // computeWeekProgress/renderWeeklyProgress/generateTodayRecommendation
+  // further below read this exact variable, completely unchanged from
+  // before this generalization — it's still "running entries only".
+  let runEntries = deriveRunEntries(activityEntries);
+  try { localStorage.setItem(RUN_KEY, JSON.stringify(runEntries)); } catch (e) {} // keep the mirror fresh even when nothing changes this session
+
+  async function fetchActivityTypes() {
+    const secret = getSecret();
+    if (!secret) return activityTypes;
+    try {
+      const r = await fetch('/api/sync-state?secret=' + encodeURIComponent(secret) + '&resource=activity-types');
+      const j = await r.json();
+      if (j && j.ok && Array.isArray(j.types) && j.types.length) return j.types;
+    } catch (e) {}
+    return activityTypes;
+  }
+
   function runFmtPace(distanceKm, durationMin) {
     if (!distanceKm || !durationMin) return '—';
     const paceMin = durationMin / distanceKm;
@@ -4277,46 +4350,83 @@ img, video, canvas, svg { max-width: 100%; }
     const s = Math.round((paceMin - m) * 60);
     return m + ':' + String(s).padStart(2, '0') + ' /km';
   }
+  // One-line stats summary for a logged activity, shaped by its type's
+  // unitKind — the same three metrics the log form itself offers,
+  // formatted for the History list and the day-nav view below.
+  function activityStatsLine(a) {
+    const type = activityTypeById(a.activityTypeId);
+    const parts = [];
+    if (type.unitKind === 'count') {
+      parts.push((a.count != null ? a.count : 0) + (type.unit ? ' ' + type.unit : ''));
+      if (a.durationMin != null) parts.push(a.durationMin + ' min');
+    } else if (type.unitKind === 'duration') {
+      parts.push((a.durationMin != null ? a.durationMin : 0) + ' min');
+    } else {
+      parts.push((a.distanceKm != null ? a.distanceKm : 0) + ' ' + (type.unit || 'km'));
+      if (a.durationMin != null) parts.push(a.durationMin + ' min');
+      if (a.distanceKm && a.durationMin) parts.push(runFmtPace(a.distanceKm, a.durationMin));
+    }
+    return parts.join(' · ');
+  }
 
   function runRender() {
     const listEl = $$('runHistoryList');
-    if (!runEntries.length) { listEl.innerHTML = '<div class="run-empty">No runs logged yet.</div>'; return; }
-    listEl.innerHTML = runEntries.slice(0, 30).map((r) => {
-      const pace = runFmtPace(r.distanceKm, r.durationMin);
+    if (!activityEntries.length) { listEl.innerHTML = '<div class="run-empty">No activities logged yet.</div>'; return; }
+    listEl.innerHTML = activityEntries.slice(0, 30).map((a) => {
+      const type = activityTypeById(a.activityTypeId);
       return '<div class="run-history-item">' +
         '<div class="run-history-main">' +
-          '<span class="run-history-date">' + escapeHtml(r.dateKey) + '</span>' +
-          '<span class="run-history-stats">' + r.distanceKm + ' km · ' + r.durationMin + ' min · ' + pace + '</span>' +
-          (r.notes ? '<span class="run-history-notes">' + escapeHtml(r.notes) + '</span>' : '') +
+          '<span class="run-history-date">' + escapeHtml(a.dateKey) + ' · ' + escapeHtml(type.name) + '</span>' +
+          '<span class="run-history-stats">' + escapeHtml(activityStatsLine(a)) + '</span>' +
+          (a.notes ? '<span class="run-history-notes">' + escapeHtml(a.notes) + '</span>' : '') +
         '</div>' +
-        '<span class="run-history-effort">RPE ' + (r.effort != null ? r.effort : '—') + '</span>' +
-        '<button type="button" class="run-history-del" data-del="' + r.id + '" aria-label="Delete run">×</button>' +
+        '<span class="run-history-effort">RPE ' + (a.effort != null ? a.effort : '—') + '</span>' +
+        '<button type="button" class="run-history-del" data-del="' + a.id + '" aria-label="Delete activity">×</button>' +
       '</div>';
     }).join('');
     listEl.querySelectorAll('[data-del]').forEach((btn) => {
       btn.addEventListener('click', () => {
-        runEntries = runEntries.filter((r) => r.id !== btn.dataset.del);
-        runSave(runEntries);
+        activityEntries = activityEntries.filter((a) => a.id !== btn.dataset.del);
+        activitySave(activityEntries);
         runRender();
+        renderTrainingHistory();
         renderWeeklyProgress();
       });
     });
   }
 
-  window.RunLog = {
-    reload: () => { runEntries = runLoad(); runRender(); },
-    getEntries: () => runEntries.slice(),
+  function populateActivityTypeSelect() {
+    const sel = $$('runActivityTypeSelect');
+    const prev = sel.value;
+    sel.innerHTML = activityTypes.map((t) => '<option value="' + escapeHtml(t.id) + '">' + escapeHtml(t.name) + '</option>').join('');
+    sel.value = activityTypes.some((t) => t.id === prev) ? prev : ((activityTypes[0] && activityTypes[0].id) || '');
+    updateLogFormFieldsForType();
+  }
+  function updateLogFormFieldsForType() {
+    const type = activityTypeById($$('runActivityTypeSelect').value);
+    $$('runDistanceField').hidden = type.unitKind !== 'distance';
+    $$('runCountField').hidden = type.unitKind !== 'count';
+    $$('runPaceField').hidden = type.unitKind !== 'distance';
+    if (type.unitKind === 'distance') $$('runDistanceLabel').textContent = 'Distance (' + (type.unit || 'km') + ')';
+    if (type.unitKind === 'count') $$('runCountLabel').textContent = 'Count' + (type.unit ? ' (' + type.unit + ')' : '');
+    updatePacePreview();
+  }
+
+  window.ActivityLog = {
+    reload: () => { activityEntries = activityLoad(); runEntries = deriveRunEntries(activityEntries); runRender(); },
+    getEntries: () => activityEntries.slice(),
   };
 
-  // ---------- Training History (Phase E) — read-only day-by-day view of
-  // that day's actual logged Strength sets + Running sessions. Reuses
-  // state.logs exactly as renderTodaySetsForEx() (Strength side) already
-  // filters it by date, generalized across every exercise instead of
-  // just the currently-selected one — via window.PoCoach.getState(),
-  // the same cross-IIFE accessor already used elsewhere in this file
-  // (Strength's `state` and this block's `runEntries` live in two
-  // separate top-level IIFEs with no shared scope, so this is the
-  // established pattern, not a new one).
+  // ---------- Training History (Phase E; generalized in Phase 1 to
+  // show any activity type, not just running) — read-only day-by-day
+  // view of that day's actual logged Strength sets + activities.
+  // Reuses state.logs exactly as renderTodaySetsForEx() (Strength side)
+  // already filters it by date, generalized across every exercise
+  // instead of just the currently-selected one — via
+  // window.PoCoach.getState(), the same cross-IIFE accessor already
+  // used elsewhere in this file (Strength's `state` and this block's
+  // `activityEntries` live in two separate top-level IIFEs with no
+  // shared scope, so this is the established pattern, not a new one).
   //
   // READ-ONLY, not editable, unlike Habits' day-nav: Strength logging
   // feeds the Rx (coaching) recommendation engine, which assumes
@@ -4367,11 +4477,11 @@ img, video, canvas, svg { max-width: 100%; }
         }).join('') + '</div>';
     });
 
-    runEntries.filter((r) => r && r.dateKey === trainingViewDateKey).forEach((r) => {
-      const pace = runFmtPace(r.distanceKm, r.durationMin);
-      html += '<div class="th-run-row"><span><span class="th-run-label">Running</span><br>' +
-        r.distanceKm + ' km · ' + r.durationMin + ' min · ' + pace + '</span>' +
-        (r.effort != null ? '<span>RPE ' + r.effort + '</span>' : '') + '</div>';
+    activityEntries.filter((a) => a && a.dateKey === trainingViewDateKey).forEach((a) => {
+      const type = activityTypeById(a.activityTypeId);
+      html += '<div class="th-run-row"><span><span class="th-run-label">' + escapeHtml(type.name) + '</span><br>' +
+        escapeHtml(activityStatsLine(a)) + '</span>' +
+        (a.effort != null ? '<span>RPE ' + a.effort + '</span>' : '') + '</div>';
     });
 
     $$('trainingHistoryBody').innerHTML = html || '<div class="th-empty">Nothing logged this day.</div>';
@@ -4397,47 +4507,77 @@ img, video, canvas, svg { max-width: 100%; }
     });
   });
 
+  const runActivityTypeSelect = $$('runActivityTypeSelect');
   const runDateInput = $$('runDateInput');
   const runDistanceInput = $$('runDistanceInput');
+  const runCountInput = $$('runCountInput');
   const runDurationInput = $$('runDurationInput');
   const runPaceDisplay = $$('runPaceDisplay');
   const runNotesInput = $$('runNotesInput');
   runDateInput.value = DayLib.effectiveDateKey();
 
   function updatePacePreview() {
+    const type = activityTypeById(runActivityTypeSelect.value);
+    if (type.unitKind !== 'distance') { runPaceDisplay.value = ''; return; }
     const dist = parseFloat(runDistanceInput.value);
     const dur = parseFloat(runDurationInput.value);
     runPaceDisplay.value = (dist > 0 && dur > 0) ? runFmtPace(dist, dur) : '';
   }
   runDistanceInput.addEventListener('input', updatePacePreview);
   runDurationInput.addEventListener('input', updatePacePreview);
+  runActivityTypeSelect.addEventListener('change', updateLogFormFieldsForType);
 
   $$('runSaveBtn').addEventListener('click', () => {
+    const type = activityTypeById(runActivityTypeSelect.value);
     const dk = runDateInput.value || DayLib.effectiveDateKey();
-    const dist = parseFloat(runDistanceInput.value);
     const dur = parseFloat(runDurationInput.value);
-    if (!dist || dist <= 0 || !dur || dur <= 0) { alert('Enter a distance and duration first.'); return; }
     const entry = {
       id: 'run_' + Date.now() + '_' + Math.floor(Math.random() * 9999),
       dateKey: dk,
-      distanceKm: Math.round(dist * 100) / 100,
-      durationMin: Math.round(dur * 10) / 10,
+      activityTypeId: type.id,
       effort: selectedEffort,
       notes: runNotesInput.value.trim(),
     };
-    runEntries.push(entry);
-    runEntries.sort((a, b) => b.dateKey.localeCompare(a.dateKey));
-    runSave(runEntries);
+    if (type.unitKind === 'count') {
+      const cnt = parseFloat(runCountInput.value);
+      if (!cnt || cnt <= 0) { alert('Enter a count first.'); return; }
+      entry.count = Math.round(cnt * 100) / 100;
+      if (dur > 0) entry.durationMin = Math.round(dur * 10) / 10;
+    } else if (type.unitKind === 'duration') {
+      if (!dur || dur <= 0) { alert('Enter a duration first.'); return; }
+      entry.durationMin = Math.round(dur * 10) / 10;
+    } else {
+      const dist = parseFloat(runDistanceInput.value);
+      if (!dist || dist <= 0 || !dur || dur <= 0) { alert('Enter a distance and duration first.'); return; }
+      entry.distanceKm = Math.round(dist * 100) / 100;
+      entry.durationMin = Math.round(dur * 10) / 10;
+    }
+    activityEntries.push(entry);
+    activityEntries.sort((a, b) => b.dateKey.localeCompare(a.dateKey));
+    activitySave(activityEntries);
     runRender();
+    renderTrainingHistory();
     renderWeeklyProgress();
 
-    runDistanceInput.value = ''; runDurationInput.value = ''; runPaceDisplay.value = '';
+    runDistanceInput.value = ''; runCountInput.value = ''; runDurationInput.value = ''; runPaceDisplay.value = '';
     runNotesInput.value = ''; selectedEffort = null;
     document.querySelectorAll('.run-effort-pill').forEach((p) => p.classList.remove('active'));
     runDateInput.value = DayLib.effectiveDateKey();
   });
 
+  populateActivityTypeSelect();
   runRender();
+
+  // Fetch the real configured types async, then refresh whatever
+  // already rendered with just the built-in "Running" default above —
+  // same fallback-then-refresh pattern as every other resource= config
+  // this app reads (e.g. habits.html's fetchHabitConfig).
+  fetchActivityTypes().then((types) => {
+    if (Array.isArray(types) && types.length) activityTypes = types;
+    populateActivityTypeSelect();
+    runRender();
+    renderTrainingHistory();
+  });
 
   // ============================================================
   // Whoop live fetch — mirrors topbar.js's gatherTodayContext() Whoop

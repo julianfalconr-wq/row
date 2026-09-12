@@ -1040,6 +1040,35 @@ body::after {
 .gs-restriction-end-btn:disabled { opacity: 0.5; cursor: default; }
 .gs-restrictions-empty { font-size: 12.5px; color: var(--text-tertiary); font-style: italic; }
 
+/* Activity Types (Training/Activities generalization, Phase 1) */
+.gs-activity-types-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+.gs-activity-type-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  padding: 10px 12px; background: var(--inset-bg); border: 1px solid var(--line); border-radius: 10px;
+}
+.gs-activity-type-row input[type="text"], .gs-activity-type-row select {
+  background: var(--surface-2); border: 1px solid var(--line); color: var(--text-primary);
+  font-family: inherit; font-size: 12.5px; padding: 6px 8px; border-radius: 7px; outline: none;
+}
+.gs-at-name { flex: 1 1 110px; min-width: 90px; }
+.gs-at-unitkind { flex: 0 0 auto; }
+.gs-at-unit { width: 64px; flex: 0 0 auto; }
+.gs-at-recommendable-label {
+  display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--text-secondary);
+  font-weight: 600; flex: 0 0 auto; cursor: pointer; white-space: nowrap;
+}
+.gs-at-del {
+  width: 26px; height: 26px; flex-shrink: 0; border-radius: 50%; border: 1px solid var(--line);
+  background: transparent; color: var(--text-tertiary); cursor: pointer; font-size: 13px;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.gs-at-del:hover { color: var(--danger); border-color: var(--danger); }
+.gs-activity-type-add-btn {
+  width: 100%; padding: 9px; border-radius: 10px; border: 1px dashed var(--line);
+  background: transparent; color: var(--text-tertiary); font-family: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
+}
+.gs-activity-type-add-btn:hover { color: var(--text-primary); border-color: var(--text-tertiary); }
+
 /* ===== Modal shell (mirrors index.html's settings modal exactly, so
    both pages' gear-icon modals look identical) ===== */
 .modal-bg {
@@ -1198,6 +1227,15 @@ body::after {
         <h4>Habits &amp; Points</h4>
         <div class="gs-habits-note">The manual habit list and each habit's point value (Level 2 of the daily score) are managed on their own screen.</div>
         <a href="habits.html" class="whoop-mini-btn">Manage Habits →</a>
+      </div>
+
+      <div class="set-divider"></div>
+
+      <div class="set-section">
+        <h4>Activity Types</h4>
+        <div class="gs-habits-note">Logged in Training → Activities. Toggle "Recommendable" off for anything that should stay pure tracking (e.g. Volleyball) — This week's objectives and Today's session only ever suggest recommendable types.</div>
+        <div id="gsActivityTypesList" class="gs-activity-types-list">Loading…</div>
+        <button type="button" class="gs-activity-type-add-btn" id="gsActivityTypeAddBtn">+ Add activity type</button>
       </div>
 
       <div class="set-divider"></div>
@@ -3641,6 +3679,100 @@ document.addEventListener('DOMContentLoaded', function () {
       });
     });
   }
+  // Activity Types manage list (Training/Activities generalization,
+  // Phase 1) — same resource=activity-types endpoint gym.html's
+  // Activities tab reads/writes, fetched fresh whenever the modal
+  // opens (same reasoning as restrictions above: it can change from
+  // gym.html at any time). Falls back to the single built-in "Running"
+  // type if nothing's been saved yet, matching gym.html's own default.
+  // Every add/edit/delete/toggle here auto-saves the whole list
+  // immediately (no separate bulk Save button for this section) —
+  // same lesson as Habits' Phase 2: a list of independent items is
+  // simpler and less error-prone with per-action saves than bundling
+  // edits behind a save the user might forget to press.
+  const DEFAULT_ACTIVITY_TYPES = [{ id: 'running', name: 'Running', unit: 'km', unitKind: 'distance', recommendable: true }];
+  async function fetchActivityTypesForSettings() {
+    const secret = getSecret();
+    if (!secret) return DEFAULT_ACTIVITY_TYPES.slice();
+    try {
+      const r = await fetch('/api/sync-state?secret=' + encodeURIComponent(secret) + '&resource=activity-types');
+      const j = await r.json();
+      if (j && j.ok && Array.isArray(j.types) && j.types.length) return j.types;
+    } catch (e) {}
+    return DEFAULT_ACTIVITY_TYPES.slice();
+  }
+  async function saveActivityTypesToServer(types) {
+    const secret = getSecret();
+    if (!secret) throw new Error('Set your dashboard secret first');
+    const r = await fetch('/api/sync-state?secret=' + encodeURIComponent(secret), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ resource: 'activity-types', types }),
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok) throw new Error((j && j.error) || ('HTTP ' + r.status));
+  }
+  let activityTypesDraft = null;
+  function readActivityTypesListFromDom() {
+    return Array.from($('gsActivityTypesList').querySelectorAll('.gs-activity-type-row')).map((row) => ({
+      id: row.dataset.id,
+      name: row.querySelector('.gs-at-name').value.trim() || 'Untitled',
+      unitKind: row.querySelector('.gs-at-unitkind').value,
+      unit: row.querySelector('.gs-at-unit').value.trim(),
+      recommendable: row.querySelector('.gs-at-recommendable').checked,
+    }));
+  }
+  function renderActivityTypesRows() {
+    const el = $('gsActivityTypesList');
+    if (!activityTypesDraft.length) { el.innerHTML = '<div class="gs-restrictions-empty">No activity types yet.</div>'; return; }
+    el.innerHTML = activityTypesDraft.map((t) => (
+      '<div class="gs-activity-type-row" data-id="' + escapeHtml(t.id) + '">' +
+        '<input type="text" class="gs-at-name" value="' + escapeHtml(t.name) + '" placeholder="Name">' +
+        '<select class="gs-at-unitkind">' +
+          '<option value="distance"' + (t.unitKind === 'distance' ? ' selected' : '') + '>Distance</option>' +
+          '<option value="count"' + (t.unitKind === 'count' ? ' selected' : '') + '>Count</option>' +
+          '<option value="duration"' + (t.unitKind === 'duration' ? ' selected' : '') + '>Duration only</option>' +
+        '</select>' +
+        '<input type="text" class="gs-at-unit" value="' + escapeHtml(t.unit || '') + '" placeholder="unit">' +
+        '<label class="gs-at-recommendable-label"><input type="checkbox" class="gs-at-recommendable"' + (t.recommendable ? ' checked' : '') + '> Recommendable</label>' +
+        '<button type="button" class="gs-at-del" title="Delete">✕</button>' +
+      '</div>'
+    )).join('');
+    el.querySelectorAll('.gs-activity-type-row').forEach((row) => {
+      const saveField = async () => {
+        activityTypesDraft = readActivityTypesListFromDom();
+        try { await saveActivityTypesToServer(activityTypesDraft); } catch (e) { alert("Couldn't save: " + (e.message || e)); }
+      };
+      row.querySelector('.gs-at-name').addEventListener('change', saveField);
+      row.querySelector('.gs-at-unit').addEventListener('change', saveField);
+      row.querySelector('.gs-at-recommendable').addEventListener('change', saveField);
+      row.querySelector('.gs-at-unitkind').addEventListener('change', async () => {
+        await saveField();
+        renderActivityTypesRows();
+      });
+      row.querySelector('.gs-at-del').addEventListener('click', async () => {
+        if (!confirm('Delete "' + row.querySelector('.gs-at-name').value + '"? Already-logged activities of this type keep their history.')) return;
+        activityTypesDraft = activityTypesDraft.filter((t) => t.id !== row.dataset.id);
+        try {
+          await saveActivityTypesToServer(activityTypesDraft);
+          renderActivityTypesRows();
+        } catch (e) {
+          alert("Couldn't delete: " + (e.message || e));
+        }
+      });
+    });
+  }
+  async function renderActivityTypesList() {
+    $('gsActivityTypesList').innerHTML = 'Loading…';
+    activityTypesDraft = await fetchActivityTypesForSettings();
+    renderActivityTypesRows();
+  }
+  $('gsActivityTypeAddBtn').addEventListener('click', async () => {
+    activityTypesDraft = readActivityTypesListFromDom();
+    activityTypesDraft.push({ id: 'custom_' + Date.now().toString(36), name: 'New activity', unitKind: 'duration', unit: '', recommendable: false });
+    renderActivityTypesRows();
+    try { await saveActivityTypesToServer(activityTypesDraft); } catch (e) { alert("Couldn't save: " + (e.message || e)); }
+  });
+
   function openGeneralSettings() {
     const profile = (typeof window.DayLib !== 'undefined') ? window.DayLib.loadProfile() : { dayEndTime: '00:00', timezone: 'auto', categoryWeights: { habits: 35, training: 20, nutrition: 20, water: 10, dailyStack: 10 } };
     $('gsTimezone').innerHTML = '<option value="auto">Auto-detect</option>';
@@ -3649,6 +3781,7 @@ document.addEventListener('DOMContentLoaded', function () {
     $('gsScoreCardDayEndTime').value = profile.scoreCardDayEndTime || profile.dayEndTime || '00:00';
     Object.keys(gsWeightIds).forEach((k) => { $(gsWeightIds[k]).value = (profile.categoryWeights && profile.categoryWeights[k] != null) ? profile.categoryWeights[k] : 0; });
     updateWeightSum();
+    renderActivityTypesList();
     renderRestrictionsList();
     $('generalSettingsModalBg').classList.add('show');
   }
