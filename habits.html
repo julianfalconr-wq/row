@@ -314,6 +314,29 @@ body::after {
   font-family: inherit; font-size: 13px; padding: 8px 9px; border-radius: 8px; outline: none;
 }
 
+/* ===== Consistency grid + streak stats (Phase 3) ===== */
+.consistency-card { margin-bottom: 12px; }
+.consistency-card:last-child { margin-bottom: 0; }
+.consistency-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+.consistency-name { font-size: 14px; font-weight: 700; color: var(--text-primary); }
+.consistency-badge { font-size: 10px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-tertiary); flex-shrink: 0; }
+.consistency-scroll { overflow-x: auto; padding-bottom: 2px; -webkit-overflow-scrolling: touch; }
+.consistency-grid { display: flex; gap: 4px; width: max-content; }
+.consistency-cell {
+  width: 14px; height: 14px; border-radius: 4px; flex-shrink: 0;
+  background: var(--inset-bg); border: 1px solid var(--line);
+}
+.consistency-cell.filled { border-color: transparent; }
+.consistency-cell.na {
+  background-image: repeating-linear-gradient(45deg, var(--text-tertiary) 0, var(--text-tertiary) 1.5px, transparent 1.5px, transparent 5px);
+  opacity: 0.45;
+}
+.consistency-stats { display: flex; gap: 8px; margin-top: 12px; }
+.consistency-stat { flex: 1; text-align: center; background: var(--inset-bg); border-radius: 10px; padding: 8px 4px; }
+.consistency-stat-value { font-size: 17px; font-weight: 800; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.consistency-stat-label { font-size: 9px; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; color: var(--text-tertiary); margin-top: 2px; }
+.consistency-empty-note { font-size: 12px; color: var(--text-tertiary); font-style: italic; padding: 4px 2px; }
+
 @media (max-width: 480px) {
   body { padding: max(20px, env(safe-area-inset-top)) 14px 50px; }
   .gm-card { padding: 16px; }
@@ -356,6 +379,11 @@ body::after {
         <span class="save-confirm" id="nightlyEntryConfirm">Saved ✓</span>
       </div>
     </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Consistency</div>
+    <div id="consistencyList"></div>
   </div>
 
   <div class="section">
@@ -490,11 +518,15 @@ document.addEventListener('DOMContentLoaded', function () {
     d.setDate(d.getDate() + n);
     return DayLib.plainDateKey(d);
   }
+  // Guard was 8 (enough for "at most one week") before Phase 3's
+  // consistency grid needed a real 30+ day range out of this same
+  // function — raised to a generous year-plus ceiling that's still a
+  // safety valve against a malformed fromKey/toKey, not a real limit.
   function datesFromTo(fromKey, toKey) {
     const out = [];
     let k = fromKey;
     let guard = 0;
-    while (k <= toKey && guard++ < 8) { out.push(k); k = addDaysKey(k, 1); }
+    while (k <= toKey && guard++ < 400) { out.push(k); k = addDaysKey(k, 1); }
     return out;
   }
 
@@ -835,12 +867,112 @@ document.addEventListener('DOMContentLoaded', function () {
       clearTimeout($('nightlyEntryConfirm')._t);
       $('nightlyEntryConfirm')._t = setTimeout(() => $('nightlyEntryConfirm').classList.remove('show'), 1800);
       await renderSummary();
+      renderConsistency();
     } catch (e) {
       alert("Couldn't save: " + (e.message || e));
     } finally {
       btn.disabled = false;
     }
   });
+
+  // ---------- consistency grid + streak stats (Phase 3) ----------
+  // Reuses fetchDailyHabitsRange (the exact same per-date read the
+  // day-nav above already relies on for entriesByDate) and the
+  // date-key helpers at the top of this file — no new data-access
+  // path, just a longer range through the same functions.
+  const CONSISTENCY_DAYS = 30;
+  const consistencyFromKey = addDaysKey(todayActive, -(CONSISTENCY_DAYS - 1));
+  async function ensureConsistencyDataLoaded() {
+    const fetched = await fetchDailyHabitsRange(consistencyFromKey, todayActive);
+    Object.assign(entriesByDate, fetched);
+    markFetched(consistencyFromKey, todayActive);
+  }
+  // Stable per-habit accent, derived from the habit's own id so it
+  // never changes across renders/reloads without needing a new stored
+  // "color" field on the habit itself.
+  const CONSISTENCY_PALETTE = ['#17E88F', '#4DA3FF', '#FFC93C', '#FF6B6B', '#B98CFF', '#FF9F5A', '#3DD9C4', '#F06AC1', '#8FE04A', '#5AA9FF'];
+  function colorForHabit(id) {
+    const s = String(id || '');
+    let hash = 0;
+    for (let i = 0; i < s.length; i++) hash = (hash * 31 + s.charCodeAt(i)) >>> 0;
+    return CONSISTENCY_PALETTE[hash % CONSISTENCY_PALETTE.length];
+  }
+  // Same fraction rule as everywhere else on this page
+  // (manualHabitFraction / scoreManualHabitsForDate): 'na' if the day
+  // was explicitly marked N/A, 'done' if it hit its daily goal,
+  // 'empty' otherwise — including no entry at all, which reads the
+  // same as a logged miss (there's no 4th "unknown" state in the spec).
+  function dayStatus(habit, dateKey) {
+    const e = entriesByDate[dateKey] && entriesByDate[dateKey][habit.id];
+    if (e && e.na === true) return 'na';
+    if (e && manualHabitFraction(habit, e.value) >= 1) return 'done';
+    return 'empty';
+  }
+  // N/A days are skip-neutral for both streaks: they neither extend
+  // nor break a run, and they're excluded from the completion-%
+  // denominator too, since "N/A" means the habit didn't apply that
+  // day rather than that it was missed.
+  function computeHabitStats(habit, dateKeys) {
+    let bestStreak = 0, run = 0, applicable = 0, done = 0;
+    dateKeys.forEach((k) => {
+      const status = dayStatus(habit, k);
+      if (status === 'na') return;
+      applicable++;
+      if (status === 'done') { done++; run++; bestStreak = Math.max(bestStreak, run); }
+      else { run = 0; }
+    });
+    let currentStreak = 0;
+    for (let i = dateKeys.length - 1; i >= 0; i--) {
+      const status = dayStatus(habit, dateKeys[i]);
+      if (status === 'na') continue;
+      if (status === 'done') { currentStreak++; continue; }
+      break;
+    }
+    const completionPct = applicable > 0 ? Math.round((done / applicable) * 100) : null;
+    return { currentStreak, bestStreak, completionPct };
+  }
+  function renderConsistency() {
+    const dateKeys = datesFromTo(consistencyFromKey, todayActive);
+    const allHabits = currentHabitConfig.habits || [];
+    // auto_threshold habits are excluded here for the same reason
+    // dayStatus/scoreManualHabitsForDate skip them elsewhere on this
+    // page: this page never evaluates auto-sourced data (see
+    // compareThreshold's header comment), so there's no real
+    // completion history to draw for past days either — showing a
+    // grid for them would mean fabricating data, not displaying it.
+    const trackedHabits = allHabits.filter((h) => !(h.advanced && h.advanced.autoThreshold));
+    const autoCount = allHabits.length - trackedHabits.length;
+    const cards = trackedHabits.map((h) => {
+      const color = colorForHabit(h.id);
+      const cells = dateKeys.map((k) => {
+        const status = dayStatus(h, k);
+        const cls = status === 'done' ? 'filled' : status === 'na' ? 'na' : '';
+        const style = status === 'done' ? ' style="background:' + color + '"' : '';
+        const label = DayLib.parseDateKey(k).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+        const statusWord = status === 'done' ? 'Done' : status === 'na' ? 'N/A' : 'Not done';
+        return '<span class="consistency-cell ' + cls + '" title="' + escapeHtml(label) + ' — ' + statusWord + '"' + style + '></span>';
+      }).join('');
+      const stats = computeHabitStats(h, dateKeys);
+      return '<div class="gm-card consistency-card">' +
+        '<div class="consistency-head">' +
+        '<span class="consistency-name">' + escapeHtml(h.name) + '</span>' +
+        '<span class="consistency-badge">' + (h.buildOrQuit === 'quit' ? 'Quit' : 'Build') + '</span>' +
+        '</div>' +
+        '<div class="consistency-scroll"><div class="consistency-grid">' + cells + '</div></div>' +
+        '<div class="consistency-stats">' +
+        '<div class="consistency-stat"><div class="consistency-stat-value">' + stats.currentStreak + '</div><div class="consistency-stat-label">Streak</div></div>' +
+        '<div class="consistency-stat"><div class="consistency-stat-value">' + stats.bestStreak + '</div><div class="consistency-stat-label">Best streak</div></div>' +
+        '<div class="consistency-stat"><div class="consistency-stat-value">' + (stats.completionPct == null ? '—' : stats.completionPct + '%') + '</div><div class="consistency-stat-label">Completion</div></div>' +
+        '</div></div>';
+    }).join('');
+    const note = autoCount > 0
+      ? '<div class="consistency-empty-note">' + autoCount + ' auto-tracked habit' + (autoCount > 1 ? 's' : '') + ' not shown here — see Today\'s Score on Main for those.</div>'
+      : '';
+    $('consistencyList').innerHTML = (cards || '<div class="consistency-empty-note">No habits yet.</div>') + note;
+    // Default every grid's scroll position to the most recent (right-
+    // most) day, since that's the end a returning user cares about.
+    $('consistencyList').querySelectorAll('.consistency-scroll').forEach((el) => { el.scrollLeft = el.scrollWidth; });
+  }
 
   // ---------- manage habits (Phase 2: dedicated add/edit modal
   // instead of the old always-expanded inline row editor — see
@@ -921,6 +1053,7 @@ document.addEventListener('DOMContentLoaded', function () {
     renderHabitSettingsList();
     renderNightlyEntry();
     await renderSummary();
+    renderConsistency();
   }
   $('habitConfigList').addEventListener('click', async (e) => {
     const row = e.target.closest('.habit-config-row');
@@ -1123,6 +1256,13 @@ document.addEventListener('DOMContentLoaded', function () {
     renderNightlyEntry();
     renderHabitSettingsList();
     await renderSummary();
+
+    // Consistency grid covers a wider window than the week already
+    // fetched above — load whatever of it isn't already covered, then
+    // render (this can safely run after the above, since none of it
+    // depends on the wider range being loaded yet).
+    await ensureConsistencyDataLoaded();
+    renderConsistency();
   })();
 });
 </script>
