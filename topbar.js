@@ -650,13 +650,37 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
     }
     function round1(n) { return n == null ? null : Math.round(n * 10) / 10; }
 
+    // ---------- staleness helpers ----------
+    // Cronometer's nutrition section already fell back to the most
+    // RECENTLY synced date when today's isn't available (see below) —
+    // reasonable for the app's own display, but the chat was passing
+    // that same fallback along as if it were today's data with no way
+    // for the model to tell the difference, so a 5-day-old sync got
+    // presented as "what you ate today". daysStale (0 = genuinely
+    // today) makes that distinction explicit for the model instead of
+    // silent. Applied the same way to Whoop below, since a live fetch
+    // still only returns whatever WHOOP's own most recent record is —
+    // if the user hasn't worn/synced the device, that can be several
+    // days old too, same failure mode as Cronometer.
+    function keyToUTCMs(key) {
+      const parts = String(key || '').split('-').map(Number);
+      if (parts.length !== 3 || parts.some((n) => !n && n !== 0)) return null;
+      return Date.UTC(parts[0], parts[1] - 1, parts[2]);
+    }
+    function daysStaleFromToday(dateKeyStr) {
+      const a = keyToUTCMs(todayKey);
+      const b = keyToUTCMs(dateKeyStr);
+      if (a == null || b == null) return null;
+      return Math.round((a - b) / 86400000);
+    }
+
     const todayKey = activeDateKey();
     const gymTodayKey = calDateKey();
 
     // ---------- 1 & 2. Nutrition + goals/targets (Cronometer) ----------
     // Reuses window.CronoLib (cronometer-lib.js), loaded on every page —
     // exactly what health.html's own Cronometer section calls.
-    let nutrition = { connected: false, date: null, totals: null, score: null };
+    let nutrition = { connected: false, date: null, daysStale: null, totals: null, score: null };
     let goals = { metrics: null };
     if (window.CronoLib) {
       const targets = window.CronoLib.loadTargets();
@@ -667,6 +691,9 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
         const result = await window.CronoLib.fetchCronometerData();
         if (result && result.ok && result.rows && result.rows.length) {
           const dates = window.CronoLib.listAvailableDates(result.rows, result.headers) || [];
+          // Falls back to the most recently synced date when today's own
+          // isn't there yet — daysStale (computed below) is what tells
+          // the model whether that fallback actually kicked in.
           const dateKey = dates.includes(todayKey) ? todayKey : (dates[0] || null);
           if (dateKey) {
             const totals = window.CronoLib.sumNutrientsForDate(result.rows, result.headers, dateKey, targets);
@@ -675,6 +702,7 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
             nutrition = {
               connected: true,
               date: dateKey,
+              daysStale: daysStaleFromToday(dateKey),
               totals: Object.keys(totals).reduce((o, k) => { o[k] = round1(totals[k]); return o; }, {}),
               score: scored ? scored.score : null,
             };
@@ -763,6 +791,15 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
     const WHOOP_KEY = 'whoop_tokens_v1';
     let whoop = {
       connected: false, lastSyncedMinutesAgo: null,
+      // dataDate/daysStale describe the RECOVERY record's own date (WHOOP's
+      // "?limit=1" always returns whatever its most recent record actually
+      // is) — a different thing from lastSyncedMinutesAgo above, which is
+      // just when index.html's manual Sync button last ran and says
+      // nothing about whether that data is for today. If the user hasn't
+      // worn/synced their WHOOP device, the recovery score returned here
+      // can genuinely be several days old, same failure mode as
+      // Cronometer's nutrition section above.
+      dataDate: null, daysStale: null,
       recoveryPct: null, sleepDuration: null, sleepPct: null,
       hrv: null, rhr: null, strain: null,
     };
@@ -822,11 +859,20 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
           whoopFetch('/activity/sleep?limit=1', t).catch(() => null),
           whoopFetch('/cycle?limit=1', t).catch(() => null),
         ]);
-        const r = rec && rec.records && rec.records[0] && rec.records[0].score;
+        const recRecord = rec && rec.records && rec.records[0];
+        const r = recRecord && recRecord.score;
         if (r) {
           whoop.recoveryPct = Math.round(r.recovery_score || 0);
           whoop.hrv = Math.round(r.hrv_rmssd_milli || 0);
           whoop.rhr = Math.round(r.resting_heart_rate || 0);
+        }
+        if (recRecord && recRecord.created_at) {
+          // Local calendar date, not a slice of the UTC ISO string —
+          // same UTC-vs-local trap this project has fixed elsewhere
+          // (see daylib.js's header comment) would silently misdate this
+          // near local midnight in negative-UTC-offset timezones.
+          whoop.dataDate = calDateKey(new Date(recRecord.created_at));
+          whoop.daysStale = daysStaleFromToday(whoop.dataDate);
         }
         const s = sleep && sleep.records && sleep.records[0];
         if (s && s.score) {
