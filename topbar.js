@@ -1382,7 +1382,68 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
       container.appendChild(card);
     }
 
-    function addBubble(role, text, proposedObjectives, proposedCalendarEvent, proposedRestriction) {
+    // ---------- today's session override (see api/chat.js's
+    // propose_today_session tool) ----------
+    // Same explicit-confirmation pattern as the cards above, but purely
+    // client-side — no server call at all, just a localStorage write
+    // to the exact same po_coach_today_recommendation_v1 entry
+    // gym.html's Training page already reads (the "generate once,
+    // cache until tapped" entry from the earlier caching fix), so the
+    // Training card picks it up with zero extra plumbing on that side.
+    // Also updates ttText/ttSub directly if they exist in THIS page's
+    // DOM right now (i.e. the user has Training open in the same tab
+    // as the chat) — a bare localStorage write alone doesn't push to
+    // already-rendered DOM on its own, and the chat widget can be open
+    // on any page, not just gym.html.
+    function renderTodaySessionCard(container, session) {
+      const card = document.createElement('div');
+      card.className = 'chat-plan-card';
+
+      card.appendChild(planRow('Today’s session', session.recommendation, session.sub || ''));
+
+      const actions = document.createElement('div');
+      actions.className = 'chat-plan-actions';
+      const replaceBtn = document.createElement('button');
+      replaceBtn.type = 'button'; replaceBtn.className = 'chat-plan-save-btn';
+      replaceBtn.textContent = 'Replace today’s session';
+      const dismissBtn = document.createElement('button');
+      dismissBtn.type = 'button'; dismissBtn.className = 'chat-plan-dismiss-btn';
+      dismissBtn.textContent = 'Not now';
+      actions.appendChild(replaceBtn);
+      actions.appendChild(dismissBtn);
+      card.appendChild(actions);
+
+      function showStatus(text, isSaved) {
+        actions.remove();
+        const status = document.createElement('div');
+        status.className = 'chat-plan-status ' + (isSaved ? 'is-saved' : 'is-dismissed');
+        status.textContent = text;
+        card.appendChild(status);
+      }
+
+      replaceBtn.addEventListener('click', () => {
+        try {
+          localStorage.setItem('po_coach_today_recommendation_v1', JSON.stringify({
+            recommendation: session.recommendation,
+            sub: session.sub || '',
+            dateKey: window.DayLib.effectiveDateKey(),
+            generatedAt: new Date().toISOString(),
+          }));
+          const ttText = document.getElementById('ttText');
+          const ttSub = document.getElementById('ttSub');
+          if (ttText) ttText.textContent = session.recommendation;
+          if (ttSub) ttSub.textContent = session.sub || '';
+          showStatus('Replaced ✓ — check Training', true);
+        } catch (e) {
+          showStatus('Could not replace: ' + (e.message || String(e)), false);
+        }
+      });
+      dismissBtn.addEventListener('click', () => showStatus('Not replaced — original kept', false));
+
+      container.appendChild(card);
+    }
+
+    function addBubble(role, text, proposedObjectives, proposedCalendarEvent, proposedRestriction, proposedTodaySession) {
       emptyEl.style.display = 'none';
       const el = document.createElement('div');
       el.className = 'chat-bubble ' + role;
@@ -1390,6 +1451,7 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
       if (proposedObjectives) renderPlanCard(el, proposedObjectives);
       if (proposedCalendarEvent) renderCalendarEventCard(el, proposedCalendarEvent);
       if (proposedRestriction) renderRestrictionCard(el, proposedRestriction);
+      if (proposedTodaySession) renderTodaySessionCard(el, proposedTodaySession);
       messagesEl.appendChild(el);
       messagesEl.scrollTop = messagesEl.scrollHeight;
       return el;
@@ -1695,8 +1757,8 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
         saveChatHistory(chatHistory);
         const fallbackText = json.proposedObjectives
           ? "Here's what I'm proposing for this week:"
-          : (json.proposedCalendarEvent ? "Here's the event I'm proposing:" : (json.proposedRestriction ? "Here's the restriction I'm proposing:" : '(no reply)'));
-        addBubble('assistant', json.reply || fallbackText, json.proposedObjectives || null, json.proposedCalendarEvent || null, json.proposedRestriction || null);
+          : (json.proposedCalendarEvent ? "Here's the event I'm proposing:" : (json.proposedRestriction ? "Here's the restriction I'm proposing:" : (json.proposedTodaySession ? "Here's the replacement I'm proposing for today's session:" : '(no reply)')));
+        addBubble('assistant', json.reply || fallbackText, json.proposedObjectives || null, json.proposedCalendarEvent || null, json.proposedRestriction || null, json.proposedTodaySession || null);
         archiveToServer(chatTodayKey(), chatHistory); // best-effort, doesn't block the UI
       } catch (e) {
         typingEl.remove();

@@ -184,6 +184,39 @@ const PROPOSE_RESTRICTION_TOOL = {
     },
     required: ['text', 'starts_on', 'ends_on'],
   },
+};
+
+// ---------- propose_today_session tool ----------
+// Lets the user directly override what Training's "Today's session"
+// card currently recommends — e.g. "today I want to run 10km instead,
+// I have great recovery" — without that request being misread as a
+// calendar-scheduling ask (propose_calendar_event) or a weekly-
+// objectives change (propose_training_objectives). On confirm, this
+// overwrites the exact same localStorage cache
+// (po_coach_today_recommendation_v1) gym.html's Training page reads
+// from — the same "generate once, cache until tapped" entry Phase 1's
+// caching fix introduced — so the card updates without the user
+// needing to tap Regenerate, and topbar.js's save handler also
+// updates the live DOM directly in case Training is the page
+// currently open.
+const PROPOSE_TODAY_SESSION_TOOL = {
+  name: 'propose_today_session',
+  description:
+    'Propose a replacement for TODAY\'S specific Training recommendation (the "Today\'s session" card) — ' +
+    'e.g. the user says "today I want to run 10km instead", "put Push + 5K in today\'s session", "my knee ' +
+    'feels fine now, change today\'s pick to Legs". This is DIFFERENT from propose_calendar_event (which ' +
+    'creates a new timed calendar event) and propose_training_objectives (which sets this WEEK\'s targets, ' +
+    'not a specific day\'s pick) — use this one specifically when the user wants to change what Training ' +
+    'itself currently shows as today\'s recommended session. This does NOT overwrite anything by itself — ' +
+    'the user sees the proposal in the chat and explicitly chooses to replace it or not.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      recommendation: { type: 'string', description: 'Short label, same style Training itself uses, e.g. "10K run", "Push + 5K run", "Rest" — never a paragraph or a list of exercises' },
+      sub: { type: 'string', description: 'Optional short context line shown under the recommendation, e.g. "User-requested — great recovery today"' },
+    },
+    required: ['recommendation'],
+  },
   // Last tool in the tools array -> caches every tool definition up to
   // and including this one (see the prompt-caching note in the handler
   // below). Tool definitions never change between requests, so this is
@@ -262,6 +295,18 @@ function normalizeProposedRestriction(raw) {
     scope: scope || null,
     starts_on: typeof r.starts_on === 'string' ? r.starts_on.slice(0, 10) : '',
     ends_on: typeof r.ends_on === 'string' ? r.ends_on.slice(0, 10) : '',
+  };
+}
+
+// Defensive normalization for propose_today_session, same spirit as
+// the three above — guarantees the frontend always gets the exact
+// {recommendation, sub} shape topbar.js's save handler expects when
+// writing gym.html's po_coach_today_recommendation_v1 cache entry.
+function normalizeProposedTodaySession(raw) {
+  const r = raw || {};
+  return {
+    recommendation: typeof r.recommendation === 'string' ? r.recommendation.slice(0, 200) : '',
+    sub: typeof r.sub === 'string' ? r.sub.slice(0, 200) : '',
   };
 }
 
@@ -505,6 +550,18 @@ function buildStaticSystemPrompt() {
     'of those; leave it unset for anything else (e.g. an injury affecting several activities at once) ' +
     'rather than forcing a bad fit. When you do call it, also say a short summary sentence in your normal ' +
     'reply text (the proposal is shown as its own card with a Save button).\n\n' +
+    'TODAY\'S SESSION OVERRIDE: the user can also directly override what Training\'s "Today\'s session" ' +
+    'card currently recommends — e.g. "today I want to run 10km instead, I have great recovery", "put Push ' +
+    '+ 5K in today\'s session", "my knee feels fine now, change today\'s pick to Legs". This is a DIFFERENT ' +
+    'request from scheduling a calendar event (propose_calendar_event — creates a new timed event) and from ' +
+    'setting this week\'s targets (propose_training_objectives — weekly, not a specific day); watch for this ' +
+    'distinction carefully; do not default to calendar or objectives just because training is mentioned. ' +
+    'Call propose_today_session when the user wants to change what Training itself shows as today\'s ' +
+    'recommended session. Keep the recommendation in Training\'s own short-label style (e.g. "10K run", ' +
+    '"Push + 5K run", "Rest") — never a paragraph or a list of exercises; a brief sub line is fine when it ' +
+    'adds real context (e.g. "User-requested — great recovery today"). When you do call it, also say a ' +
+    'short summary sentence in your normal reply text (the proposal is shown as its own card with a Replace ' +
+    'button).\n\n' +
     'CHARTS: when a chart would clearly help — trends over time, comparisons between days or ' +
     'metrics — you may include, inside your normal reply text, exactly one fenced block like this:\n' +
     '```chart\n' +
@@ -599,7 +656,7 @@ export default async function handler(req, res) {
           max_tokens: 1024,
           system: systemBlocks,
           messages,
-          tools: [{ type: 'memory_20250818', name: 'memory' }, PROPOSE_OBJECTIVES_TOOL, PROPOSE_CALENDAR_EVENT_TOOL, PROPOSE_RESTRICTION_TOOL],
+          tools: [{ type: 'memory_20250818', name: 'memory' }, PROPOSE_OBJECTIVES_TOOL, PROPOSE_CALENDAR_EVENT_TOOL, PROPOSE_RESTRICTION_TOOL, PROPOSE_TODAY_SESSION_TOOL],
         }),
       });
 
@@ -632,6 +689,7 @@ export default async function handler(req, res) {
       let proposedObjectives = null;
       let proposedCalendarEvent = null;
       let proposedRestriction = null;
+      let proposedTodaySession = null;
       const toolResults = [];
       for (const toolUse of toolUses) {
         if (toolUse.name === 'propose_training_objectives') {
@@ -661,6 +719,15 @@ export default async function handler(req, res) {
           });
           continue;
         }
+        if (toolUse.name === 'propose_today_session') {
+          proposedTodaySession = normalizeProposedTodaySession(toolUse.input);
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: toolUse.id,
+            content: 'Proposal shown to the user in the chat UI for review. Training\'s cached recommendation is not overwritten automatically — only the user can replace it.',
+          });
+          continue;
+        }
         const result = await handleMemoryCommand(toolUse.input);
         toolResults.push({
           type: 'tool_result',
@@ -671,12 +738,13 @@ export default async function handler(req, res) {
       }
       messages.push({ role: 'user', content: toolResults });
 
-      if (proposedObjectives || proposedCalendarEvent || proposedRestriction) {
+      if (proposedObjectives || proposedCalendarEvent || proposedRestriction || proposedTodaySession) {
         const textBlock = (data.content || []).find((b) => b.type === 'text');
         const responseBody = { reply: textBlock ? textBlock.text : '', history: messages };
         if (proposedObjectives) responseBody.proposedObjectives = proposedObjectives;
         if (proposedCalendarEvent) responseBody.proposedCalendarEvent = proposedCalendarEvent;
         if (proposedRestriction) responseBody.proposedRestriction = proposedRestriction;
+        if (proposedTodaySession) responseBody.proposedTodaySession = proposedTodaySession;
         return res.status(200).json(responseBody);
       }
     }
