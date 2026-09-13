@@ -365,6 +365,23 @@ img, video, canvas, svg { max-width: 100%; }
 .th-run-label { font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-3); }
 .tp-today-sub { font-size: 11.5px; color: var(--text-3); margin-top: 8px; }
 
+/* Collapsed-by-default toggle for the Training History body (bug fix —
+   this list was rendering fully expanded, pushing everything below it
+   far down the page on a day with several exercises logged). Same
+   collapse/expand pattern as habits.html's Advanced section
+   (hf-advanced-toggle/hf-advanced-body): a plain-text summary row that
+   flips a [hidden] body open, arrow direction as the only state cue. */
+.th-toggle-btn {
+  width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 8px 0 4px; border: 0; background: transparent; cursor: pointer;
+  font-family: inherit; font-size: 13px; font-weight: 600; color: var(--text-2); text-align: left;
+}
+.th-toggle-btn[hidden] { display: none !important; }
+.th-toggle-btn:hover { color: var(--text-1); }
+.th-toggle-arrow { flex-shrink: 0; font-size: 11px; color: var(--text-3); transition: transform 0.15s; }
+#trainingHistoryBody[hidden] { display: none !important; }
+#trainingHistoryBody { margin-top: 4px; }
+
 /* ----- WHOOP auto-import review list (Phase 2) ----- */
 .whoop-import-status { font-size: 12.5px; color: var(--text-3); margin-top: 8px; }
 .whoop-import-list { display: flex; flex-direction: column; gap: 8px; max-height: 50vh; overflow-y: auto; margin-bottom: 4px; }
@@ -1660,7 +1677,11 @@ img, video, canvas, svg { max-width: 100%; }
         </button>
       </div>
     </div>
-    <div id="trainingHistoryBody"></div>
+    <button type="button" class="th-toggle-btn" id="trainingHistoryToggleBtn" hidden>
+      <span id="trainingHistorySummary">Nothing logged this day</span>
+      <span class="th-toggle-arrow" id="trainingHistoryToggleArrow">▾</span>
+    </button>
+    <div id="trainingHistoryBody" hidden></div>
   </div>
 
   <div id="strengthPanel" class="training-panel active">
@@ -4669,6 +4690,20 @@ img, video, canvas, svg { max-width: 100%; }
     if (dateKeyStr === trainingAddDays(todayKey, -1)) return 'Yesterday';
     return DayLib.parseDateKey(dateKeyStr).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
   }
+  // Collapsed by default (bug fix — a day with several exercises logged
+  // was rendering fully expanded here, pushing the Strength/Activities
+  // tabs and everything below them far down the page). Persists across
+  // day-nav clicks and re-renders within the session, same as habits.html's
+  // Advanced section staying open/closed across its own re-renders —
+  // only the toggle button itself flips it.
+  let trainingHistoryExpanded = false;
+  function setTrainingHistoryExpanded(expanded) {
+    trainingHistoryExpanded = expanded;
+    $$('trainingHistoryBody').hidden = !expanded;
+    $$('trainingHistoryToggleArrow').textContent = expanded ? '▴' : '▾';
+  }
+  $$('trainingHistoryToggleBtn').addEventListener('click', () => setTrainingHistoryExpanded(!trainingHistoryExpanded));
+
   function renderTrainingHistory() {
     trainingDayLabelEl.textContent = trainingFormatDayLabel(trainingViewDateKey);
     trainingDayNextBtn.disabled = trainingViewDateKey >= DayLib.effectiveDateKey();
@@ -4679,6 +4714,7 @@ img, video, canvas, svg { max-width: 100%; }
     const u = pcState.units || 'kg';
 
     let html = '';
+    let exerciseCount = 0;
     exercises.forEach((ex) => {
       // Same date-matching idiom as renderTodaySetsForEx() (Strength
       // side): round-trip through a real Date + DayLib, never slice the
@@ -4687,6 +4723,7 @@ img, video, canvas, svg { max-width: 100%; }
       // audited for).
       const sets = (logs[ex.id] || []).filter((l) => DayLib.effectiveDateKey(new Date(l.date)) === trainingViewDateKey);
       if (!sets.length) return;
+      exerciseCount++;
       html += '<div class="th-ex-group"><div class="th-ex-name">' + escapeHtml(ex.name) + '</div>' +
         sets.map((l, i) => {
           const val = ex.bw ? (l.reps + ' reps') : (l.weight + u + ' × ' + l.reps);
@@ -4694,7 +4731,8 @@ img, video, canvas, svg { max-width: 100%; }
         }).join('') + '</div>';
     });
 
-    activityEntries.filter((a) => a && a.dateKey === trainingViewDateKey).forEach((a) => {
+    const dayActivities = activityEntries.filter((a) => a && a.dateKey === trainingViewDateKey);
+    dayActivities.forEach((a) => {
       const type = activityTypeById(a.activityTypeId);
       html += '<div class="th-run-row"><span><span class="th-run-label">' + escapeHtml(type.name) + '</span><br>' +
         escapeHtml(activityStatsLine(a)) + '</span>' +
@@ -4702,6 +4740,18 @@ img, video, canvas, svg { max-width: 100%; }
     });
 
     $$('trainingHistoryBody').innerHTML = html || '<div class="th-empty">Nothing logged this day.</div>';
+
+    const itemCount = exerciseCount + dayActivities.length;
+    $$('trainingHistoryToggleBtn').hidden = itemCount === 0;
+    if (itemCount === 0) {
+      $$('trainingHistoryBody').hidden = false; // show the plain "Nothing logged" line, no toggle needed
+    } else {
+      const parts = [];
+      if (exerciseCount) parts.push(exerciseCount + ' exercise' + (exerciseCount === 1 ? '' : 's'));
+      if (dayActivities.length) parts.push(dayActivities.length + ' ' + (dayActivities.length === 1 ? 'activity' : 'activities'));
+      $$('trainingHistorySummary').textContent = parts.join(', ') + ' logged this day';
+      setTrainingHistoryExpanded(trainingHistoryExpanded);
+    }
   }
   trainingDayPrevBtn.addEventListener('click', () => {
     trainingViewDateKey = trainingAddDays(trainingViewDateKey, -1);
@@ -4881,7 +4931,46 @@ img, video, canvas, svg { max-width: 100%; }
   // THIS WEEK'S OBJECTIVES — api/training.js?mode=plan
   // ============================================================
   const PLAN_KEY = 'po_coach_weekly_plan_v1';
-  function loadStoredPlan() { try { return JSON.parse(localStorage.getItem(PLAN_KEY)); } catch (e) { return null; } }
+  // Migration for a plan generated before Phase 3 of the multi-
+  // activity-type feature (top-level "running" -> "cardio", and
+  // longRun -> longSession with a generic targetAmount+unit instead of
+  // targetKm). Without this, an old plan a user generated earlier in
+  // the same week and never regenerated would still be "this week's"
+  // plan (weekStart matches) but have no .cardio key at all — and
+  // renderWeeklyProgress() unconditionally reads plan.cardio.interval/
+  // longSession/easyVolume with no guard, so it threw partway through
+  // and left the tp-plan-item spans stuck on their default "—"
+  // placeholder text (the exact "EASY VOLUME —" symptom reported) while
+  // computeWeekProgress()'s own defensive checks meant the progress bar
+  // above it still rendered fine — a confusing half-broken-looking
+  // card, not a clean failure. Applied on every read, same spirit as
+  // main.html's normalizeHabit() migration for the Habits redesign, so
+  // an old plan renders correctly instead of needing the user to
+  // notice and manually hit Generate again.
+  function normalizeStoredPlanCardio(plan) {
+    if (!plan || typeof plan !== 'object' || plan.cardio) return plan; // already new-shape (or not a plan object at all)
+    const running = plan.running;
+    if (!running) return plan; // neither shape recognized — leave as-is
+    const interval = running.interval || {};
+    const longRun = running.longRun || {};
+    const easyVolume = running.easyVolume || {};
+    return {
+      strength: plan.strength,
+      cardio: {
+        interval: { activityTypeId: 'running', activityName: 'Running', targetSessions: interval.targetSessions || 0, targetMinutes: interval.targetMinutes || 0, description: interval.description || '' },
+        longSession: { activityTypeId: 'running', activityName: 'Running', targetAmount: longRun.targetKm || 0, unit: 'km', description: longRun.description || '' },
+        easyVolume: { activityTypeId: 'running', activityName: 'Running', targetAmount: easyVolume.targetKm || 0, unit: 'km', description: easyVolume.description || '' },
+      },
+      rationale: plan.rationale,
+    };
+  }
+  function loadStoredPlan() {
+    try {
+      const stored = JSON.parse(localStorage.getItem(PLAN_KEY));
+      if (stored && stored.plan) stored.plan = normalizeStoredPlanCardio(stored.plan);
+      return stored;
+    } catch (e) { return null; }
+  }
   function saveStoredPlan(p) { try { localStorage.setItem(PLAN_KEY, JSON.stringify(p)); } catch (e) {} }
 
   function computeWeekProgress(plan) {

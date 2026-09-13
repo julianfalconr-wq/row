@@ -3146,9 +3146,31 @@ document.addEventListener('DOMContentLoaded', function () {
   // week, and gracefully reports unavailable otherwise (accurate: if
   // cardio went to a different activity, there genuinely is no running
   // target) rather than crashing on the now-removed .running key.
+  // Migrates a plan generated before Phase 3 of the multi-activity-type
+  // feature (top-level "running" -> "cardio") — same shape adapter as
+  // gym.html's normalizeStoredPlanCardio(), duplicated here rather than
+  // shared (this project's established per-file convention, no shared-
+  // module setup). Without this, an old plan a user generated earlier
+  // in the same week and never regenerated would silently report "no
+  // running target this week" here even when it plainly had one, since
+  // it has no .cardio key at all for the checks below to find.
+  function migratePlanCardio(planInner) {
+    if (!planInner || typeof planInner !== 'object' || planInner.cardio) return planInner;
+    const running = planInner.running;
+    if (!running) return planInner;
+    const longRun = running.longRun || {};
+    const easyVolume = running.easyVolume || {};
+    return Object.assign({}, planInner, {
+      cardio: {
+        longSession: { activityTypeId: 'running', targetAmount: longRun.targetKm || 0 },
+        easyVolume: { activityTypeId: 'running', targetAmount: easyVolume.targetKm || 0 },
+      },
+    });
+  }
   function computeRunningCategory(datePlainKey, weekMondayPlainKey) {
     let plan = null;
     try { plan = JSON.parse(localStorage.getItem('po_coach_weekly_plan_v1')); } catch (e) {}
+    if (plan && plan.plan) plan.plan = migratePlanCardio(plan.plan);
     if (!plan || plan.weekStart !== weekMondayPlainKey || !plan.plan || !plan.plan.cardio) return { available: false, reason: 'no weekly plan yet' };
     const cardio = plan.plan.cardio;
     const longSession = cardio.longSession || {};
@@ -3475,6 +3497,7 @@ document.addEventListener('DOMContentLoaded', function () {
       let obj = null;
       try {
         const plan = JSON.parse(localStorage.getItem('po_coach_weekly_plan_v1'));
+        if (plan && plan.plan) plan.plan = migratePlanCardio(plan.plan);
         if (plan && plan.weekStart === weekMondayPlain && plan.plan && plan.plan.cardio) {
           let doneDays = {}; try { doneDays = JSON.parse(localStorage.getItem('po_coach_workout_done')) || {}; } catch (e) {}
           let runs = []; try { runs = JSON.parse(localStorage.getItem('po_coach_runs')) || []; } catch (e) {}
