@@ -104,6 +104,11 @@
 //   real Google Calendar event is created.
 //   Body: {
 //     todayDateKey: 'YYYY-MM-DD', tomorrowDateKey: 'YYYY-MM-DD',   // from DayLib.effectiveDateKey(), client-side
+//     nowTime: 'HH:MM',   // REQUIRED — actual current wall-clock time, client-side. Without this the
+//     // model has no way to know a plan generated mid-day shouldn't schedule things (like breakfast)
+//     // that have already passed — see buildDayPlanSystemPrompt's FIXED section below and the bug this
+//     // fixes (a 1:20pm request proposing a 7:30am breakfast block, since only the DATE was ever sent,
+//     // never the time-of-day the request was actually made).
 //     todayRecommendation: String | null,   // gym.html's cached mode=today result (Phase 1, padel-aware) — reused verbatim, NOT recomputed here
 //     whoopToday: { recoveryPct: Number|null } | null,
 //     fixedEvents: [{ date, start, end, title, allDay }],   // today + tomorrow's REAL existing Calendar events — immovable
@@ -115,7 +120,15 @@
 //     // LLM to get reliably right, whereas fitting flexible blocks
 //     // (training/work/meals/walks) around fixed anchors is exactly the
 //     // kind of judgment call worth spending a model call on. See
-//     // buildDayPlanSystemPrompt's FIXED section below.
+//     // buildDayPlanSystemPrompt's FIXED section below. THIS PAIR IS
+//     // ABOUT TOMORROW — computing tonight's Wind-down/bedtime and
+//     // tomorrow's Wake-up block from tomorrow's earliest commitment —
+//     // do not confuse with todayWakeUpTime below, a different thing.
+//     todayWakeUpTime: 'HH:MM',   // TODAY's own already-configured wake time, read client-side from
+//     // General Settings' Day Ring per-weekday schedule (dayRingSchedule[todayWeekday].wake — see
+//     // main.html's Day Ring feature) by TODAY's actual weekday, NOT inferred from any calendar event.
+//     // Used only as the anchor for how early today's morning-anchored blocks (breakfast) may start;
+//     // unlike wakeUpTime above, this is never itself output as a block.
 //   }
 //   -> { ok: true, blocks: [{ date, start, end, title, category }] }
 // =============================================================
@@ -539,7 +552,15 @@ function buildDayPlanSystemPrompt(restrictions) {
     '- wakeUpTime and bedtime are already computed (from tomorrow\'s earliest fixed commitment and the ' +
     'user\'s sleep-duration target) — do NOT recalculate them yourself. Output a short "Wake up" block on ' +
     'tomorrowDateKey starting at wakeUpTime, and a "Wind-down" block on todayDateKey ending exactly at ' +
-    'bedtime, using the exact given times. Never schedule anything else between bedtime and wakeUpTime.\n\n' +
+    'bedtime, using the exact given times. Never schedule anything else between bedtime and wakeUpTime.\n' +
+    '- nowTime is the actual current wall-clock time this plan is being generated at, "HH:MM". EVERY block ' +
+    'you propose on todayDateKey must start at or after nowTime — never propose a start time on todayDateKey ' +
+    'that has already passed, even for a normally-morning item. If a default item like breakfast would only ' +
+    'make sense before nowTime, use your judgment: shift it to a later, still-sensible slot and rename it if ' +
+    'the new time no longer fits the original name (e.g. "Brunch" instead of "Breakfast" if nowTime is ' +
+    'already midday), or omit it entirely if no reasonable later slot makes sense — but never output a ' +
+    'todayDateKey block starting before nowTime. tomorrowDateKey blocks (the Wake up block) are unaffected ' +
+    'by nowTime.\n\n' +
     'WHAT YOU DECIDE — fit these into whatever open time remains around the fixed items above, on ' +
     'todayDateKey unless noted:\n' +
     '1. Today\'s training session — todayRecommendation is the exact, already-decided session (it already ' +
@@ -549,10 +570,14 @@ function buildDayPlanSystemPrompt(restrictions) {
     '2. One focused productivity/work block — a reasonable default length (about 1 hour) since no specific ' +
     'preference is configured.\n' +
     '3. Three generic meal blocks — "Breakfast", "Lunch", "Dinner" only, no recipes or macros — at ' +
-    'reasonable times relative to wake-up, the fixed events, and each other (breakfast shortly after ' +
-    'waking, lunch around midday, dinner in the evening; several hours apart; never overlapping the ' +
-    'training block or a fixed event).\n' +
-    '4. A short post-meal walk (10-15 minutes) shortly after each of the three meal blocks.\n\n' +
+    'reasonable times relative to todayWakeUpTime (today\'s already-configured wake time — do NOT ' +
+    'recalculate it, just use it as the anchor for how early breakfast may start), the fixed events, and ' +
+    'each other (breakfast shortly after todayWakeUpTime, lunch around midday, dinner in the evening; ' +
+    'several hours apart; never overlapping the training block or a fixed event) — subject always to the ' +
+    'nowTime rule above, which can override todayWakeUpTime\'s placement (e.g. skip or rename breakfast, per ' +
+    'that rule, rather than starting it before nowTime).\n' +
+    '4. A short post-meal walk (10-15 minutes) shortly after each of the three meal blocks (or after however ' +
+    'many of them survive the nowTime rule above).\n\n' +
     'If whoopToday shows low recovery (recoveryPct below 34), keep the rest of the day light — do not add ' +
     'anything beyond the items above, and lean toward the shorter end of the work block\'s duration; the ' +
     'training recommendation itself is already adjusted for recovery, so do not second-guess it further ' +
@@ -583,9 +608,31 @@ function numOrNull(v) {
 const DAY_PLAN_CATEGORIES = ['sleep', 'training', 'work', 'meal', 'walk'];
 const HHMM_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 
-function normalizeDayPlanBlocks(raw, todayDateKey, tomorrowDateKey) {
+// Half-open-interval overlap on the same calendar date — touching
+// endpoints (one block ending exactly when another starts) do NOT
+// count as overlapping. All-day fixedEvents have no clock time (see
+// this file's own MODE 3 doc comment) so they're skipped here, same
+// as the client already skips them for wake-time inference.
+function blockOverlapsFixedEvent(block, event) {
+  if (event.allDay || !event.start || !event.end || event.date !== block.date) return false;
+  return block.start < event.end && event.start < block.end;
+}
+
+// Server-side backstop for "never overlap fixedEvents" — the prompt
+// already says this emphatically (see buildDayPlanSystemPrompt's FIXED
+// section), but nothing previously verified the model actually
+// complied, unlike e.g. isCardioTypeBlocked's restriction enforcement
+// elsewhere in this file. Dropping a violating block outright (rather
+// than trying to trim/reschedule it) is the simpler, safer choice —
+// trimming risks producing a degenerate (start>=end) or misleadingly
+// short block the user never asked to review.
+function dropBlocksOverlappingFixedEvents(blocks, fixedEvents) {
+  return blocks.filter((b) => !fixedEvents.some((e) => blockOverlapsFixedEvent(b, e)));
+}
+
+function normalizeDayPlanBlocks(raw, todayDateKey, tomorrowDateKey, fixedEvents) {
   const blocks = Array.isArray(raw && raw.blocks) ? raw.blocks : [];
-  return blocks
+  const cleaned = blocks
     .map((b) => {
       b = b || {};
       const date = (b.date === todayDateKey || b.date === tomorrowDateKey) ? b.date : todayDateKey;
@@ -595,21 +642,29 @@ function normalizeDayPlanBlocks(raw, todayDateKey, tomorrowDateKey) {
       const category = DAY_PLAN_CATEGORIES.indexOf(b.category) !== -1 ? b.category : 'other';
       return { date, start, end, title, category };
     })
-    .filter((b) => b.title && HHMM_RE.test(b.start) && HHMM_RE.test(b.end) && b.start < b.end)
+    .filter((b) => b.title && HHMM_RE.test(b.start) && HHMM_RE.test(b.end) && b.start < b.end);
+  return dropBlocksOverlappingFixedEvents(cleaned, fixedEvents)
     .sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start));
 }
 
 async function handleDayPlan(req, res, apiKey, body) {
   const todayDateKey = typeof body.todayDateKey === 'string' ? body.todayDateKey.slice(0, 10) : '';
   const tomorrowDateKey = typeof body.tomorrowDateKey === 'string' ? body.tomorrowDateKey.slice(0, 10) : '';
-  if (!todayDateKey || !tomorrowDateKey) {
-    return res.status(400).json({ ok: false, error: 'todayDateKey and tomorrowDateKey (YYYY-MM-DD) are required' });
+  // nowTime is REQUIRED (not defaulted like wakeUpTime/bedtime/
+  // todayWakeUpTime below) — defaulting it to anything would silently
+  // defeat Fix 1 (e.g. defaulting to '00:00' would never filter a
+  // single already-passed block), so a missing/malformed value fails
+  // loudly instead of quietly reproducing the original bug.
+  const nowTime = typeof body.nowTime === 'string' && HHMM_RE.test(body.nowTime) ? body.nowTime : '';
+  if (!todayDateKey || !tomorrowDateKey || !nowTime) {
+    return res.status(400).json({ ok: false, error: 'todayDateKey, tomorrowDateKey (YYYY-MM-DD), and nowTime (HH:MM) are required' });
   }
 
   const restrictions = sanitizeRestrictions(body.restrictions);
   const context = {
     todayDateKey,
     tomorrowDateKey,
+    nowTime,
     todayRecommendation: typeof body.todayRecommendation === 'string' ? body.todayRecommendation.slice(0, 300) : null,
     whoopToday: body.whoopToday && typeof body.whoopToday === 'object' ? { recoveryPct: numOrNull(body.whoopToday.recoveryPct) } : null,
     fixedEvents: Array.isArray(body.fixedEvents) ? body.fixedEvents.slice(0, 40).map((e) => ({
@@ -622,6 +677,13 @@ async function handleDayPlan(req, res, apiKey, body) {
     sleepTargetHours: Math.max(4, Math.min(12, numOrNull(body.sleepTargetHours) || 8)),
     wakeUpTime: typeof body.wakeUpTime === 'string' && HHMM_RE.test(body.wakeUpTime) ? body.wakeUpTime : '07:00',
     bedtime: typeof body.bedtime === 'string' && HHMM_RE.test(body.bedtime) ? body.bedtime : '23:00',
+    // Today's own already-configured wake time (Day Ring's per-weekday
+    // dayRingSchedule, read client-side by TODAY's actual weekday) —
+    // deliberately separate from wakeUpTime above, which is about
+    // TOMORROW's inferred wake time for tonight's Wind-down/bedtime
+    // math. Defaults to '08:00' to match the Day Ring feature's own
+    // DAY_RING_DEFAULT_WAKE if the client omits it for any reason.
+    todayWakeUpTime: typeof body.todayWakeUpTime === 'string' && HHMM_RE.test(body.todayWakeUpTime) ? body.todayWakeUpTime : '08:00',
     activeRestrictions: restrictions,
   };
 
@@ -657,7 +719,7 @@ async function handleDayPlan(req, res, apiKey, body) {
   });
   const parsed = extractJson(text);
   if (!parsed) return res.status(502).json({ ok: false, error: 'Model did not return valid JSON.' });
-  const blocks = normalizeDayPlanBlocks(parsed, todayDateKey, tomorrowDateKey);
+  const blocks = normalizeDayPlanBlocks(parsed, todayDateKey, tomorrowDateKey, context.fixedEvents);
   if (!blocks.length) return res.status(502).json({ ok: false, error: 'Model did not return any usable blocks.' });
 
   return res.status(200).json({ ok: true, blocks });

@@ -2704,6 +2704,29 @@ document.addEventListener('DOMContentLoaded', function () {
   const WAKE_PREP_BUFFER_MINUTES = 45;
   const DEFAULT_WAKE_UP_TIME = '07:00'; // used only if tomorrow has no fixed events at all
 
+  // TODAY's own wake time, read from the Day Ring's per-weekday
+  // schedule (General Settings — see main.html's Day Ring feature) by
+  // today's actual weekday — deliberately NOT the tomorrow-calendar
+  // inference above (wakeUpTime/DEFAULT_WAKE_UP_TIME), which is a
+  // different thing used only for tonight's Wind-down/bedtime math.
+  // This small lookup is duplicated here rather than shared, matching
+  // this file's own established convention (see
+  // fetchActiveRestrictionsForPlan's comment) of small per-closure
+  // copies rather than reaching into a different script's IIFE scope.
+  const PLAN_DAY_WEEKDAY_KEYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']; // matches Date.getDay()
+  const PLAN_DAY_DEFAULT_WAKE = '08:00'; // matches the Day Ring feature's own DAY_RING_DEFAULT_WAKE
+  function todayWakeUpTimeFromDayRingSchedule(todayDateKey) {
+    const profile = (typeof window.DayLib !== 'undefined') ? window.DayLib.loadProfile() : null;
+    const schedule = (profile && profile.dayRingSchedule) || {};
+    const weekday = PLAN_DAY_WEEKDAY_KEYS[DayLib.parseDateKey(todayDateKey).getDay()];
+    const entry = schedule[weekday];
+    return (entry && typeof entry.wake === 'string' && entry.wake) ? entry.wake : PLAN_DAY_DEFAULT_WAKE;
+  }
+  function currentTimeHHMM() {
+    const d = new Date();
+    return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+  }
+
   function toLocalDateAndTime(iso) {
     const d = new Date(iso);
     const date = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
@@ -2825,6 +2848,7 @@ document.addEventListener('DOMContentLoaded', function () {
       const tomorrowTimed = fixedEvents.filter((e) => e.date === tomorrowDateKey && !e.allDay && e.start).sort((a, b) => a.start.localeCompare(b.start));
       const wakeUpTime = tomorrowTimed.length ? subtractMinutesFromTime(tomorrowTimed[0].start, WAKE_PREP_BUFFER_MINUTES) : DEFAULT_WAKE_UP_TIME;
       const bedtime = subtractMinutesFromTime(wakeUpTime, DEFAULT_SLEEP_TARGET_HOURS * 60);
+      const todayWakeUpTime = todayWakeUpTimeFromDayRingSchedule(todayDateKey);
 
       $('planDayStatus').textContent = 'Checking WHOOP recovery…';
       const whoopToday = await fetchRecoveryForPlan();
@@ -2833,15 +2857,21 @@ document.addEventListener('DOMContentLoaded', function () {
       const restrictions = await fetchActiveRestrictionsForPlan(todayDateKey);
 
       $('planDayStatus').textContent = 'Thinking…';
+      // Read right before sending (not earlier in this handler) so it
+      // reflects the actual moment the request is made, not whenever
+      // the calendar fetch/WHOOP check happened to finish.
+      const nowTime = currentTimeHHMM();
       const res = await fetch('/api/training?mode=day-plan&secret=' + encodeURIComponent(secret), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           todayDateKey, tomorrowDateKey,
+          nowTime,
           todayRecommendation,
           whoopToday,
           fixedEvents,
           sleepTargetHours: DEFAULT_SLEEP_TARGET_HOURS,
           wakeUpTime, bedtime,
+          todayWakeUpTime,
           restrictions,
         }),
       });
