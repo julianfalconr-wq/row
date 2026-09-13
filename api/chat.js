@@ -868,40 +868,11 @@ export default async function handler(req, res) {
       }
 
       const data = await anthropicRes.json();
-      // TEMPORARY (investigating an empty-reply report on a complex,
-      // multi-tool-call request) — logs to Vercel's function logs, not
-      // the client. Checking whether this is the same "high-effort
-      // adaptive thinking consumes the whole max_tokens budget before
-      // any output text is written" failure already fixed twice in
-      // api/training.js (mode=today, mode=day-plan) — this endpoint has
-      // never set `effort` or `thinking` at all, unlike either of those
-      // fixes, and multi-iteration tool use means the failure could hit
-      // on ANY iteration, not just the first. stop_reason === 'max_tokens'
-      // with no text block present is the smoking gun for that failure
-      // mode specifically. Remove once the cause is confirmed and fixed.
-      if (data) {
-        const blockTypes = (data.content || []).map((b) => b && b.type);
-        const hasText = (data.content || []).some((b) => b && b.type === 'text');
-        console.log(
-          '[chat debug] iter=' + iterations,
-          'stop_reason=' + data.stop_reason,
-          'blockTypes=' + JSON.stringify(blockTypes),
-          'hasText=' + hasText,
-          'usage=' + JSON.stringify(data.usage || null)
-        );
-      }
       messages.push({ role: 'assistant', content: data.content });
 
       const toolUses = (data.content || []).filter((b) => b.type === 'tool_use');
       if (toolUses.length === 0) {
         const textBlock = (data.content || []).find((b) => b.type === 'text');
-        // TEMPORARY (same investigation) — an empty reply reaching the
-        // client is exactly `textBlock` being falsy here; log loudly so
-        // it's unmistakable in Vercel's logs which exact iteration/stop_reason
-        // produced it, rather than having to infer it from the block above.
-        if (!textBlock) {
-          console.log('[chat debug] EMPTY REPLY about to be returned — iter=' + iterations, 'stop_reason=' + data.stop_reason, 'content=' + JSON.stringify(data.content));
-        }
         return res.status(200).json({ reply: textBlock ? textBlock.text : '', history: messages });
       }
 
@@ -1035,16 +1006,8 @@ export default async function handler(req, res) {
       }
     }
 
-    // TEMPORARY (same investigation) — ruling this path in or out: it
-    // would surface to the user as an error bubble, not silence, so
-    // less likely to be the actual cause, but logged for completeness.
-    console.log('[chat debug] hit MAX_TOOL_ITERATIONS (' + MAX_TOOL_ITERATIONS + ') without a final reply');
     return res.status(504).json({ error: 'too many tool iterations, aborted' });
   } catch (e) {
-    // TEMPORARY (same investigation) — likewise would surface as an
-    // error bubble rather than silence, but logged in case something
-    // upstream is swallowing it.
-    console.log('[chat debug] caught exception in tool loop:', e && e.stack ? e.stack : String(e));
     return res.status(500).json({ error: 'unexpected error: ' + (e.message || String(e)) });
   }
 }
