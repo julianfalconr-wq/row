@@ -365,6 +365,23 @@ img, video, canvas, svg { max-width: 100%; }
 .th-run-label { font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-3); }
 .tp-today-sub { font-size: 11.5px; color: var(--text-3); margin-top: 8px; }
 
+/* ----- WHOOP auto-import review list (Phase 2) ----- */
+.whoop-import-status { font-size: 12.5px; color: var(--text-3); margin-top: 8px; }
+.whoop-import-list { display: flex; flex-direction: column; gap: 8px; max-height: 50vh; overflow-y: auto; margin-bottom: 4px; }
+.whoop-import-row {
+  display: flex; align-items: flex-start; gap: 10px; padding: 10px;
+  background: rgba(255,255,255,0.025); border: 1px solid var(--border); border-radius: 10px; cursor: pointer;
+}
+.whoop-import-row input[type="checkbox"] { margin-top: 2px; flex-shrink: 0; width: 16px; height: 16px; }
+.whoop-import-main { min-width: 0; }
+.whoop-import-title { font-size: 13.5px; font-weight: 700; color: var(--text-1); }
+.whoop-import-new-badge {
+  font-size: 9.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--good);
+  background: rgba(110,231,183,0.12); border-radius: 999px; padding: 2px 7px; margin-left: 6px;
+}
+.whoop-import-sub { font-size: 11.5px; color: var(--text-3); margin-top: 2px; }
+.whoop-import-empty { font-size: 13px; color: var(--text-3); text-align: center; padding: 20px 0; }
+
 /* ----- Activity log (generalized from a running-only log, Phase 1
    of the multi-activity-type feature) ----- */
 .run-log-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
@@ -2081,6 +2098,12 @@ img, video, canvas, svg { max-width: 100%; }
   <div id="activitiesPanel" class="training-panel">
     <div class="card">
       <div class="po-sub-section" style="margin-top:0">
+        <div class="po-sub-title">Import from WHOOP</div>
+        <button type="button" class="po-btn-secondary" id="whoopImportBtn" style="width:100%">Import last 7 days</button>
+        <div id="whoopImportStatus" class="whoop-import-status"></div>
+      </div>
+
+      <div class="po-sub-section">
         <div class="po-sub-title">Log an activity</div>
         <div class="run-field" style="margin-bottom:14px">
           <label>Activity type</label>
@@ -2127,6 +2150,20 @@ img, video, canvas, svg { max-width: 100%; }
 
       <div class="run-history-title">History</div>
       <div id="runHistoryList"></div>
+    </div>
+  </div>
+
+  <!-- WHOOP import review (Phase 2) — nothing here is saved until
+       "Add selected" is clicked; see the ACTIVITY LOG script block's
+       WHOOP AUTO-IMPORT section for the full flow. -->
+  <div class="po-modal-bg" id="whoopImportModalBg">
+    <div class="po-modal" style="max-width:480px">
+      <h3>Import WHOOP workouts</h3>
+      <div id="whoopImportList" class="whoop-import-list"></div>
+      <div class="po-modal-actions">
+        <button type="button" class="po-btn-secondary" id="whoopImportCancel">Cancel</button>
+        <button type="button" class="po-btn-primary" id="whoopImportConfirm">Add selected</button>
+      </div>
     </div>
   </div>
 
@@ -4342,6 +4379,186 @@ img, video, canvas, svg { max-width: 100%; }
     } catch (e) {}
     return activityTypes;
   }
+  async function saveActivityTypesToServer(types) {
+    const secret = getSecret();
+    if (!secret) throw new Error('Set your dashboard secret first');
+    const r = await fetch('/api/sync-state?secret=' + encodeURIComponent(secret), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ resource: 'activity-types', types }),
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok) throw new Error((j && j.error) || ('HTTP ' + r.status));
+  }
+
+  // ============================================================
+  // WHOOP AUTO-IMPORT (Phase 2) — pulls the last 7 days of WHOOP
+  // workouts via GET /v2/activity/workout (proxied through
+  // /api/whoop-data, same tokens/refresh flow as fetchWhoopTrend
+  // below — WHOOP_KEY/whoopRefreshToken/whoopProxyFetch are defined
+  // further down in this same IIFE; safe to reference here since none
+  // of this runs until a user actually clicks the Import button, long
+  // after the whole script has finished its initial top-to-bottom pass).
+  //
+  // Verified against WHOOP's current (2026) v2 API docs before writing
+  // this — GET /v2/activity/workout?start=...&end=...&limit=25&nextToken=...
+  // returns { records: [{ id, start, end, sport_name, score_state,
+  // score: { distance_meter, average_heart_rate, ... } }], next_token }.
+  // sport_name is a direct human-readable string (e.g. "Running") —
+  // the older numeric sport_id is explicitly deprecated per WHOOP's
+  // own v1->v2 migration docs, so matching deliberately keys off
+  // sport_name only, never a sport_id lookup table. read:workout is
+  // already in this app's requested OAuth scope (see health.html's
+  // WHOOP connect flow's SCOPES constant) — an already-connected user
+  // does not need to reconnect for this to work.
+  //
+  // Matching: case-insensitive exact match against configured activity
+  // type names; no match -> auto-create a new, non-recommendable type
+  // (distance-based if the workout reports a distance, duration-only
+  // otherwise) rather than forcing the user to map every sport by hand
+  // first — less friction for the common case where WHOOP's sport name
+  // already IS the type name (e.g. "Running", "Cycling"), and the new
+  // type still shows up in General Settings afterward to rename/
+  // reconfigure/toggle recommendable at leisure.
+  //
+  // Nothing is saved until "Add selected" is clicked in the review
+  // modal — see whoopImportConfirm's handler below.
+  // ============================================================
+  async function fetchWhoopWorkouts(startISO, endISO) {
+    let tokens;
+    try { tokens = JSON.parse(localStorage.getItem(WHOOP_KEY)); } catch (e) { tokens = null; }
+    if (!tokens || !tokens.access) return { connected: false, workouts: [] };
+    try {
+      let t = tokens;
+      if (t.expires && Date.now() > t.expires - 60000) { const n = await whoopRefreshToken(t); if (n) t = n; }
+      const workouts = [];
+      let nextToken = null;
+      let guard = 0;
+      do {
+        let path = '/activity/workout?start=' + encodeURIComponent(startISO) + '&end=' + encodeURIComponent(endISO) + '&limit=25';
+        if (nextToken) path += '&nextToken=' + encodeURIComponent(nextToken);
+        const j = await whoopProxyFetch(path, t);
+        (j.records || []).forEach((w) => workouts.push(w));
+        nextToken = j.next_token || null;
+        guard++;
+      } while (nextToken && guard < 4); // up to 100 workouts — generous for a 7-day window
+      return { connected: true, workouts };
+    } catch (e) {
+      return { connected: true, workouts: [] };
+    }
+  }
+  function whoopWorkoutToDraft(w) {
+    const startMs = Date.parse(w.start);
+    const endMs = Date.parse(w.end);
+    const durationMin = (isFinite(startMs) && isFinite(endMs)) ? Math.round(((endMs - startMs) / 60000) * 10) / 10 : null;
+    const distanceKm = (w.score && w.score.distance_meter != null) ? Math.round((w.score.distance_meter / 1000) * 100) / 100 : null;
+    const dateKey = isFinite(startMs) ? DayLib.effectiveDateKey(new Date(startMs)) : DayLib.effectiveDateKey();
+    return { whoopId: w.id, sportName: w.sport_name || 'Workout', dateKey, durationMin, distanceKm };
+  }
+  function matchOrCreateType(sportName, distanceKm) {
+    const norm = String(sportName || '').trim().toLowerCase();
+    const existing = activityTypes.find((t) => t.name.trim().toLowerCase() === norm);
+    if (existing) return { type: existing, isNew: false };
+    const slug = norm.replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    const hasDistance = distanceKm != null && distanceKm > 0;
+    return {
+      type: {
+        id: 'whoop_' + (slug || Date.now().toString(36)),
+        name: sportName || 'Workout',
+        unit: hasDistance ? 'km' : '',
+        unitKind: hasDistance ? 'distance' : 'duration',
+        recommendable: false,
+      },
+      isNew: true,
+    };
+  }
+  let whoopImportDrafts = [];
+  function renderWhoopImportList() {
+    if (!whoopImportDrafts.length) { $$('whoopImportList').innerHTML = '<div class="whoop-import-empty">Nothing new to import.</div>'; return; }
+    $$('whoopImportList').innerHTML = whoopImportDrafts.map((d, i) => {
+      const stats = d.type.unitKind === 'distance' && d.distanceKm != null
+        ? d.distanceKm + ' km' + (d.durationMin != null ? ' · ' + d.durationMin + ' min' : '')
+        : (d.durationMin != null ? d.durationMin + ' min' : '—');
+      return '<label class="whoop-import-row">' +
+        '<input type="checkbox" class="whoop-import-check" data-idx="' + i + '"' + (d.include ? ' checked' : '') + '>' +
+        '<div class="whoop-import-main">' +
+          '<div class="whoop-import-title">' + escapeHtml(d.type.name) + (d.isNew ? '<span class="whoop-import-new-badge">New type</span>' : '') + '</div>' +
+          '<div class="whoop-import-sub">' + escapeHtml(d.dateKey) + ' · ' + escapeHtml(stats) + '</div>' +
+        '</div></label>';
+    }).join('');
+    $$('whoopImportList').querySelectorAll('.whoop-import-check').forEach((cb) => {
+      cb.addEventListener('change', () => { whoopImportDrafts[Number(cb.dataset.idx)].include = cb.checked; });
+    });
+  }
+  async function openWhoopImportModal() {
+    const btn = $$('whoopImportBtn');
+    const statusEl = $$('whoopImportStatus');
+    btn.disabled = true;
+    statusEl.textContent = 'Fetching…';
+    const end = new Date();
+    const start = new Date(end.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const { connected, workouts } = await fetchWhoopWorkouts(start.toISOString(), end.toISOString());
+    btn.disabled = false;
+    if (!connected) { statusEl.textContent = 'Connect WHOOP on the Health page first.'; return; }
+    const alreadyImported = new Set(activityEntries.filter((a) => a.whoopId).map((a) => a.whoopId));
+    const fresh = workouts.filter((w) => w && w.id && !alreadyImported.has(w.id));
+    if (!fresh.length) {
+      statusEl.textContent = workouts.length ? 'Everything from the last 7 days is already imported.' : 'No WHOOP workouts found in the last 7 days.';
+      return;
+    }
+    whoopImportDrafts = fresh.map((w) => {
+      const draft = whoopWorkoutToDraft(w);
+      const { type, isNew } = matchOrCreateType(draft.sportName, draft.distanceKm);
+      return { ...draft, type, isNew, include: true };
+    });
+    statusEl.textContent = '';
+    renderWhoopImportList();
+    $$('whoopImportModalBg').classList.add('show');
+  }
+  $$('whoopImportBtn').addEventListener('click', openWhoopImportModal);
+  $$('whoopImportCancel').addEventListener('click', () => { $$('whoopImportModalBg').classList.remove('show'); });
+  $$('whoopImportModalBg').addEventListener('click', (e) => { if (e.target.id === 'whoopImportModalBg') $$('whoopImportModalBg').classList.remove('show'); });
+  $$('whoopImportConfirm').addEventListener('click', async () => {
+    const selected = whoopImportDrafts.filter((d) => d.include);
+    if (!selected.length) { $$('whoopImportModalBg').classList.remove('show'); return; }
+    const btn = $$('whoopImportConfirm');
+    btn.disabled = true;
+    try {
+      // Any brand-new types get created (persisted) BEFORE the entries
+      // that reference them, so a refresh never briefly shows an
+      // activity type that "shouldn't" exist yet.
+      const newTypes = [];
+      selected.forEach((d) => {
+        if (d.isNew && !activityTypes.some((t) => t.id === d.type.id) && !newTypes.some((t) => t.id === d.type.id)) newTypes.push(d.type);
+      });
+      if (newTypes.length) {
+        activityTypes = activityTypes.concat(newTypes);
+        try { await saveActivityTypesToServer(activityTypes); } catch (e) { /* non-fatal — the entries below still save locally either way, and General Settings' own fetch will retry */ }
+        populateActivityTypeSelect();
+      }
+      selected.forEach((d) => {
+        const entry = {
+          id: 'run_' + Date.now() + '_' + Math.floor(Math.random() * 9999) + '_' + Math.floor(Math.random() * 9999),
+          dateKey: d.dateKey,
+          activityTypeId: d.type.id,
+          effort: null,
+          notes: 'Imported from WHOOP',
+          whoopId: d.whoopId,
+        };
+        if (d.type.unitKind === 'distance' && d.distanceKm != null) entry.distanceKm = d.distanceKm;
+        if (d.durationMin != null) entry.durationMin = d.durationMin;
+        activityEntries.push(entry);
+      });
+      activityEntries.sort((a, b) => b.dateKey.localeCompare(a.dateKey));
+      activitySave(activityEntries);
+      runRender();
+      renderTrainingHistory();
+      renderWeeklyProgress();
+      $$('whoopImportModalBg').classList.remove('show');
+      $$('whoopImportStatus').textContent = 'Imported ' + selected.length + ' ' + (selected.length === 1 ? 'workout' : 'workouts') + '.';
+    } finally {
+      btn.disabled = false;
+    }
+  });
 
   function runFmtPace(distanceKm, durationMin) {
     if (!distanceKm || !durationMin) return '—';
