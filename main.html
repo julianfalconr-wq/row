@@ -1022,6 +1022,8 @@ body::after {
   font-family: inherit; font-size: 13.5px; padding: 9px 10px; border-radius: 9px; outline: none;
 }
 .gs-habits-note { font-size: 12.5px; color: var(--text-tertiary); margin-bottom: 10px; line-height: 1.5; }
+.gs-toggle-row { display: flex; align-items: center; gap: 8px; cursor: pointer; margin-bottom: 8px; font-size: 13.5px; font-weight: 600; color: var(--text-primary); }
+.gs-toggle-row input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--btn-primary-a); cursor: pointer; }
 /* Collapsible "Advanced" pattern, matching habits.html's .hf-advanced-toggle/.hf-advanced-body exactly (same look/behavior, different file/stylesheet). */
 .hf-advanced-toggle {
   width: 100%; text-align: left; padding: 10px 0; border: 0; background: transparent;
@@ -1217,6 +1219,17 @@ body::after {
             </select>
           </div>
         </div>
+      </div>
+
+      <div class="set-divider"></div>
+
+      <div class="set-section">
+        <h4>Chat</h4>
+        <label class="gs-toggle-row">
+          <input type="checkbox" id="gsChatEnabled" checked>
+          <span>Chat enabled</span>
+        </label>
+        <div class="gs-habits-note">Turns off the chat button everywhere in the app and stops any calls to the AI assistant — use this to stop incurring API costs without losing anything you've already asked it to remember or any of the other AI features (Plan my day, Training's weekly objectives/Today's session, Scan Food with AI). Everything else keeps working normally.</div>
       </div>
 
       <div class="set-divider"></div>
@@ -4047,11 +4060,12 @@ document.addEventListener('DOMContentLoaded', function () {
   const GS_DAY_RING_DEFAULT_WAKE = '08:00';
   const GS_DAY_RING_DEFAULT_SLEEP = '00:00';
   function openGeneralSettings() {
-    const fallbackDefault = { dayEndTime: '00:00', timezone: 'auto', categoryWeights: { habits: 35, training: 20, nutrition: 20, water: 10, dailyStack: 10 }, dayRingSchedule: {} };
+    const fallbackDefault = { dayEndTime: '00:00', timezone: 'auto', categoryWeights: { habits: 35, training: 20, nutrition: 20, water: 10, dailyStack: 10 }, dayRingSchedule: {}, chatEnabled: true };
     const profile = (typeof window.DayLib !== 'undefined') ? window.DayLib.loadProfile() : fallbackDefault;
     $('gsTimezone').innerHTML = '<option value="auto">Auto-detect</option>';
     populateTimezoneOptions(profile.timezone);
     $('gsDayEndTime').value = profile.dayEndTime || '00:00';
+    $('gsChatEnabled').checked = profile.chatEnabled !== false;
     const daySchedule = profile.dayRingSchedule || {};
     GS_WEEKDAY_KEYS.forEach((day) => {
       const entry = daySchedule[day] || {};
@@ -4102,6 +4116,7 @@ document.addEventListener('DOMContentLoaded', function () {
       dayRingSchedule,
       timezone: $('gsTimezone').value || 'auto',
       categoryWeights: {},
+      chatEnabled: $('gsChatEnabled').checked,
     };
     Object.keys(gsWeightIds).forEach((k) => { settings.categoryWeights[k] = Number($(gsWeightIds[k]).value) || 0; });
     const btn = $('generalSettingsSaveBtn');
@@ -4120,6 +4135,12 @@ document.addEventListener('DOMContentLoaded', function () {
       // closure), so it's refreshed via the small hook that script
       // exposes on window instead of waiting for its next 60s tick.
       if (typeof window.__refreshDayRing === 'function') window.__refreshDayRing();
+      // Same again for the chat FAB — topbar.js is a separate script
+      // entirely (loaded on every page, not just this one) that only
+      // otherwise re-checks this setting on its own storage/focus/
+      // interval triggers, none of which fire from a same-tab
+      // localStorage write.
+      if (typeof window.__applyChatVisibility === 'function') window.__applyChatVisibility();
       $('generalSettingsConfirm').classList.add('show');
       clearTimeout($('generalSettingsConfirm')._t);
       $('generalSettingsConfirm')._t = setTimeout(() => $('generalSettingsConfirm').classList.remove('show'), 1800);

@@ -462,6 +462,47 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
   // its own internal 4-tab nav, not because it should be chat-free).
   // Only iframes (the embedded water tracker) skip it.
   function shouldShowChat() { return !isEmbedded(); }
+  // The "Chat enabled" General Settings toggle (daylib.js's
+  // DEFAULT_PROFILE.chatEnabled) — kept SEPARATE from shouldShowChat()
+  // above on purpose: shouldShowChat() decides whether the chat DOM
+  // exists at all (never true inside the embedded water-tracker
+  // iframe), while this decides whether an ALREADY-injected FAB is
+  // currently visible. Injecting the DOM unconditionally (subject only
+  // to shouldShowChat()) and toggling visibility separately here is
+  // what lets a mid-session Settings change take effect immediately,
+  // on this tab and others (see applyChatVisibility()'s callers below),
+  // without needing to re-inject a different DOM tree.
+  function isChatEnabledInSettings() {
+    try {
+      if (typeof window.DayLib === 'undefined') return true;
+      return window.DayLib.loadProfile().chatEnabled !== false;
+    } catch (e) { return true; }
+  }
+  // Toggles the FAB's visibility to match the setting. Uses an inline
+  // style, not the `hidden` attribute — `.chat-fab` already sets its
+  // own `display`, and the UA stylesheet's `[hidden] { display: none }`
+  // rule is LOWER priority than any author rule regardless of
+  // specificity, so `hidden` alone would silently do nothing here (the
+  // same class of CSS-cascade gotcha already hit and documented
+  // elsewhere in this project). An inline style always wins instead.
+  function applyChatVisibility() {
+    const fab = document.getElementById('chatFab');
+    if (!fab) return; // never injected at all (isEmbedded()) — nothing to toggle
+    const enabled = isChatEnabledInSettings();
+    fab.style.display = enabled ? '' : 'none';
+    if (!enabled) {
+      // Force-close an already-open panel too — otherwise a user who
+      // had it open when the setting was flipped off (e.g. in another
+      // tab) could keep chatting through it with no FAB left to close it.
+      const modalBg = document.getElementById('chatModalBg');
+      if (modalBg) modalBg.classList.remove('show');
+    }
+  }
+  // Exposed so main.html's General Settings save handler can re-apply
+  // this immediately in the SAME tab after toggling (a 'storage' event
+  // only fires in OTHER tabs) — same live-update pattern already
+  // established for the Day Ring (window.__refreshDayRing).
+  window.__applyChatVisibility = applyChatVisibility;
   function currentPageKey() {
     const p = (window.location.pathname || '').toLowerCase();
     if (p.endsWith('health.html')) return 'health';
@@ -2107,14 +2148,22 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
 
     // Clicking a push notification (via sw.js) opens the page at
     // ?openChat=1 — auto-open the panel so the tap actually lands
-    // somewhere useful instead of just the bare dashboard.
+    // somewhere useful instead of just the bare dashboard. Gated on the
+    // same setting as the FAB itself — a stale/queued notification link
+    // shouldn't be able to open chat after the user has turned it off.
     try {
-      if (new URLSearchParams(window.location.search).get('openChat') === '1') {
+      if (new URLSearchParams(window.location.search).get('openChat') === '1' && isChatEnabledInSettings()) {
         openChatPanel();
       }
     } catch (e) {}
 
     async function sendChatMessage() {
+      // Hard backstop, not just relying on the FAB being hidden/the
+      // panel being force-closed elsewhere (applyChatVisibility()) —
+      // this is the ONE place that actually calls /api/chat, so it's
+      // the one place that must never do so while the setting is off,
+      // regardless of how the panel happened to still be open.
+      if (!isChatEnabledInSettings()) return;
       const text = input.value.trim();
       if (!text) return;
 
@@ -2280,16 +2329,24 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
     injectStyle();
     injectChrome();
     injectChat();
+    applyChatVisibility();
     window.RowIcons.render();
     const btn = document.getElementById('topbarWaterAdd');
     if (btn) btn.addEventListener('click', (e) => { e.preventDefault(); addWater(); });
     render();
     lockGestures();
     startModalLock();
+    // applyChatVisibility() rides the same reactive triggers as the
+    // water pill's render() — a 'storage' event catches the toggle
+    // being flipped in ANOTHER tab, focus/visibilitychange and the
+    // interval catch it having changed while this tab was backgrounded.
     window.addEventListener('storage', render);
+    window.addEventListener('storage', applyChatVisibility);
     window.addEventListener('focus', render);
-    document.addEventListener('visibilitychange', () => { if (!document.hidden) render(); });
+    window.addEventListener('focus', applyChatVisibility);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) { render(); applyChatVisibility(); } });
     setInterval(render, 30 * 1000);
+    setInterval(applyChatVisibility, 30 * 1000);
   }
 
   if (document.readyState === 'loading') {

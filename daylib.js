@@ -72,6 +72,19 @@
     dayEndTime: '00:00',
     timezone: 'auto',
     categoryWeights: { habits: 40, training: 20, nutrition: 20, water: 10, dailyStack: 10 },
+    // Defaults to true so existing users see zero behavior change until
+    // they explicitly turn it off in General Settings — same "no
+    // surprise defaults" rule this file already follows everywhere else
+    // (see effectiveDateKey()'s own default-safety comment). A simple
+    // top-level boolean, unlike categoryWeights, needs no separate
+    // normalize/migration step: loadProfile()'s existing
+    // Object.assign(DEFAULT_PROFILE, p, ...) merge already does the
+    // right thing — an old profile missing this field gets `true` from
+    // the default, one with it explicitly set to `false` keeps that.
+    // topbar.js reads this to decide whether to show the chat FAB at
+    // all on every page; api/chat.js itself is never called if the FAB
+    // was never shown.
+    chatEnabled: true,
   };
 
   function loadProfile() {
