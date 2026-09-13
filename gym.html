@@ -5424,17 +5424,6 @@ img, video, canvas, svg { max-width: 100%; }
       return sum + (Number(type.unitKind === 'count' ? a.count : a.distanceKm) || 0);
     }, 0) * 10) / 10;
 
-    // Legacy running-specific fields — kept for
-    // generateTodayRecommendation/handleToday (Phase 4, not yet
-    // generalized), which still reasons explicitly about running
-    // distance. Correctly comes out to 0/empty when this week's cardio
-    // was assigned to a different activity type, which is the accurate
-    // answer (no running is actually due this week), not a bug.
-    const runningAssignedThisWeek = cardioTypeIds.has('running');
-    const runsThisWeek = runEntries.filter((r) => r.dateKey >= monday);
-    const kmDone = runningAssignedThisWeek ? Math.round(runsThisWeek.reduce((s, r) => s + (Number(r.distanceKm) || 0), 0) * 10) / 10 : 0;
-    const kmTarget = runningAssignedThisWeek ? amountTarget : 0;
-
     return {
       strengthDone,
       strengthTarget: plan ? plan.strength.targetSessions : 0,
@@ -5442,9 +5431,6 @@ img, video, canvas, svg { max-width: 100%; }
       amountDone,
       amountTarget,
       activitiesThisWeek: activitiesThisWeek.map((a) => ({ dateKey: a.dateKey, activityTypeId: a.activityTypeId, distanceKm: a.distanceKm, count: a.count, durationMin: a.durationMin, effort: a.effort })),
-      kmDone,
-      kmTarget,
-      runsThisWeek: runsThisWeek.map((r) => ({ dateKey: r.dateKey, distanceKm: r.distanceKm, durationMin: r.durationMin, effort: r.effort })),
     };
   }
 
@@ -5724,12 +5710,16 @@ img, video, canvas, svg { max-width: 100%; }
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           weekPlan: plan,
+          // Phase 4: generalized field names matching handleToday's own
+          // updated prompt (cardio, not running-specific) — see
+          // computeWeekProgress() above for where these come from.
           progress: plan ? {
             strengthSessionsDone: progress.strengthDone,
             strengthSessionsTarget: progress.strengthTarget,
-            runningKmDone: progress.kmDone,
-            runningKmTarget: progress.kmTarget,
-            runningSessionsThisWeek: progress.runsThisWeek,
+            cardioAmountDone: progress.amountDone,
+            cardioAmountTarget: progress.amountTarget,
+            cardioUnit: progress.cardioUnit,
+            activitiesThisWeek: progress.activitiesThisWeek,
           } : null,
           strengthContext,
           whoopToday,

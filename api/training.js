@@ -63,25 +63,26 @@
 //   } }
 //
 // MODE 2 — POST /api/training?mode=today&secret=...
-//   Recommends one specific session for today, Whoop-adjusted.
-//   NOT YET generalized to the Phase 3 cardio shape below — still reads
-//   weekPlan.running specifically (Phase 4, separate work). Between
-//   Phase 3 shipping and Phase 4 starting, weekPlan will actually be
-//   shaped like Phase 3's plan.cardio, which this mode's prompt doesn't
-//   know about yet, so a generated recommendation may reason about
-//   cardio incorrectly for that window — a known, temporary, and
-//   already-flagged gap, not a bug to chase here.
+//   Recommends one specific session for today, Whoop-adjusted. Phase 4
+//   of the multi-activity-type generalization — reads weekPlan.cardio
+//   (Phase 3's shape) instead of the old weekPlan.running, and can
+//   recommend by whatever activity each cardio piece was actually
+//   assigned (not just running). Reuses Phase 3's cardio-slot output
+//   as-is rather than independently choosing an activity itself — this
+//   mode only decides WHICH of the week's already-assigned pieces (if
+//   any) is due today, same as it always only decided which of the
+//   week's already-assigned running pieces was due.
 //   Body: {
-//     weekPlan: { strength: {...}, running: {...}, rationale } | null,   // from mode=plan
+//     weekPlan: { strength: {...}, cardio: {...}, rationale } | null,   // from mode=plan (Phase 3 shape)
 //     progress: {
 //       strengthSessionsDone: Number, strengthSessionsTarget: Number,
-//       runningKmDone: Number, runningKmTarget: Number,
+//       cardioAmountDone: Number, cardioAmountTarget: Number, cardioUnit: String,
 //       // Raw sessions logged since Monday, NOT pre-classified into
-//       // interval/long-run/easy — the model infers which piece of the
-//       // plan each one likely satisfied from its own distance/duration/
-//       // effort (a rule-based classifier here would be guesswork; the
-//       // model reasoning over the same numbers isn't).
-//       runningSessionsThisWeek: [{ dateKey, distanceKm, durationMin, effort }],
+//       // interval/long-session/easy — the model infers which piece of
+//       // the plan each one likely satisfied from its own activityTypeId
+//       // + distance/duration/effort (a rule-based classifier here would
+//       // be guesswork; the model reasoning over the same numbers isn't).
+//       activitiesThisWeek: [{ dateKey, activityTypeId, distanceKm, count, durationMin, effort }],
 //     } | null,
 //     whoopToday: { recoveryPct: Number|null, strain: Number|null } | null,
 //     whoopRecentStrain: [{ date, strain }] | null,
@@ -414,17 +415,17 @@ async function handlePlan(req, res, apiKey, body) {
 function buildTodaySystemPrompt(restrictions) {
   return (
     'You recommend today\'s training on a personal dashboard. This week\'s plan (weekPlan) always covers ' +
-    'BOTH strength and running — evaluate the two independently, then combine whichever pieces are ' +
-    'actually outstanding and appropriate today into ONE recommendation (e.g. "Push + 5K run"). It is ' +
-    'normal and expected for the answer to include both — do not default to naming only strength; check ' +
-    'running\'s status with the same weight every time.\n\n' +
+    'BOTH strength and cardio — evaluate the two independently, then combine whichever pieces are ' +
+    'actually outstanding and appropriate today into ONE recommendation (e.g. "Push + Cycling interval"). ' +
+    'It is normal and expected for the answer to include both — do not default to naming only strength; ' +
+    'check cardio\'s status with the same weight every time.\n\n' +
     'WHOOP-ADJUSTMENT (match this app\'s existing convention exactly): recovery >=67% is high/well-' +
-    'recovered — combining strength with even the hard interval session today is fine if both are due. ' +
-    '34-66% is moderate — combining is still fine for lighter pairings (e.g. strength + an easy run), but ' +
-    'avoid pairing strength with the interval session; if both would be demanding, pick just one. Below ' +
-    '34% is low — pick AT MOST ONE light thing (an easy Zone 2 run OR light strength) or recommend ' +
-    'explicit rest; never combine two demanding sessions, and never recommend the interval session. If ' +
-    'Whoop is not connected (whoopToday is null), ignore recovery and decide purely from what\'s ' +
+    'recovered — combining strength with even the hard interval piece today is fine if both are due. ' +
+    '34-66% is moderate — combining is still fine for lighter pairings (e.g. strength + easy cardio ' +
+    'volume), but avoid pairing strength with the interval piece; if both would be demanding, pick just ' +
+    'one. Below 34% is low — pick AT MOST ONE light thing (easy Zone 2 cardio volume OR light strength) or ' +
+    'recommend explicit rest; never combine two demanding sessions, and never recommend the interval ' +
+    'piece. If Whoop is not connected (whoopToday is null), ignore recovery and decide purely from what\'s ' +
     'outstanding in the plan.\n\n' +
     'STRENGTH — strengthContext tells you the user\'s ACTUAL configured split; use it, don\'t invent a ' +
     'different one. strengthContext.todaySplitDay is today\'s real rotation day (e.g. "Push", "Pull", ' +
@@ -436,37 +437,51 @@ function buildTodaySystemPrompt(restrictions) {
     'strength anyway if the weekly target is meaningfully behind and recovery allows it, keeping that ' +
     'framing to a couple trailing words at most (e.g. "Push anyway"). If strengthContext itself is ' +
     'missing or todaySplitDay is null, no split is configured — say that plainly rather than guessing.\n\n' +
-    'RUNNING — weekPlan.running has three pieces, each with its own target: interval (VO2max/tempo), ' +
-    'longRun, and easyVolume. progress.runningSessionsThisWeek lists what has ACTUALLY been logged since ' +
-    'Monday, NOT pre-labeled by type — infer from each session\'s own distance/duration/effort which ' +
-    'piece it most likely satisfied (the longest-distance session is probably the long run; a short, ' +
-    'high-effort, fast-paced session is probably the interval one; anything else is probably easy ' +
-    'volume). Whichever piece(s) have NOT clearly been satisfied yet are outstanding and worth ' +
-    'recommending if recovery allows — never suggest a piece that\'s already been done this week. ' +
-    'progress.runningKmDone vs progress.runningKmTarget is a secondary volume signal only, not a ' +
-    'substitute for checking which specific piece is still due.\n\n' +
+    'CARDIO (Phase 3 of the multi-activity-type generalization — no longer always running) — ' +
+    'weekPlan.cardio has three pieces, each already assigned its OWN activity by name when the weekly ' +
+    'plan was generated: interval (activityTypeId/activityName + targetSessions/targetMinutes), ' +
+    'longSession, and easyVolume (activityTypeId/activityName + targetAmount/unit each). Different pieces ' +
+    'can be different activities (e.g. interval on Cycling, easyVolume on Swimming) — always recommend by ' +
+    'whatever activityName that specific piece actually carries, never assume or default to "running". A ' +
+    'piece with a zero/empty target (targetSessions 0, targetAmount 0, or activityTypeId null) has ' +
+    'NOTHING to recommend — it was either never configured this week, or its activity is restricted/not ' +
+    'recommendable right now (already enforced when the plan itself was generated) — skip it regardless ' +
+    'of anything else, and never invent a replacement activity for it yourself. progress.activitiesThisWeek ' +
+    'lists what has ACTUALLY been logged since Monday, NOT pre-labeled by piece — each entry carries its ' +
+    'own activityTypeId; match it against a piece\'s activityTypeId first, then judge by relative amount/' +
+    'effort among same-type sessions which piece it most likely satisfied (the largest-amount session of ' +
+    'that type is probably the long session; a short, high-effort one is probably the interval piece; ' +
+    'anything else is probably easy volume). Whichever piece(s) have a nonzero target AND have NOT clearly ' +
+    'been satisfied yet are outstanding and worth recommending if recovery allows — never suggest a piece ' +
+    'that\'s already been done this week. progress.cardioAmountDone vs progress.cardioAmountTarget ' +
+    '(progress.cardioUnit gives the unit, e.g. "km") is a secondary volume signal only, not a substitute ' +
+    'for checking which specific piece is still due. Even if weekPlan.cardio shows a nonzero target for a ' +
+    'piece, do NOT recommend it if that piece\'s activityTypeId or activityName matches an entry in ' +
+    'activeRestrictions below (checked by id or name) — a restriction can be added after the weekly plan ' +
+    'was last generated, so this is a live, independent check, not just trusting weekPlan\'s own numbers.\n\n' +
     'PADEL — todayCalendar tells you whether the user has a real padel session on their Google Calendar ' +
     'today (todayCalendar.padelToday, with the actual matched event title in ' +
     'todayCalendar.padelEventTitle when true). Padel is a genuinely demanding session physically — treat a ' +
     'padel day the same way you treat low WHOOP recovery (see WHOOP-ADJUSTMENT above): do NOT recommend ' +
-    'strength or a running session on top of it. Prefer explicit rest, or at most very light active ' +
+    'strength or a cardio session on top of it. Prefer explicit rest, or at most very light active ' +
     'recovery (an easy walk, light mobility) — never combine padel with Explosiveness, the interval ' +
-    'session, a long run, or a full strength split, even if the weekly plan has those outstanding. If ' +
-    'padel and low recovery both apply, that is an even stronger case for pure rest, not a reason to ' +
-    'reconsider. If todayCalendar is missing or todayCalendar.padelToday is false, ignore padel entirely ' +
-    'and reason from WHOOP/strength/running as usual.\n\n' +
+    'piece, a long/easy cardio session, or a full strength split, even if the weekly plan has those ' +
+    'outstanding. If padel and low recovery both apply, that is an even stronger case for pure rest, not a ' +
+    'reason to reconsider. If todayCalendar is missing or todayCalendar.padelToday is false, ignore padel ' +
+    'entirely and reason from WHOOP/strength/cardio as usual.\n\n' +
     buildRestrictionsPromptSection(restrictions) +
     'FORMAT — this is the most important rule: the recommendation is a SHORT LABEL, not a paragraph. One ' +
-    'line, naming only the split day and/or the run type/distance from this week\'s plan — nothing else. ' +
-    'Good examples: "Push", "Push + 5K run", "Push + long run", "10K long run", "Rest — recovery is low", ' +
-    '"Easy 5K + Legs", "Rest — padel today", "Easy walk only — padel today", "Push — running restricted". Bad (never do this): listing individual exercises, sets, reps, or weights; ' +
-    'explaining "no prior weights logged, so start conservative"; multi-sentence reasoning. The exercise-' +
-    'by-exercise detail for whatever day you name is already visible on the Strength tab itself once the ' +
-    'user gets there — your only job is telling them WHICH one(s) to do today, not repeating what\'s ' +
-    'already on that page. A few trailing words of context are fine when genuinely needed (e.g. "— ' +
-    'recovery is low"), but never more than that.\n\n' +
+    'line, naming only the split day and/or the specific cardio activity/distance from this week\'s plan — ' +
+    'nothing else. Good examples: "Push", "Push + 5K run", "Push + Cycling interval", "10K long run", ' +
+    '"Swim — easy volume", "Rest — recovery is low", "Easy Cycling + Legs", "Rest — padel today", "Easy ' +
+    'walk only — padel today", "Push — cycling restricted". Bad (never do this): listing individual ' +
+    'exercises, sets, reps, or weights; explaining "no prior weights logged, so start conservative"; ' +
+    'multi-sentence reasoning. The exercise-by-exercise detail for whatever day you name is already ' +
+    'visible on the Strength tab itself once the user gets there — your only job is telling them WHICH ' +
+    'one(s) to do today, not repeating what\'s already on that page. A few trailing words of context are ' +
+    'fine when genuinely needed (e.g. "— recovery is low"), but never more than that.\n\n' +
     'Reply with ONLY valid JSON, no markdown fences, no commentary, in exactly this shape:\n' +
-    JSON.stringify({ recommendation: 'ONE short line naming only the split day and/or run type/distance, combined with "+" when both are due — e.g. "Push + 5K run" — never individual exercises, sets, weights, or multi-sentence explanations' }, null, 2)
+    JSON.stringify({ recommendation: 'ONE short line naming only the split day and/or the specific cardio activity/distance, combined with "+" when both are due — e.g. "Push + Cycling interval" — never individual exercises, sets, weights, or multi-sentence explanations' }, null, 2)
   );
 }
 
