@@ -789,6 +789,75 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
       latestProgressPhoto: latestPhoto,
     };
 
+    // ---------- 4b. Activities (running/cardio history) ----------
+    // po_coach_activities: [{ id, dateKey, activityTypeId, distanceKm?,
+    // count?, durationMin?, effort, notes }] — the canonical storage
+    // from the multi-activity-type generalization (gym.html's own
+    // header comment on ACTIVITY_KEY). Before this, the chat had NO
+    // visibility into running/cardio at all — the "gym" section above
+    // only ever covered strength (po_coach_v1) — so a question like
+    // "should I run 21km Wednesday" had no real volume/history data to
+    // answer from, yet the model could still claim to have "looked and
+    // found nothing" rather than never having had a running section to
+    // check in the first place. Bounded to the last 28 days and
+    // summarized per activity type (longest/total distance + up to 8
+    // recent entries), same "recent + summarized, not a full dump"
+    // convention as every other section here.
+    const allActivities = safeParse('po_coach_activities', []);
+    const activityWindowStart = new Date(); activityWindowStart.setDate(activityWindowStart.getDate() - 28);
+    const recentActivities = (Array.isArray(allActivities) ? allActivities : [])
+      .filter((a) => a && a.dateKey && new Date(a.dateKey) >= activityWindowStart)
+      .sort((a, b) => (a.dateKey < b.dateKey ? 1 : -1));
+
+    // Resolves activityTypeId -> a real name/unit via the same server
+    // config gym.html's own Activities tab reads (api/sync-state.js's
+    // resource=activity-types) — falls back to the one built-in
+    // "Running" default on any failure (secret not set, offline,
+    // etc.), matching this project's established fall-back-to-defaults
+    // convention, so a fetch failure here never blocks the rest of
+    // gatherTodayContext(). Small per-scope duplication of
+    // gym.html's own fetchActivityTypes() rather than a shared import —
+    // this function has to work standalone on every page.
+    const activitiesSecret = (() => { try { return localStorage.getItem('dashboard:secret') || ''; } catch (e) { return ''; } })();
+    let activityTypesForContext = [{ id: 'running', name: 'Running', unit: 'km', unitKind: 'distance' }];
+    if (activitiesSecret && recentActivities.length) {
+      try {
+        const r = await fetch('/api/sync-state?secret=' + encodeURIComponent(activitiesSecret) + '&resource=activity-types');
+        const j = await r.json();
+        if (j && j.ok && Array.isArray(j.types) && j.types.length) activityTypesForContext = j.types;
+      } catch (e) { /* keep the built-in default */ }
+    }
+    function activityTypeNameFor(id) {
+      const t = activityTypesForContext.find((x) => x.id === id);
+      return t ? t.name : id;
+    }
+
+    const activitiesByType = {};
+    recentActivities.forEach((a) => {
+      const key = a.activityTypeId || 'unknown';
+      (activitiesByType[key] = activitiesByType[key] || []).push(a);
+    });
+    const activities = {
+      windowDays: 28,
+      byType: Object.keys(activitiesByType).map((typeId) => {
+        const entries = activitiesByType[typeId];
+        const distances = entries.map((a) => a.distanceKm).filter((d) => d != null);
+        return {
+          activityName: activityTypeNameFor(typeId),
+          sessionsLast28Days: entries.length,
+          longestDistanceKm: distances.length ? round1(Math.max(...distances)) : null,
+          totalDistanceKm: distances.length ? round1(distances.reduce((sum, d) => sum + d, 0)) : null,
+          recent: entries.slice(0, 8).map((a) => ({
+            date: a.dateKey,
+            distanceKm: a.distanceKm != null ? round1(a.distanceKm) : null,
+            count: a.count != null ? a.count : null,
+            durationMin: a.durationMin != null ? a.durationMin : null,
+            effort: a.effort || null,
+          })),
+        };
+      }),
+    };
+
     // ---------- 5. Whoop ----------
     // whoop_tokens_v1 = { access, refresh, expires } — the only Whoop data
     // ever persisted to localStorage (see health.html's/index.html's own
@@ -1017,7 +1086,7 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
       } catch (e) { /* leave calendar.connected true but upcoming empty — token exists but fetch failed */ }
     }
 
-    return { date: todayKey, nutrition, goals, foodScans, gym, whoop, finance, dailyStack, calendar };
+    return { date: todayKey, nutrition, goals, foodScans, gym, activities, whoop, finance, dailyStack, calendar };
   };
 
   // =============================================================
