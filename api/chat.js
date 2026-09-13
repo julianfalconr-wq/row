@@ -836,7 +836,26 @@ export default async function handler(req, res) {
         },
         body: JSON.stringify({
           model: MODEL,
-          max_tokens: 1024,
+          // Confirmed live (see the investigation this comment documents):
+          // a complex multi-event calendar-rearrangement request came back
+          // with its reply cut off mid-word ("...en cuanto me confir")
+          // under the old max_tokens:1024 with no `effort` set at all —
+          // the unmistakable signature of hitting max_tokens, since
+          // nothing else can truncate output mid-word. Same failure class
+          // already fixed twice in api/training.js (mode=today,
+          // mode=day-plan): claude-sonnet-5 defaults to "high"-effort
+          // adaptive thinking when `effort` is omitted, which can consume
+          // most/all of a small budget on reasoning before any reply text
+          // is written at all — this endpoint had never set it. 'medium'
+          // matches day-plan's own choice (real reasoning headroom without
+          // high effort's unbounded tendency — this endpoint's requests
+          // are just as unpredictable in complexity: sometimes a one-line
+          // answer, sometimes several move/delete/create proposals at
+          // once), paired with a much larger max_tokens ceiling per
+          // Anthropic's own guidance to pair anything above low effort
+          // with generous headroom.
+          max_tokens: 4096,
+          output_config: { effort: 'medium' },
           system: systemBlocks,
           messages,
           tools: [{ type: 'memory_20250818', name: 'memory' }, PROPOSE_OBJECTIVES_TOOL, PROPOSE_CALENDAR_EVENT_TOOL, PROPOSE_CALENDAR_EVENT_UPDATE_TOOL, PROPOSE_CALENDAR_EVENT_DELETE_TOOL, PROPOSE_RESTRICTION_TOOL, PROPOSE_TODAY_SESSION_TOOL],
