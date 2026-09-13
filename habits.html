@@ -781,11 +781,27 @@ document.addEventListener('DOMContentLoaded', function () {
     const dayWord = viewDateKey === todayActive ? 'today' : 'that day';
     $('habitsSummaryPct').textContent = pct == null ? '—' : pct + '%';
     $('habitsSummaryTitle').textContent = pct == null ? ('Nothing logged yet ' + dayWord) : (pct >= 85 ? 'Crushing it' : pct >= 65 ? 'Solid' : pct >= 40 ? 'Room to improve' : 'Rough day');
-    const loggedCount = (currentHabitConfig.habits || []).filter((h) => {
+    // Only manual (non-auto_threshold) habits can ever show as "logged"
+    // from this page — auto_threshold habits (e.g. WHOOP sleep) are
+    // only ever evaluated live against WHOOP/Cronometer/Water/Training
+    // data by main.html's "Today's Score" circle (see
+    // scoreManualHabitsForDate's own comment above: this page never
+    // fetches that data, by design). Counting them in this denominator
+    // meant the count could never reach its own total even once every
+    // manual habit was actually logged — e.g. "13 of 15" forever with
+    // 2 auto habits. pct itself was never affected by this (the
+    // auto_threshold branch above already excludes them from
+    // earned/possible), just this label's count and its denominator.
+    const allHabits = currentHabitConfig.habits || [];
+    const manualHabits = allHabits.filter((h) => !(h.advanced && h.advanced.autoThreshold));
+    const autoCount = allHabits.length - manualHabits.length;
+    const loggedCount = manualHabits.filter((h) => {
       const e = entriesByDate[viewDateKey] && entriesByDate[viewDateKey][h.id];
       return e && e.na !== true;
     }).length;
-    $('habitsSummarySub').textContent = loggedCount + ' of ' + (currentHabitConfig.habits || []).length + ' habits logged ' + dayWord + (manual.flags.length ? ' · ⚠ ' + manual.flags.join(', ') : '');
+    $('habitsSummarySub').textContent = loggedCount + ' of ' + manualHabits.length + ' manual habits logged ' + dayWord +
+      (autoCount ? ' · ' + autoCount + ' auto-tracked habit' + (autoCount === 1 ? '' : 's') + ' scored on Main' : '') +
+      (manual.flags.length ? ' · ⚠ ' + manual.flags.join(', ') : '');
   }
 
   // ---------- tonight's entry ----------
