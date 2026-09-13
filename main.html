@@ -1022,9 +1022,19 @@ body::after {
   font-family: inherit; font-size: 13.5px; padding: 9px 10px; border-radius: 9px; outline: none;
 }
 .gs-habits-note { font-size: 12.5px; color: var(--text-tertiary); margin-bottom: 10px; line-height: 1.5; }
+/* Collapsible "Advanced" pattern, matching habits.html's .hf-advanced-toggle/.hf-advanced-body exactly (same look/behavior, different file/stylesheet). */
+.hf-advanced-toggle {
+  width: 100%; text-align: left; padding: 10px 0; border: 0; background: transparent;
+  color: var(--text-tertiary); font-family: inherit; font-size: 12px; font-weight: 700; cursor: pointer;
+  border-top: 1px solid var(--line-soft); margin-top: 4px;
+}
+.hf-advanced-toggle:hover { color: var(--text-primary); }
+.hf-advanced-body { padding-top: 6px; }
 .gs-weekday-time-grid { display: flex; flex-direction: column; gap: 6px; }
-.gs-weekday-time-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; cursor: pointer; }
-.gs-weekday-time-row span { font-size: 12.5px; color: var(--text-secondary); font-weight: 600; width: 36px; flex-shrink: 0; }
+.gs-weekday-time-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.gs-weekday-time-day { font-size: 12.5px; color: var(--text-secondary); font-weight: 600; width: 36px; flex-shrink: 0; }
+.gs-weekday-time-inputs { display: flex; align-items: center; gap: 6px; flex: 1; }
+.gs-weekday-time-sep { font-size: 11px; color: var(--text-tertiary); flex-shrink: 0; }
 /* [type="time"] here ties in specificity with ".gs-field input[type='time']" above (both one class + one attribute selector) — placed AFTER it in the cascade so width:auto correctly wins over that rule's width:100%, same specificity gotcha already hit once in the Routines feature's .po-field input[type="number"] fix. */
 .gs-weekday-time-row input[type="time"] { width: auto; flex: 1; min-width: 0; }
 
@@ -1212,20 +1222,27 @@ body::after {
       <div class="set-divider"></div>
 
       <div class="set-section">
-        <h4>Category Weights (Daily Score)</h4>
-        <div class="field gs-field" style="margin-bottom:14px">
-          <label>Today's Score circle — day ends at (per weekday)</label>
-          <div class="gs-weekday-time-grid" id="gsScoreCardDayEndTimes">
-            <label class="gs-weekday-time-row"><span>Mon</span><input type="time" data-day="monday"></label>
-            <label class="gs-weekday-time-row"><span>Tue</span><input type="time" data-day="tuesday"></label>
-            <label class="gs-weekday-time-row"><span>Wed</span><input type="time" data-day="wednesday"></label>
-            <label class="gs-weekday-time-row"><span>Thu</span><input type="time" data-day="thursday"></label>
-            <label class="gs-weekday-time-row"><span>Fri</span><input type="time" data-day="friday"></label>
-            <label class="gs-weekday-time-row"><span>Sat</span><input type="time" data-day="saturday"></label>
-            <label class="gs-weekday-time-row"><span>Sun</span><input type="time" data-day="sunday"></label>
+        <h4>Schedule</h4>
+        <div class="gs-habits-note">Sets the wake/sleep window behind the "awake time left" ring on the dashboard. Doesn't affect Today's Score, Habits, Training, Cronometer, Calendar, or Daily Stack — those all use the app-wide "Day ends at" time above, unchanged.</div>
+        <button type="button" class="hf-advanced-toggle" id="gsScheduleToggleBtn">Set wake/sleep times per day ▾</button>
+        <div class="hf-advanced-body" id="gsScheduleBody" hidden>
+          <div class="gs-weekday-time-grid" id="gsDayRingSchedule">
+            <div class="gs-weekday-time-row"><span class="gs-weekday-time-day">Mon</span><span class="gs-weekday-time-inputs"><input type="time" data-day="monday" data-field="wake"><span class="gs-weekday-time-sep">–</span><input type="time" data-day="monday" data-field="sleep"></span></div>
+            <div class="gs-weekday-time-row"><span class="gs-weekday-time-day">Tue</span><span class="gs-weekday-time-inputs"><input type="time" data-day="tuesday" data-field="wake"><span class="gs-weekday-time-sep">–</span><input type="time" data-day="tuesday" data-field="sleep"></span></div>
+            <div class="gs-weekday-time-row"><span class="gs-weekday-time-day">Wed</span><span class="gs-weekday-time-inputs"><input type="time" data-day="wednesday" data-field="wake"><span class="gs-weekday-time-sep">–</span><input type="time" data-day="wednesday" data-field="sleep"></span></div>
+            <div class="gs-weekday-time-row"><span class="gs-weekday-time-day">Thu</span><span class="gs-weekday-time-inputs"><input type="time" data-day="thursday" data-field="wake"><span class="gs-weekday-time-sep">–</span><input type="time" data-day="thursday" data-field="sleep"></span></div>
+            <div class="gs-weekday-time-row"><span class="gs-weekday-time-day">Fri</span><span class="gs-weekday-time-inputs"><input type="time" data-day="friday" data-field="wake"><span class="gs-weekday-time-sep">–</span><input type="time" data-day="friday" data-field="sleep"></span></div>
+            <div class="gs-weekday-time-row"><span class="gs-weekday-time-day">Sat</span><span class="gs-weekday-time-inputs"><input type="time" data-day="saturday" data-field="wake"><span class="gs-weekday-time-sep">–</span><input type="time" data-day="saturday" data-field="sleep"></span></div>
+            <div class="gs-weekday-time-row"><span class="gs-weekday-time-day">Sun</span><span class="gs-weekday-time-inputs"><input type="time" data-day="sunday" data-field="wake"><span class="gs-weekday-time-sep">–</span><input type="time" data-day="sunday" data-field="sleep"></span></div>
           </div>
-          <div class="gs-habits-note" style="margin-top:6px">Only affects the "Today's Score" circle and its Habits mini-gauge — separate from the app-wide "Day ends at" above, which Training/Calendar/Cronometer/Habits/Daily Stack all still use unchanged. Each day can have its own cutoff, e.g. stay open later on Fridays only.</div>
+          <div class="gs-habits-note" style="margin-top:6px">Each day can have its own wake/sleep window — e.g. stay up later on weekends. A sleep time earlier than that day's wake time (like 1:00 AM) means "after midnight."</div>
         </div>
+      </div>
+
+      <div class="set-divider"></div>
+
+      <div class="set-section">
+        <h4>Category Weights (Daily Score)</h4>
         <div class="gs-weight-row"><label for="gsWeightHabits">Habits</label><input type="number" id="gsWeightHabits" min="0" max="100"></div>
         <div class="gs-weight-row"><label for="gsWeightTraining">Training</label><input type="number" id="gsWeightTraining" min="0" max="100"></div>
         <div class="gs-weight-row"><label for="gsWeightNutrition">Nutrition</label><input type="number" id="gsWeightNutrition" min="0" max="100"></div>
@@ -1398,7 +1415,7 @@ body::after {
       <div class="day-ring-text">
         <div class="day-ring-status"    id="dayRingStatus">Loading…</div>
         <div class="day-ring-remaining" id="dayRingRemaining">—</div>
-        <div class="day-ring-hours">8:00 AM – 12:00 AM</div>
+        <div class="day-ring-hours" id="dayRingHours">8:00 AM – 12:00 AM</div>
       </div>
     </div>
 
@@ -1487,8 +1504,65 @@ body::after {
   // Paste your Anthropic key here to enable ✨ Polish. Empty = falls back to plain add.
   const ANTHROPIC_API_KEY = '';
 
-  const WAKE_HOUR  = 8;
-  const SLEEP_HOUR = 24;
+  // ---------- Day Ring per-weekday wake/sleep schedule ----------
+  // The Day Ring is an older, separate feature from the "Today's
+  // Score" system (see main.html's General Settings script for that
+  // one) — it never used DayLib and doesn't need to: it's just "what
+  // fraction of today's configured wake/sleep window has elapsed",
+  // computed from the raw local clock, no day-boundary/timezone
+  // machinery involved. It DOES reuse DayLib.loadProfile()/saveProfile()
+  // purely as the storage container though, since that's already the
+  // one shared, synced "General Settings" blob (same way categoryWeights
+  // lives there without DayLib itself knowing anything about scoring) —
+  // daylib.js's Object.assign(...) merge already passes an unknown key
+  // like dayRingSchedule straight through untouched, so no daylib.js
+  // change was needed to store it there.
+  const DAY_RING_WEEKDAY_KEYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']; // matches Date.getDay()'s own indexing
+  const DAY_RING_DEFAULT_WAKE  = '08:00';
+  const DAY_RING_DEFAULT_SLEEP = '00:00'; // "00:00" here means midnight AT THE END of the wake day (see timeToDecimalHours/windowForWeekday below), i.e. exactly the old hardcoded SLEEP_HOUR=24 — matches today's behavior until a day is explicitly reconfigured.
+
+  function defaultDayRingSchedule() {
+    const out = {};
+    DAY_RING_WEEKDAY_KEYS.forEach((day) => { out[day] = { wake: DAY_RING_DEFAULT_WAKE, sleep: DAY_RING_DEFAULT_SLEEP }; });
+    return out;
+  }
+  // Fills in any missing/invalid day or field with the default, so a
+  // partially-saved schedule (or none at all) never leaves a day
+  // without a usable window.
+  function normalizeDayRingSchedule(value) {
+    const out = {};
+    DAY_RING_WEEKDAY_KEYS.forEach((day) => {
+      const entry = value && value[day];
+      out[day] = {
+        wake:  (entry && typeof entry.wake  === 'string' && entry.wake)  ? entry.wake  : DAY_RING_DEFAULT_WAKE,
+        sleep: (entry && typeof entry.sleep === 'string' && entry.sleep) ? entry.sleep : DAY_RING_DEFAULT_SLEEP,
+      };
+    });
+    return out;
+  }
+  function loadDayRingSchedule() {
+    const profile = (typeof window.DayLib !== 'undefined') ? window.DayLib.loadProfile() : null;
+    return normalizeDayRingSchedule(profile && profile.dayRingSchedule);
+  }
+  function timeToDecimalHours(hhmm) {
+    const bits = String(hhmm || '00:00').split(':');
+    return (Number(bits[0]) || 0) + (Number(bits[1]) || 0) / 60;
+  }
+  // A day's {wakeHour, sleepHour} as plain decimal hours, both anchored
+  // to that day's own midnight — sleepHour is pushed past 24 whenever
+  // the configured sleep time is at/before the wake time, which is
+  // exactly what "asleep sometime after midnight" (e.g. wake 09:00,
+  // sleep 01:00 -> sleepHour 25) means, mirroring how daylib.js treats
+  // a day-end-time before the wake hour as "the next day" — done here
+  // with plain hour arithmetic instead of DayLib since there's no
+  // timezone/calendar-date concern, just a same-day span of hours.
+  function windowForWeekday(schedule, dayKey) {
+    const entry = schedule[dayKey] || { wake: DAY_RING_DEFAULT_WAKE, sleep: DAY_RING_DEFAULT_SLEEP };
+    const wakeHour = timeToDecimalHours(entry.wake);
+    let sleepHour = timeToDecimalHours(entry.sleep);
+    if (sleepHour <= wakeHour) sleepHour += 24;
+    return { wakeHour, sleepHour };
+  }
 
   // Theme (dark/light) is owned globally by topbar.js — it sets
   // <html data-theme="..."> on every page and this page's CSS
@@ -1734,35 +1808,44 @@ body::after {
     const m = Math.floor(totalMin % 60);
     return h + 'h ' + m + 'm';
   }
+  function formatTimeLabel(hhmm) {
+    const bits = String(hhmm || '00:00').split(':');
+    let h = Number(bits[0]) || 0;
+    const m = Number(bits[1]) || 0;
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    h = h % 12;
+    if (h === 0) h = 12;
+    return h + ':' + pad2(m) + ' ' + ampm;
+  }
 
   const C = 2 * Math.PI * 52;
   const fillEl = document.getElementById('dayRingFill');
   fillEl.setAttribute('stroke-dasharray', C);
   fillEl.setAttribute('stroke-dashoffset', C);
 
-  function updateDayRing() {
-    const now = new Date();
-    const hours = now.getHours() + now.getMinutes() / 60 + now.getSeconds() / 3600;
+  // Shared by both branches of updateDayRing() below — `hoursForCalc`
+  // is expressed relative to whichever day's window is currently
+  // active (see the +24 continuation trick in updateDayRing()), so the
+  // wake/past-bedtime/percent logic itself doesn't need to know
+  // whether it's rendering today's window or the tail of yesterday's.
+  function renderRingPhase(hoursForCalc, wakeHour, sleepHour) {
     const percentEl   = document.getElementById('dayRingPercent');
     const phaseEl     = document.getElementById('dayRingPhase');
-    const clockEl     = document.getElementById('dayRingClock');
     const statusEl    = document.getElementById('dayRingStatus');
     const remainingEl = document.getElementById('dayRingRemaining');
 
-    clockEl.textContent = formatClock(now);
-
-    if (hours < WAKE_HOUR) {
+    if (hoursForCalc < wakeHour) {
       fillEl.setAttribute('stroke-dashoffset', C);
       fillEl.style.stroke = 'var(--text-tertiary)';
       percentEl.textContent = '—';
       phaseEl.textContent   = 'SLEEPING';
       statusEl.textContent  = '😴 Still sleeping';
-      const minsUntil = (WAKE_HOUR - hours) * 60;
+      const minsUntil = (wakeHour - hoursForCalc) * 60;
       remainingEl.textContent = formatRemaining(minsUntil) + ' until wake-up';
       return;
     }
 
-    if (hours >= SLEEP_HOUR) {
+    if (hoursForCalc >= sleepHour) {
       fillEl.setAttribute('stroke-dashoffset', 0);
       fillEl.style.stroke = ZONE_RED;
       percentEl.textContent = '100%';
@@ -1772,8 +1855,8 @@ body::after {
       return;
     }
 
-    const span = SLEEP_HOUR - WAKE_HOUR;
-    const percent = (hours - WAKE_HOUR) / span * 100;
+    const span = sleepHour - wakeHour;
+    const percent = (hoursForCalc - wakeHour) / span * 100;
     fillEl.setAttribute('stroke-dashoffset', C * (1 - percent / 100));
     fillEl.style.stroke = zoneColorAt(percent);
     percentEl.textContent = Math.floor(percent) + '%';
@@ -1787,8 +1870,39 @@ body::after {
     phaseEl.textContent  = phase;
     statusEl.textContent = status;
 
-    const minsLeft = (SLEEP_HOUR - hours) * 60;
+    const minsLeft = (sleepHour - hoursForCalc) * 60;
     remainingEl.textContent = formatRemaining(minsLeft) + ' awake time left';
+  }
+
+  function updateDayRing() {
+    const now = new Date();
+    const hours = now.getHours() + now.getMinutes() / 60 + now.getSeconds() / 3600;
+    document.getElementById('dayRingClock').textContent = formatClock(now);
+
+    const schedule = loadDayRingSchedule();
+    const todayKey     = DAY_RING_WEEKDAY_KEYS[now.getDay()];
+    const yesterdayKey = DAY_RING_WEEKDAY_KEYS[(now.getDay() + 6) % 7];
+    const today     = windowForWeekday(schedule, todayKey);
+    const yesterday = windowForWeekday(schedule, yesterdayKey);
+    const hoursLabelEl = document.getElementById('dayRingHours');
+    if (hoursLabelEl) hoursLabelEl.textContent = formatTimeLabel(schedule[todayKey].wake) + ' – ' + formatTimeLabel(schedule[todayKey].sleep);
+
+    // If yesterday's own window spilled past midnight (sleepHour > 24,
+    // e.g. Saturday configured to stay up till 1am) and that spillover
+    // hasn't been reached yet this morning, we're still in the TAIL of
+    // yesterday's awake window — `now` is already calendar-today, but
+    // the user's "day" hasn't rolled over yet. Express `hours` as a
+    // continuation of yesterday's timeline (+24) so renderRingPhase()'s
+    // wake/sleep comparisons work against yesterday's own window
+    // unchanged. Every other day (including the default schedule,
+    // where sleepHour is always exactly 24) has no spillover at all.
+    const yesterdaySpillHour = yesterday.sleepHour > 24 ? yesterday.sleepHour - 24 : 0;
+    if (yesterdaySpillHour > 0 && hours < yesterdaySpillHour) {
+      renderRingPhase(hours + 24, yesterday.wakeHour, yesterday.sleepHour);
+      return;
+    }
+
+    renderRingPhase(hours, today.wakeHour, today.sleepHour);
   }
 
   // ---------- Row building ----------
@@ -2122,6 +2236,11 @@ body::after {
   renderStreak();
   updateDayRing();
   setInterval(updateDayRing, 60 * 1000);
+  // Exposed so the General Settings save handler (a separate script/
+  // closure below) can refresh the ring immediately after a schedule
+  // change, the same "no reload needed" treatment Today's Score already
+  // gets by re-running its own render() on save.
+  window.__refreshDayRing = updateDayRing;
   startTicker();
 
   // Re-render when storage changes from another tab (or our bridged parent).
@@ -2949,48 +3068,30 @@ document.addEventListener('DOMContentLoaded', function () {
     return out;
   }
 
-  // Phase A exception (deliberate, see daylib.js's DEFAULT_PROFILE
-  // comment): the score card uses its OWN day-end time
-  // (scoreCardDayEndTime), not the app-wide one every other page
-  // uses — same timezone, only dayEndTime overridden. Everything else
-  // in this file (Goals, Calendar, above) still calls
-  // DayLib.effectiveDateKey() with no override at all, i.e. the
-  // app-wide setting, completely unaffected by this.
+  // "Today's Score" (and its Habits mini-gauge) uses the exact same
+  // app-wide DayLib profile as every other section (Habits, Training,
+  // Cronometer, Calendar, Daily Stack) — no separate day-end override.
+  // (An earlier version of this gave the score card its own
+  // scoreCardDayEndTime, on a misunderstanding of what should be
+  // configurable per-weekday — reverted; that per-weekday schedule now
+  // belongs to the Day Ring instead, see updateDayRing().)
   //
-  // BUG FIX: this used to be a set of `const`s computed ONCE here at
-  // page load, frozen for the whole session. Saving a new
-  // scoreCardDayEndTime in General Settings correctly updated
-  // DayLib.loadProfile()'s stored value, but the score card itself
-  // never re-read it until a full page reload — confirmed live: a
-  // same-session save had zero visible effect on the circle, while a
-  // reload picked it up correctly every time. Turned into a function,
-  // recomputed fresh on every render() call (render() is called again
-  // right after a successful Settings save — see that button's
-  // handler below) instead of a one-time module-level const.
-  // Part 2 (per-weekday score-card cutoff): scoreCardDayEndTime is now
-  // an object keyed by weekday (daylib.js migrates an old single
-  // string up to this shape automatically — see its loadProfile()).
-  // Which day's value applies is picked by TODAY's actual, un-shifted
-  // weekday (DayLib.currentWeekdayName() — deliberately NOT the
-  // already-effective/shifted date, see that function's own comment on
-  // why), then plugged into the exact same single-dayEndTime override
-  // mechanism effectiveDateKey() has always used — the date-shifting
-  // math itself is completely unchanged, only how the ONE applicable
-  // "HH:MM" gets chosen is new.
+  // Kept as a function, recomputed fresh on every render() call, rather
+  // than a one-time module-level const: that used to be a caching bug
+  // here — DayLib.loadProfile() was only read once at page load, so a
+  // same-session Settings save (e.g. a changed dayEndTime) had zero
+  // visible effect on the circle until a full page reload. render() is
+  // called again right after a successful Settings save (see that
+  // button's handler below), so recomputing here is what makes that
+  // take effect live.
   function computeScoreCardDates() {
     const generalProfile = DayLib.loadProfile();
-    const todayWeekday = DayLib.currentWeekdayName(null, generalProfile);
-    const scoreCardDayEndTime = (generalProfile.scoreCardDayEndTime && generalProfile.scoreCardDayEndTime[todayWeekday]) || generalProfile.dayEndTime || '00:00';
-    const scoreCardProfile = Object.assign({}, generalProfile, {
-      dayEndTime: scoreCardDayEndTime,
-    });
-    const todayActive = DayLib.effectiveDateKey(null, scoreCardProfile);
-    const todayPlain = DayLib.effectiveDateKey(null, scoreCardProfile);
+    const todayActive = DayLib.effectiveDateKey(null, generalProfile);
     return {
       todayActive,
-      todayPlain,
+      todayPlain: todayActive,
       weekMondayActive: mondayOfKey(todayActive),
-      weekMondayPlain: mondayOfKey(todayPlain), // matches gym.html's thisWeekMondayKey() in SHAPE only — gym.html itself still uses the app-wide cutoff, this is the score-card-specific week
+      weekMondayPlain: mondayOfKey(todayActive),
     };
   }
 
@@ -3875,22 +3976,35 @@ document.addEventListener('DOMContentLoaded', function () {
     try { await saveActivityTypesToServer(activityTypesDraft); } catch (e) { alert("Couldn't save: " + (e.message || e)); }
   });
 
-  const SCORE_CARD_WEEKDAY_KEYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+  // Day Ring's per-weekday wake/sleep schedule — a field of the same
+  // shared "General Settings" profile object DayLib stores/syncs
+  // (dayEndTime/timezone/categoryWeights all live there too), but this
+  // Settings script doesn't need any DayLib function to read or write
+  // it, only the plain profile object itself. Kept in Monday-first
+  // order here to match this modal's own field layout; the Day Ring's
+  // own rendering code (elsewhere in this file) keeps its own
+  // Sunday-first array to match Date.getDay()'s indexing — the two
+  // never need to agree on order, only on the day-name strings used as
+  // keys, which they do.
+  const GS_WEEKDAY_KEYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+  const GS_DAY_RING_DEFAULT_WAKE = '08:00';
+  const GS_DAY_RING_DEFAULT_SLEEP = '00:00';
   function openGeneralSettings() {
-    const fallbackDefault = { dayEndTime: '00:00', timezone: 'auto', categoryWeights: { habits: 35, training: 20, nutrition: 20, water: 10, dailyStack: 10 }, scoreCardDayEndTime: {} };
+    const fallbackDefault = { dayEndTime: '00:00', timezone: 'auto', categoryWeights: { habits: 35, training: 20, nutrition: 20, water: 10, dailyStack: 10 }, dayRingSchedule: {} };
     const profile = (typeof window.DayLib !== 'undefined') ? window.DayLib.loadProfile() : fallbackDefault;
     $('gsTimezone').innerHTML = '<option value="auto">Auto-detect</option>';
     populateTimezoneOptions(profile.timezone);
     $('gsDayEndTime').value = profile.dayEndTime || '00:00';
-    // Per-weekday (Part 2) — daylib.js's loadProfile() already migrates
-    // an old single-string value up to a fully-populated per-weekday
-    // object, so this is always safe to index directly; the `|| '00:00'`
-    // is just a last-resort fallback for the DayLib-unavailable case above.
-    const scoreCardTimes = profile.scoreCardDayEndTime || {};
-    SCORE_CARD_WEEKDAY_KEYS.forEach((day) => {
-      const input = $('gsScoreCardDayEndTimes').querySelector('input[data-day="' + day + '"]');
-      if (input) input.value = scoreCardTimes[day] || profile.dayEndTime || '00:00';
+    const daySchedule = profile.dayRingSchedule || {};
+    GS_WEEKDAY_KEYS.forEach((day) => {
+      const entry = daySchedule[day] || {};
+      const wakeInput  = $('gsDayRingSchedule').querySelector('input[data-day="' + day + '"][data-field="wake"]');
+      const sleepInput = $('gsDayRingSchedule').querySelector('input[data-day="' + day + '"][data-field="sleep"]');
+      if (wakeInput)  wakeInput.value  = entry.wake  || GS_DAY_RING_DEFAULT_WAKE;
+      if (sleepInput) sleepInput.value = entry.sleep || GS_DAY_RING_DEFAULT_SLEEP;
     });
+    $('gsScheduleBody').hidden = true;
+    $('gsScheduleToggleBtn').textContent = 'Set wake/sleep times per day ▾';
     Object.keys(gsWeightIds).forEach((k) => { $(gsWeightIds[k]).value = (profile.categoryWeights && profile.categoryWeights[k] != null) ? profile.categoryWeights[k] : 0; });
     updateWeightSum();
     renderActivityTypesList();
@@ -3898,6 +4012,11 @@ document.addEventListener('DOMContentLoaded', function () {
     $('generalSettingsModalBg').classList.add('show');
   }
   $('generalSettingsGearBtn').addEventListener('click', openGeneralSettings);
+  $('gsScheduleToggleBtn').addEventListener('click', () => {
+    const body = $('gsScheduleBody');
+    body.hidden = !body.hidden;
+    $('gsScheduleToggleBtn').textContent = 'Set wake/sleep times per day ' + (body.hidden ? '▾' : '▴');
+  });
   $('generalSettingsCloseBtn').addEventListener('click', () => $('generalSettingsModalBg').classList.remove('show'));
   $('generalSettingsModalBg').addEventListener('click', (e) => { if (e.target.id === 'generalSettingsModalBg') $('generalSettingsModalBg').classList.remove('show'); });
   // window.RowLock (lock.js) is defined at that script's top level,
@@ -3912,14 +4031,18 @@ document.addEventListener('DOMContentLoaded', function () {
   Object.values(gsWeightIds).forEach((id) => $(id).addEventListener('input', updateWeightSum));
   $('generalSettingsSaveBtn').addEventListener('click', async () => {
     if (!updateWeightSum()) { alert('Category weights must sum to 100.'); return; }
-    const scoreCardDayEndTime = {};
-    SCORE_CARD_WEEKDAY_KEYS.forEach((day) => {
-      const input = $('gsScoreCardDayEndTimes').querySelector('input[data-day="' + day + '"]');
-      scoreCardDayEndTime[day] = (input && input.value) || '00:00';
+    const dayRingSchedule = {};
+    GS_WEEKDAY_KEYS.forEach((day) => {
+      const wakeInput  = $('gsDayRingSchedule').querySelector('input[data-day="' + day + '"][data-field="wake"]');
+      const sleepInput = $('gsDayRingSchedule').querySelector('input[data-day="' + day + '"][data-field="sleep"]');
+      dayRingSchedule[day] = {
+        wake:  (wakeInput && wakeInput.value)   || GS_DAY_RING_DEFAULT_WAKE,
+        sleep: (sleepInput && sleepInput.value) || GS_DAY_RING_DEFAULT_SLEEP,
+      };
     });
     const settings = {
       dayEndTime: $('gsDayEndTime').value || '00:00',
-      scoreCardDayEndTime,
+      dayRingSchedule,
       timezone: $('gsTimezone').value || 'auto',
       categoryWeights: {},
     };
@@ -3929,12 +4052,17 @@ document.addEventListener('DOMContentLoaded', function () {
     try {
       await saveGeneralSettingsToServer(settings);
       if (typeof window.DayLib !== 'undefined') window.DayLib.saveProfile(settings);
-      // Re-run the score card's own render() so a changed
-      // scoreCardDayEndTime (or categoryWeights, which computeDailyScore
-      // already re-reads fresh each call) takes visible effect right
-      // away instead of needing a full page reload — see
-      // computeScoreCardDates()'s comment for the bug this fixes.
+      // Re-run the score card's own render() so a changed dayEndTime
+      // (or categoryWeights, which computeDailyScore already re-reads
+      // fresh each call) takes visible effect right away instead of
+      // needing a full page reload — see computeScoreCardDates()'s
+      // comment for the bug this fixes.
       render();
+      // Same live-update treatment for the Day Ring's schedule — it
+      // isn't driven by this script's render() at all (separate
+      // closure), so it's refreshed via the small hook that script
+      // exposes on window instead of waiting for its next 60s tick.
+      if (typeof window.__refreshDayRing === 'function') window.__refreshDayRing();
       $('generalSettingsConfirm').classList.add('show');
       clearTimeout($('generalSettingsConfirm')._t);
       $('generalSettingsConfirm')._t = setTimeout(() => $('generalSettingsConfirm').classList.remove('show'), 1800);

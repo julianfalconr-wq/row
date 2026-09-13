@@ -68,61 +68,11 @@
   // (leaving Training/Nutrition/Water/Daily Stack exactly as specified)
   // since Habits is already described as the highest-weighted category;
   // flagged explicitly rather than silently shipping a 95-total default.
-  const WEEKDAY_KEYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
-  // Sunday-first, matching Date.getDay()/getUTCDay()'s own indexing
-  // (0=Sunday..6=Saturday) — used only to translate that index into one
-  // of the WEEKDAY_KEYS above, never exposed directly.
-  const WEEKDAY_BY_JS_DAY_INDEX = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-
-  function defaultScoreCardDayEndTime() {
-    const out = {};
-    WEEKDAY_KEYS.forEach((day) => { out[day] = '00:00'; });
-    return out;
-  }
-
   const DEFAULT_PROFILE = {
     dayEndTime: '00:00',
     timezone: 'auto',
     categoryWeights: { habits: 40, training: 20, nutrition: 20, water: 10, dailyStack: 10 },
-    // Deliberate, explicit exception to "one shared day-end everywhere"
-    // (see this file's own header): main.html's "Today's Score" circle
-    // reads THIS value instead of dayEndTime above, while every other
-    // consumer (Training, Calendar, Cronometer, Habits, Daily Stack)
-    // keeps using dayEndTime exactly as before, untouched. Defaults to
-    // midnight every day so it's a no-op until the user explicitly sets
-    // the score card's cutoff differently in General Settings. This
-    // module doesn't enforce the distinction itself — it's just a
-    // second, unrelated field in the same profile object; main.html's
-    // score engine is what actually builds a profile override using
-    // this value instead of dayEndTime when it calls effectiveDateKey().
-    //
-    // Per-weekday (Phase 2 of the score-card day-cutoff feature) — an
-    // object keyed by WEEKDAY_KEYS instead of a single "HH:MM" string,
-    // so e.g. Friday can stay open later than every other day. Picking
-    // which day's value applies is main.html's job (via
-    // currentWeekdayName() below) — this module only stores the map and
-    // migrates an old single-string value up to it (see loadProfile()).
-    scoreCardDayEndTime: defaultScoreCardDayEndTime(),
   };
-
-  // Migrates an old single "HH:MM" string (or a partially-filled object
-  // missing some days) up to a fully-populated per-weekday object.
-  // "Default all seven to whatever single value was previously
-  // configured, or midnight if none was set" — an old string value
-  // becomes every day's value (so nobody sees a behavior change on a
-  // day they never explicitly reconfigured); missing entirely defaults
-  // to midnight, same as this field's own default always has been.
-  function normalizeScoreCardDayEndTime(value) {
-    if (value && typeof value === 'object' && !Array.isArray(value)) {
-      const out = {};
-      WEEKDAY_KEYS.forEach((day) => { out[day] = (typeof value[day] === 'string' && value[day]) ? value[day] : '00:00'; });
-      return out;
-    }
-    const single = (typeof value === 'string' && value) ? value : '00:00';
-    const out = {};
-    WEEKDAY_KEYS.forEach((day) => { out[day] = single; });
-    return out;
-  }
 
   function loadProfile() {
     try {
@@ -133,7 +83,6 @@
           const merged = Object.assign({}, DEFAULT_PROFILE, p, {
             categoryWeights: Object.assign({}, DEFAULT_PROFILE.categoryWeights, p.categoryWeights || {}),
           });
-          merged.scoreCardDayEndTime = normalizeScoreCardDayEndTime(p.scoreCardDayEndTime);
           return merged;
         }
       }
@@ -200,27 +149,6 @@
     return partsToKey(effectiveParts);
   }
 
-  // Which weekday is "now", as OBSERVED in the profile's resolved
-  // timezone — the raw, un-shifted current calendar day, never the
-  // post-day-end-shift "effective" one. This is deliberate: a per-
-  // weekday day-end-time map (see scoreCardDayEndTime) is a property of
-  // the REAL day you're currently in ("on Saturday mornings, extend
-  // Friday's cutoff"), not of whichever day you might end up being
-  // classified into — so callers picking a weekday-specific dayEndTime
-  // value out of such a map should look it up by THIS, not by the
-  // result of effectiveDateKey(). Reuses wallClockParts()/
-  // resolveTimeZone() exactly like effectiveDateKey() does, so the
-  // weekday always agrees with whatever timezone the profile resolves
-  // to, never the raw machine timezone.
-  function currentWeekdayName(date, profile) {
-    const p = profile || loadProfile();
-    const tz = resolveTimeZone(p);
-    const now = date || new Date();
-    const parts = wallClockParts(now, tz);
-    const d = new Date(Date.UTC(parts.year, parts.month - 1, parts.day));
-    return WEEKDAY_BY_JS_DAY_INDEX[d.getUTCDay()];
-  }
-
   // Convenience for callers that need an actual Date object back (e.g.
   // for day-of-week arithmetic) — mirrors gym.html's wtParseKey()
   // exactly: local calendar fields, not a timezone-aware reconstruction.
@@ -243,5 +171,5 @@
     return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
   }
 
-  window.DayLib = { DEFAULT_PROFILE, loadProfile, saveProfile, resolveTimeZone, effectiveDateKey, currentWeekdayName, parseDateKey, plainDateKey };
+  window.DayLib = { DEFAULT_PROFILE, loadProfile, saveProfile, resolveTimeZone, effectiveDateKey, parseDateKey, plainDateKey };
 })();
