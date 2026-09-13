@@ -551,13 +551,7 @@ async function handleDayPlan(req, res, apiKey, body) {
     maxTokens: 4000,
     effort: 'medium',
   });
-  // TEMPORARY — keeping this one more round to verify the fix above
-  // against real output before removing it, per this project's
-  // established diagnostic protocol (see git history: e5dcc39/f5dfa48/
-  // f6c3731). Logs to Vercel's function logs, not the client.
-  console.log('[training mode=day-plan] raw text:', JSON.stringify(text));
   const parsed = extractJson(text);
-  console.log('[training mode=day-plan] extractJson result:', JSON.stringify(parsed));
   if (!parsed) return res.status(502).json({ ok: false, error: 'Model did not return valid JSON.' });
   const blocks = normalizeDayPlanBlocks(parsed, todayDateKey, tomorrowDateKey);
   if (!blocks.length) return res.status(502).json({ ok: false, error: 'Model did not return any usable blocks.' });
