@@ -2943,14 +2943,31 @@ document.addEventListener('DOMContentLoaded', function () {
   // in this file (Goals, Calendar, above) still calls
   // DayLib.effectiveDateKey() with no override at all, i.e. the
   // app-wide setting, completely unaffected by this.
-  const generalProfile = DayLib.loadProfile();
-  const scoreCardProfile = Object.assign({}, generalProfile, {
-    dayEndTime: generalProfile.scoreCardDayEndTime || generalProfile.dayEndTime,
-  });
-  const todayActive = DayLib.effectiveDateKey(null, scoreCardProfile);
-  const todayPlain = DayLib.effectiveDateKey(null, scoreCardProfile);
-  const weekMondayActive = mondayOfKey(todayActive);
-  const weekMondayPlain = mondayOfKey(todayPlain); // matches gym.html's thisWeekMondayKey() in SHAPE only — gym.html itself still uses the app-wide cutoff, this is the score-card-specific week
+  //
+  // BUG FIX: this used to be a set of `const`s computed ONCE here at
+  // page load, frozen for the whole session. Saving a new
+  // scoreCardDayEndTime in General Settings correctly updated
+  // DayLib.loadProfile()'s stored value, but the score card itself
+  // never re-read it until a full page reload — confirmed live: a
+  // same-session save had zero visible effect on the circle, while a
+  // reload picked it up correctly every time. Turned into a function,
+  // recomputed fresh on every render() call (render() is called again
+  // right after a successful Settings save — see that button's
+  // handler below) instead of a one-time module-level const.
+  function computeScoreCardDates() {
+    const generalProfile = DayLib.loadProfile();
+    const scoreCardProfile = Object.assign({}, generalProfile, {
+      dayEndTime: generalProfile.scoreCardDayEndTime || generalProfile.dayEndTime,
+    });
+    const todayActive = DayLib.effectiveDateKey(null, scoreCardProfile);
+    const todayPlain = DayLib.effectiveDateKey(null, scoreCardProfile);
+    return {
+      todayActive,
+      todayPlain,
+      weekMondayActive: mondayOfKey(todayActive),
+      weekMondayPlain: mondayOfKey(todayPlain), // matches gym.html's thisWeekMondayKey() in SHAPE only — gym.html itself still uses the app-wide cutoff, this is the score-card-specific week
+    };
+  }
 
   function getSecret() { try { return localStorage.getItem('dashboard:secret') || ''; } catch (e) { return ''; } }
 
@@ -3414,6 +3431,7 @@ document.addEventListener('DOMContentLoaded', function () {
   let currentHabitConfig = null;
 
   async function render() {
+    const { todayActive, todayPlain, weekMondayActive, weekMondayPlain } = computeScoreCardDates();
     const habitConfig = await fetchHabitConfig();
     currentHabitConfig = habitConfig;
 
@@ -3871,6 +3889,12 @@ document.addEventListener('DOMContentLoaded', function () {
     try {
       await saveGeneralSettingsToServer(settings);
       if (typeof window.DayLib !== 'undefined') window.DayLib.saveProfile(settings);
+      // Re-run the score card's own render() so a changed
+      // scoreCardDayEndTime (or categoryWeights, which computeDailyScore
+      // already re-reads fresh each call) takes visible effect right
+      // away instead of needing a full page reload — see
+      // computeScoreCardDates()'s comment for the bug this fixes.
+      render();
       $('generalSettingsConfirm').classList.add('show');
       clearTimeout($('generalSettingsConfirm')._t);
       $('generalSettingsConfirm')._t = setTimeout(() => $('generalSettingsConfirm').classList.remove('show'), 1800);
