@@ -957,6 +957,87 @@ img, video, canvas, svg { max-width: 100%; }
 }
 .po-day-ex-add:hover { color: var(--text-1); border-color: var(--text-3); }
 
+/* ----- Routines (named, reusable workout templates w/ planned
+   sets/reps/weight — WHOOP Strength Trainer-style) ----- */
+.po-routine-suggestion {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  background: rgba(110,231,183,0.08); border: 1px solid rgba(110,231,183,0.25);
+  border-radius: 10px; padding: 10px 12px; margin-bottom: 12px; font-size: 12.5px; color: var(--text-1);
+}
+.po-routine-suggestion-btn { flex-shrink: 0; padding: 7px 14px; font-size: 12px; }
+.po-routine-list { display: flex; flex-direction: column; gap: 8px; }
+.po-routine-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px; background: rgba(255,255,255,0.025); border: 1px solid var(--border); border-radius: 10px;
+}
+.po-routine-main { flex: 1; min-width: 0; }
+.po-routine-name { font-size: 13.5px; font-weight: 700; color: var(--text-1); }
+.po-routine-meta { font-size: 11px; color: var(--text-3); margin-top: 2px; }
+.po-routine-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.po-routine-start-btn { padding: 7px 12px; font-size: 12px; }
+
+/* Day multi-select (a routine can link to several day types at once,
+   unlike the single-choice segmented controls used for gym/day
+   filters elsewhere — each button toggles independently). */
+.po-day-multi-seg { display: flex; flex-wrap: wrap; gap: 6px; }
+.po-day-multi-seg button {
+  padding: 7px 12px; border-radius: 8px; border: 1px solid var(--border);
+  background: rgba(255,255,255,0.03); color: var(--text-3);
+  font-family: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.po-day-multi-seg button.active {
+  background: linear-gradient(180deg, #ffffff 0%, #e8e5dd 100%); color: #0a0a0b; border-color: transparent;
+}
+
+.po-routine-add-ex-row { display: flex; gap: 8px; margin-top: 8px; }
+.po-routine-add-ex-row select { flex: 1; min-width: 0; }
+
+/* One exercise's planned sets, nested inside a .po-day-ex-row (reused
+   from the Settings routine editor) — a stepper-free plain list since
+   each set can target a DIFFERENT rep/weight, unlike ad-hoc logging's
+   single current-value stepper. */
+.po-routine-ex-block { flex-direction: column; align-items: stretch; }
+.po-routine-ex-head { display: flex; align-items: center; gap: 6px; }
+.po-routine-sets { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+.po-routine-set-row { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-3); }
+.po-routine-set-row span { flex-shrink: 0; }
+/* [type="number"] added purely to out-specificity .po-field
+   input[type="number"] (this row sits inside a .po-field wrapper) —
+   without it that global rule's extra attribute selector wins the
+   cascade and renders these at its much larger font-size. */
+.po-routine-set-row input[type="number"] {
+  width: 52px; background: rgba(255,255,255,0.04); border: 1px solid var(--border); color: var(--text-1);
+  font-family: inherit; font-size: 12px; padding: 5px 6px; border-radius: 6px; text-align: center;
+}
+.po-routine-add-set-btn {
+  align-self: flex-start; margin-top: 2px; padding: 4px 10px; font-size: 11px;
+  background: transparent; border: 1px dashed var(--border); border-radius: 6px; color: var(--text-3); cursor: pointer;
+}
+.po-routine-add-set-btn:hover { color: var(--text-1); border-color: var(--text-3); }
+
+/* Routine runner — plan-vs-actual logging, one row per planned set. */
+.po-routine-run-ex { margin-bottom: 16px; }
+.po-routine-run-ex:last-child { margin-bottom: 0; }
+.po-routine-run-ex-name { font-size: 14px; font-weight: 700; color: var(--text-1); margin-bottom: 6px; }
+.po-routine-run-set-row {
+  display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border);
+}
+.po-routine-run-set-row:last-child { border-bottom: none; }
+.po-routine-run-planned { flex: 1; min-width: 0; font-size: 12px; color: var(--text-3); }
+.po-routine-run-set-row input {
+  width: 56px; background: rgba(255,255,255,0.04); border: 1px solid var(--border); color: var(--text-1);
+  font-family: inherit; font-size: 13px; padding: 6px; border-radius: 6px; text-align: center; flex-shrink: 0;
+}
+.po-routine-run-set-row input:disabled { opacity: 0.5; }
+.po-routine-run-log-btn {
+  width: 30px; height: 30px; flex-shrink: 0; border-radius: 50%; border: 1px solid var(--border);
+  background: transparent; color: var(--text-2); cursor: pointer; font-size: 14px;
+  display: flex; align-items: center; justify-content: center;
+}
+.po-routine-run-log-btn:hover { color: var(--good); border-color: var(--good); }
+.po-routine-run-logged-badge { flex-shrink: 0; font-size: 11px; font-weight: 700; color: var(--good); }
+
 /* Rotation editor list */
 .rot-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
 .rot-row {
@@ -1691,6 +1772,26 @@ img, video, canvas, svg { max-width: 100%; }
     <span class="po-day-split" id="dayPillSplit">—</span>
   </button>
 
+  <!-- ROUTINES — named, reusable workout templates with planned
+       sets/reps/weight per exercise, optionally linked to one or more
+       day types (WHOOP Strength Trainer-style). Purely additive: the
+       exercise-by-exercise ad-hoc logging below is completely
+       unchanged and still works with no routine involved. -->
+  <div class="card" id="routinesCard">
+    <div class="po-header" style="margin-bottom:12px">
+      <h2 class="po-title" style="font-size:18px">Routines</h2>
+      <button class="po-btn-icon" id="addRoutineBtn" title="New routine" aria-label="New routine">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      </button>
+    </div>
+    <div class="po-routine-suggestion" id="routineSuggestion" style="display:none">
+      <span id="routineSuggestionText"></span>
+      <button type="button" class="po-btn-secondary po-routine-suggestion-btn" id="routineSuggestionStartBtn">Start</button>
+    </div>
+    <div class="po-routine-list" id="routineList"></div>
+    <div class="po-no-ex" id="noRoutinesMsg" style="display:none">No routines yet. Tap <strong>+</strong> to build one.</div>
+  </div>
+
   <!-- WEIGHT + PROGRESS PHOTOS -->
   <div class="wt-section">
     <div class="wt-divider"><span>WEIGHT</span></div>
@@ -2114,6 +2215,49 @@ img, video, canvas, svg { max-width: 100%; }
   </div>
 </div>
 
+<!-- Routine builder modal -->
+<div class="po-modal-bg" id="routineModalBg">
+  <div class="po-modal" style="max-width:520px">
+    <h3 id="routineModalTitle">New routine</h3>
+    <div class="po-field" style="margin-bottom:12px">
+      <label>Name</label>
+      <input type="text" id="routineNameInput" placeholder="e.g. Push Day A">
+    </div>
+    <div class="po-field" style="margin-bottom:14px">
+      <label>Link to day(s) <span style="font-weight:400;opacity:0.65">— optional, suggested on these days</span></label>
+      <div class="po-day-multi-seg" id="routineDaySeg"></div>
+    </div>
+    <div class="po-field">
+      <label>Exercises</label>
+      <div class="po-day-ex-list" id="routineExerciseList"></div>
+      <div class="po-routine-add-ex-row">
+        <select class="po-ex-select" id="routineAddExSelect"></select>
+        <button type="button" class="po-btn-secondary" id="routineAddExBtn">+ Add</button>
+      </div>
+    </div>
+    <div class="po-modal-actions">
+      <button class="po-btn-secondary" id="routineModalCancel">Cancel</button>
+      <button class="po-btn-primary" id="routineModalSave">Save routine</button>
+    </div>
+    <span class="po-delete-link" id="routineDeleteLink" style="display:none">Delete this routine</span>
+  </div>
+</div>
+
+<!-- Routine runner modal — structured plan-vs-actual logging, NOT a
+     live rest-timer/guided flow. Logging a set here writes into the
+     exact same state.logs[exerciseId] array ad-hoc logging uses (see
+     ROUTINES section JS), just with routineId/plannedSetIndex added,
+     so Rx/Stats/History/Sparkline pick it up automatically. -->
+<div class="po-modal-bg" id="routineRunModalBg">
+  <div class="po-modal" style="max-width:520px">
+    <h3 id="routineRunTitle">Routine</h3>
+    <div id="routineRunBody"></div>
+    <div class="po-modal-actions">
+      <button class="po-btn-primary" id="routineRunCloseBtn">Done</button>
+    </div>
+  </div>
+</div>
+
   </div><!-- /#strengthPanel -->
 
   <div id="activitiesPanel" class="training-panel">
@@ -2216,6 +2360,16 @@ img, video, canvas, svg { max-width: 100%; }
     s.days  = (Array.isArray(s.days)  && s.days.length)  ? s.days  : CONFIG.days.slice();
     s.exercises = Array.isArray(s.exercises) ? s.exercises : buildDefaultExercises();
     s.logs = (s.logs && typeof s.logs === 'object') ? s.logs : {};
+    // Routines: named, reusable workout templates (WHOOP Strength
+    // Trainer-style) — { id, name, exercises: [{ exerciseId,
+    // plannedSets: [{ targetReps, targetWeight }] }], linkedDayTypes:
+    // [dayId, ...] }. Lives in the same po_coach_v1 blob as everything
+    // else here (exercises/gyms/days) rather than a new Supabase
+    // resource/table — it references exercise/day ids from THIS same
+    // object, so keeping it in one place avoids any cross-store
+    // referential-integrity problem, and it rides the exact same
+    // saveState()/PC_SYNCED_KEYS sync path for free.
+    s.routines = Array.isArray(s.routines) ? s.routines : [];
     s.filterGym = s.filterGym || s.gyms[0].id;
     s.filterDay = s.filterDay || s.days[0].id;
     // Split rotation lives in state so the user can edit it via the pill modal.
@@ -2613,6 +2767,7 @@ img, video, canvas, svg { max-width: 100%; }
     renderRx(); renderStats(); renderSparkline(); renderHistory();
     renderTodaysWorkout();
     renderPastWorkouts();
+    renderRoutines();
     // Pre-fill weight input with last logged weight (or starting weight)
     const ex = getCurrentEx();
     if (ex && !ex.bw) {
@@ -3062,6 +3217,265 @@ img, video, canvas, svg { max-width: 100%; }
     rotDraft = null;
     renderAll();
   });
+
+  // ============================================================
+  // ROUTINES — named, reusable workout templates with planned
+  // sets/reps/weight per exercise, optionally linked to one or more
+  // day types (WHOOP Strength Trainer-style). Explicitly NOT a live
+  // rest-timer/guided flow — the runner below is a structured plan-
+  // vs-actual logging surface only. Purely additive: reuses
+  // state.exercises (by exerciseId), state.days (by id, for
+  // linkedDayTypes), and state.logs (a logged set from the runner is
+  // the exact same {weight,reps,date} shape ad-hoc logging already
+  // writes, plus routineId/plannedSetIndex — see item 6 of this
+  // feature's own design notes: nothing existing reads or excludes on
+  // extra fields, so Rx/Stats/History/Sparkline pick these up for free).
+  // ============================================================
+  function exById(id) { return state.exercises.find(e => e.id === id); }
+  function dayById(id) { return state.days.find(d => d.id === id); }
+  function routineById(id) { return state.routines.find(r => r.id === id); }
+  function routineMetaLine(r) {
+    const exCount = r.exercises.length;
+    const dayNames = (r.linkedDayTypes || []).map((id) => { const d = dayById(id); return d ? d.name : null; }).filter(Boolean);
+    const parts = [exCount + (exCount === 1 ? ' exercise' : ' exercises')];
+    if (dayNames.length) parts.push(dayNames.join(', '));
+    return parts.join(' · ');
+  }
+  function renderRoutines() {
+    // Suggestion banner keys off todaySplit() (today's ACTUAL rotation
+    // day) — independent of whichever day the Filters section happens
+    // to be showing, same separation renderDayPill() already keeps.
+    const split = todaySplit();
+    const todayDay = !isRestName(split.name) ? state.days.find((d) => d.name.toLowerCase() === (split.name || '').toLowerCase()) : null;
+    const suggested = todayDay ? state.routines.filter((r) => (r.linkedDayTypes || []).indexOf(todayDay.id) !== -1) : [];
+    const sugEl = $('routineSuggestion');
+    if (suggested.length) {
+      sugEl.style.display = 'flex';
+      $('routineSuggestionText').textContent = 'Today is ' + todayDay.name + ' — try "' + suggested[0].name + '"' + (suggested.length > 1 ? ' (+' + (suggested.length - 1) + ' more)' : '');
+      $('routineSuggestionStartBtn').onclick = () => openRoutineRunner(suggested[0].id);
+    } else {
+      sugEl.style.display = 'none';
+    }
+
+    $('noRoutinesMsg').style.display = state.routines.length ? 'none' : 'block';
+    $('routineList').innerHTML = state.routines.map((r) =>
+      '<div class="po-routine-row" data-id="' + r.id + '">' +
+        '<div class="po-routine-main">' +
+          '<div class="po-routine-name">' + escape(r.name) + '</div>' +
+          '<div class="po-routine-meta">' + escape(routineMetaLine(r)) + '</div>' +
+        '</div>' +
+        '<div class="po-routine-actions">' +
+          '<button type="button" class="po-btn-secondary po-routine-start-btn" data-action="start" data-id="' + r.id + '">Start</button>' +
+          '<button type="button" class="po-btn-icon" data-action="edit" data-id="' + r.id + '" title="Edit" style="width:32px;height:32px">✎</button>' +
+        '</div>' +
+      '</div>'
+    ).join('');
+    $('routineList').querySelectorAll('[data-action="start"]').forEach((btn) => btn.addEventListener('click', () => openRoutineRunner(btn.dataset.id)));
+    $('routineList').querySelectorAll('[data-action="edit"]').forEach((btn) => btn.addEventListener('click', () => openRoutineBuilder(btn.dataset.id)));
+  }
+
+  // ---------- routine builder ----------
+  let routineDraft = null; // { id|null, name, exercises: [{exerciseId, plannedSets:[{targetReps,targetWeight}]}], linkedDayTypes: [] }
+  let routineDraftIsNew = true;
+
+  function renderRoutineDaySeg() {
+    $('routineDaySeg').innerHTML = state.days.map((d) =>
+      '<button type="button" data-day-id="' + d.id + '" class="' + (routineDraft.linkedDayTypes.indexOf(d.id) !== -1 ? 'active' : '') + '">' + escape(d.name) + '</button>'
+    ).join('');
+    $('routineDaySeg').querySelectorAll('button').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const id = btn.dataset.dayId;
+        const idx = routineDraft.linkedDayTypes.indexOf(id);
+        if (idx === -1) routineDraft.linkedDayTypes.push(id); else routineDraft.linkedDayTypes.splice(idx, 1);
+        btn.classList.toggle('active');
+      });
+    });
+  }
+  function renderRoutineExerciseList() {
+    const html = routineDraft.exercises.map((rex, i) => {
+      const ex = exById(rex.exerciseId);
+      const name = ex ? ex.name : '(deleted exercise)';
+      const setsHtml = rex.plannedSets.map((s, si) =>
+        '<div class="po-routine-set-row" data-si="' + si + '">' +
+          '<span>Set ' + (si + 1) + '</span>' +
+          '<input type="number" class="rt-set-reps" value="' + s.targetReps + '" placeholder="reps">' +
+          '<span>reps @</span>' +
+          (ex && ex.bw
+            ? '<span style="flex-shrink:0">bodyweight</span>'
+            : '<input type="number" class="rt-set-weight" value="' + s.targetWeight + '" placeholder="wt" step="0.5">' + '<span>' + unit() + '</span>')
+          +
+          '<button type="button" class="po-mini-btn" data-action="remove-set" data-si="' + si + '" aria-label="Remove set">×</button>' +
+        '</div>'
+      ).join('');
+      return '<div class="po-day-ex-row po-routine-ex-block" data-idx="' + i + '">' +
+        '<div class="po-routine-ex-head">' +
+          '<span class="po-day-ex-name">' + escape(name) + '</span>' +
+          '<div class="po-day-ex-actions">' +
+            '<button type="button" data-action="up"' + (i === 0 ? ' disabled' : '') + ' aria-label="Move up">↑</button>' +
+            '<button type="button" data-action="down"' + (i === routineDraft.exercises.length - 1 ? ' disabled' : '') + ' aria-label="Move down">↓</button>' +
+            '<button type="button" data-action="remove" aria-label="Remove">✕</button>' +
+          '</div>' +
+        '</div>' +
+        '<div class="po-routine-sets">' + setsHtml +
+          '<button type="button" class="po-routine-add-set-btn" data-action="add-set">+ Add set</button>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+    $('routineExerciseList').innerHTML = html || '<div class="po-day-ex-empty">No exercises yet — add one below.</div>';
+
+    $('routineExerciseList').querySelectorAll('.po-routine-ex-block').forEach((block) => {
+      const i = parseInt(block.dataset.idx, 10);
+      const rex = routineDraft.exercises[i];
+      const upBtn = block.querySelector('[data-action="up"]');
+      const downBtn = block.querySelector('[data-action="down"]');
+      const removeBtn = block.querySelector('[data-action="remove"]');
+      if (upBtn) upBtn.addEventListener('click', () => {
+        if (i === 0) return;
+        const tmp = routineDraft.exercises[i - 1]; routineDraft.exercises[i - 1] = routineDraft.exercises[i]; routineDraft.exercises[i] = tmp;
+        renderRoutineExerciseList();
+      });
+      if (downBtn) downBtn.addEventListener('click', () => {
+        if (i === routineDraft.exercises.length - 1) return;
+        const tmp = routineDraft.exercises[i + 1]; routineDraft.exercises[i + 1] = routineDraft.exercises[i]; routineDraft.exercises[i] = tmp;
+        renderRoutineExerciseList();
+      });
+      if (removeBtn) removeBtn.addEventListener('click', () => {
+        routineDraft.exercises.splice(i, 1);
+        renderRoutineExerciseList();
+      });
+      block.querySelectorAll('[data-action="remove-set"]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const si = parseInt(btn.dataset.si, 10);
+          rex.plannedSets.splice(si, 1);
+          renderRoutineExerciseList();
+        });
+      });
+      const addSetBtn = block.querySelector('[data-action="add-set"]');
+      if (addSetBtn) addSetBtn.addEventListener('click', () => {
+        readRoutineExerciseListIntoDraft(); // capture any edited reps/weight before appending, so they aren't lost on re-render
+        const last = rex.plannedSets[rex.plannedSets.length - 1];
+        rex.plannedSets.push({ targetReps: last ? last.targetReps : 10, targetWeight: last ? last.targetWeight : 0 });
+        renderRoutineExerciseList();
+      });
+    });
+  }
+  // Reads whatever's currently in the DOM's reps/weight inputs back
+  // into routineDraft — called before any structural change
+  // (reorder/remove/add-set) that re-renders the list, so in-progress
+  // edits in OTHER rows aren't silently discarded.
+  function readRoutineExerciseListIntoDraft() {
+    $('routineExerciseList').querySelectorAll('.po-routine-ex-block').forEach((block) => {
+      const i = parseInt(block.dataset.idx, 10);
+      const rex = routineDraft.exercises[i];
+      if (!rex) return;
+      block.querySelectorAll('.po-routine-set-row').forEach((row) => {
+        const si = parseInt(row.dataset.si, 10);
+        const set = rex.plannedSets[si];
+        if (!set) return;
+        const repsInput = row.querySelector('.rt-set-reps');
+        const weightInput = row.querySelector('.rt-set-weight');
+        if (repsInput) set.targetReps = parseInt(repsInput.value, 10) || 0;
+        if (weightInput) set.targetWeight = parseFloat(weightInput.value) || 0;
+      });
+    });
+  }
+  function populateRoutineAddExSelect() {
+    $('routineAddExSelect').innerHTML = state.exercises.map((ex) => '<option value="' + ex.id + '">' + escape(ex.name) + '</option>').join('');
+  }
+  function openRoutineBuilder(routineId) {
+    routineDraftIsNew = !routineId;
+    const existing = routineId ? routineById(routineId) : null;
+    routineDraft = existing
+      ? JSON.parse(JSON.stringify(existing))
+      : { id: uid(), name: '', exercises: [], linkedDayTypes: [] };
+    $('routineModalTitle').textContent = routineDraftIsNew ? 'New routine' : 'Edit routine';
+    $('routineNameInput').value = routineDraft.name;
+    $('routineDeleteLink').style.display = routineDraftIsNew ? 'none' : 'block';
+    populateRoutineAddExSelect();
+    renderRoutineDaySeg();
+    renderRoutineExerciseList();
+    $('routineModalBg').classList.add('show');
+  }
+  function closeRoutineBuilder() { $('routineModalBg').classList.remove('show'); routineDraft = null; }
+  $('addRoutineBtn').addEventListener('click', () => openRoutineBuilder(null));
+  $('routineModalCancel').addEventListener('click', closeRoutineBuilder);
+  $('routineAddExBtn').addEventListener('click', () => {
+    const exId = $('routineAddExSelect').value;
+    if (!exId) return;
+    readRoutineExerciseListIntoDraft();
+    routineDraft.exercises.push({ exerciseId: exId, plannedSets: [{ targetReps: 10, targetWeight: 0 }] });
+    renderRoutineExerciseList();
+  });
+  $('routineModalSave').addEventListener('click', () => {
+    readRoutineExerciseListIntoDraft();
+    const name = $('routineNameInput').value.trim();
+    if (!name) { alert('Give this routine a name first.'); return; }
+    if (!routineDraft.exercises.length) { alert('Add at least one exercise first.'); return; }
+    routineDraft.name = name;
+    const idx = state.routines.findIndex((r) => r.id === routineDraft.id);
+    if (idx === -1) state.routines.push(routineDraft); else state.routines[idx] = routineDraft;
+    saveState();
+    closeRoutineBuilder();
+    renderRoutines();
+  });
+  $('routineDeleteLink').addEventListener('click', () => {
+    if (!routineDraft || routineDraftIsNew) return;
+    if (!confirm('Delete "' + routineDraft.name + '"? This does not delete any sets you already logged.')) return;
+    state.routines = state.routines.filter((r) => r.id !== routineDraft.id);
+    saveState();
+    closeRoutineBuilder();
+    renderRoutines();
+  });
+
+  // ---------- routine runner (structured plan-vs-actual logging —
+  // explicitly NOT a live rest-timer/guided flow) ----------
+  function openRoutineRunner(routineId) {
+    const r = routineById(routineId);
+    if (!r) return;
+    $('routineRunTitle').textContent = r.name;
+    $('routineRunBody').innerHTML = r.exercises.map((rex) => {
+      const ex = exById(rex.exerciseId);
+      const name = ex ? ex.name : '(deleted exercise)';
+      const setsHtml = rex.plannedSets.map((s, si) => {
+        const plannedLabel = (ex && ex.bw) ? ('Planned: ' + s.targetReps + ' reps') : ('Planned: ' + s.targetReps + ' @ ' + s.targetWeight + unit());
+        return '<div class="po-routine-run-set-row" data-ex-id="' + rex.exerciseId + '" data-si="' + si + '">' +
+          '<span class="po-routine-run-planned">' + escape(plannedLabel) + '</span>' +
+          '<input type="number" class="rr-reps" placeholder="reps" value="' + s.targetReps + '">' +
+          ((ex && ex.bw) ? '' : '<input type="number" class="rr-weight" placeholder="wt" step="0.5" value="' + s.targetWeight + '">') +
+          '<button type="button" class="po-routine-run-log-btn" data-action="log" aria-label="Log this set">✓</button>' +
+          '<span class="po-routine-run-logged-badge" style="display:none">Logged ✓</span>' +
+        '</div>';
+      }).join('');
+      return '<div class="po-routine-run-ex"><div class="po-routine-run-ex-name">' + escape(name) + '</div>' + setsHtml + '</div>';
+    }).join('');
+    $('routineRunBody').querySelectorAll('.po-routine-run-set-row').forEach((row) => {
+      row.querySelector('[data-action="log"]').addEventListener('click', () => {
+        const exId = row.dataset.exId;
+        const si = parseInt(row.dataset.si, 10);
+        const ex = exById(exId);
+        const repsInput = row.querySelector('.rr-reps');
+        const weightInput = row.querySelector('.rr-weight');
+        const reps = parseInt(repsInput.value, 10) || 0;
+        const weight = (ex && ex.bw) ? 0 : (parseFloat(weightInput && weightInput.value) || 0);
+        const arr = state.logs[exId] || [];
+        // Same {weight,reps,date} shape ad-hoc logging writes (see
+        // gym.html's #logBtn handler) plus routineId/plannedSetIndex —
+        // additive fields nothing else reads or excludes on, so
+        // Rx/Stats/History/Sparkline treat this exactly like any other
+        // logged set.
+        arr.push({ weight, reps, date: new Date().toISOString(), routineId: r.id, plannedSetIndex: si });
+        state.logs[exId] = arr;
+        saveState();
+        renderAll();
+        repsInput.disabled = true;
+        if (weightInput) weightInput.disabled = true;
+        row.querySelector('[data-action="log"]').style.display = 'none';
+        row.querySelector('.po-routine-run-logged-badge').style.display = 'inline';
+      });
+    });
+    $('routineRunModalBg').classList.add('show');
+  }
+  $('routineRunCloseBtn').addEventListener('click', () => $('routineRunModalBg').classList.remove('show'));
 
   // ============================================================
   // SETTINGS MODAL (gyms, days + their exercises ("Routine"), units, data)
