@@ -1449,7 +1449,12 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
         if (!secret) { showStatus('Set your dashboard secret first (on the Cronometer page).', false); return; }
         saveBtn.disabled = true;
         try {
-          const r = await fetch('/api/sync-state?secret=' + encodeURIComponent(secret), {
+          // resource= must be in the QUERY STRING, not just the body —
+          // the server's dispatch reads req.query.resource only. Without
+          // it this silently fell through to the legacy {key,data}
+          // branch and failed with "key must be one of: gym, finance,
+          // dailystack".
+          const r = await fetch('/api/sync-state?secret=' + encodeURIComponent(secret) + '&resource=restrictions', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ resource: 'restrictions', action: 'create', restriction: restriction }),
           });

@@ -4829,7 +4829,12 @@ img, video, canvas, svg { max-width: 100%; }
   async function saveActivityTypesToServer(types) {
     const secret = getSecret();
     if (!secret) throw new Error('Set your dashboard secret first');
-    const r = await fetch('/api/sync-state?secret=' + encodeURIComponent(secret), {
+    // resource= must be in the QUERY STRING, not just the body — the
+    // server's dispatch reads req.query.resource only (see api/sync-
+    // state.js's handler). Without it this silently fell through to the
+    // legacy {key,data} branch and failed with "key must be one of:
+    // gym, finance, dailystack".
+    const r = await fetch('/api/sync-state?secret=' + encodeURIComponent(secret) + '&resource=activity-types', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ resource: 'activity-types', types }),
     });
