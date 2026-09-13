@@ -526,7 +526,13 @@ async function handleDayPlan(req, res, apiKey, body) {
     userContent: 'Context:\n' + JSON.stringify(context, null, 2),
     maxTokens: 1500,
   });
+  // TEMPORARY — remove once the root cause of "Model did not return valid
+  // JSON" from mode=day-plan is confirmed. Logs to Vercel's function
+  // logs, not the client. Same diagnostic pattern used for the earlier
+  // mode=today JSON failures (see git history: e5dcc39/f5dfa48/f6c3731).
+  console.log('[training mode=day-plan] raw text:', JSON.stringify(text));
   const parsed = extractJson(text);
+  console.log('[training mode=day-plan] extractJson result:', JSON.stringify(parsed));
   if (!parsed) return res.status(502).json({ ok: false, error: 'Model did not return valid JSON.' });
   const blocks = normalizeDayPlanBlocks(parsed, todayDateKey, tomorrowDateKey);
   if (!blocks.length) return res.status(502).json({ ok: false, error: 'Model did not return any usable blocks.' });
