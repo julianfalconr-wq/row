@@ -27,32 +27,50 @@
 //   same "client gathers context, server stays stateless" convention
 //   every other input already follows. Set via the chat's
 //   propose_restriction tool (api/chat.js) + saved through
-//   api/sync-state.js's resource=restrictions. scope "running" or
-//   "strength" is enforced in code (see normalizePlan), not just
-//   requested in the prompt; other scopes rely on the model
-//   respecting buildRestrictionsPromptSection's instructions, same as
-//   how padel is already handled in mode=today.
+//   api/sync-state.js's resource=restrictions. scope "strength" is
+//   enforced in code (see normalizePlan) for the strength side; on the
+//   cardio side (Phase 3 of the multi-activity-type generalization),
+//   ANY scope is checked in code against whichever activity type a
+//   cardio slot actually ends up using (matched by that type's id OR
+//   name, since a restriction's scope is free text, e.g. "running" —
+//   see isCardioTypeBlocked). Other scopes (e.g. "padel") still rely on
+//   the model respecting buildRestrictionsPromptSection's instructions,
+//   same as before.
 //
 // MODE 1 — POST /api/training?mode=plan&secret=...
-//   Generates this week's strength + running objectives.
+//   Generates this week's strength + cardio objectives. Cardio (Phase 3
+//   of the multi-activity-type generalization — previously hardcoded to
+//   running) is now distributed across whichever of the user's
+//   configured activity types are marked "recommendable"
+//   (api/sync-state.js's resource=activity-types) — each of the three
+//   cardio slots picks its own activity type, not necessarily the same
+//   one, and not necessarily running.
 //   Body: {
 //     strengthSessions: [{ date, totalSets, exerciseCount }],   // last ~21 days
 //     recentExerciseNames: ['Bench Press', 'DB Row', ...],      // distinct names actually logged
-//     runningSessions: [{ date, distanceKm, durationMin, pace, effort, notes }], // last ~21 days
+//     activitySessions: [{ activityTypeId, date, distanceKm, count, durationMin, pace, effort, notes }], // last ~21 days, any type
+//     recommendableActivityTypes: [{ id, name, unit, unitKind }],  // recommendable:true only; empty array means no cardio is possible this week
 //     whoop: { recentRecovery: [{date, recoveryPct}], recentStrain: [{date, strain}] } | null,
 //   }
 //   -> { ok: true, plan: {
 //     strength: { targetSessions: Number, focus: String },
-//     running: {
-//       interval:    { targetSessions: Number, targetMinutes: Number, description: String },
-//       longRun:     { targetKm: Number, description: String },
-//       easyVolume:  { targetKm: Number, description: String },
+//     cardio: {
+//       interval:    { activityTypeId: String|null, activityName: String, targetSessions: Number, targetMinutes: Number, description: String },
+//       longSession: { activityTypeId: String|null, activityName: String, targetAmount: Number, unit: String, description: String },
+//       easyVolume:  { activityTypeId: String|null, activityName: String, targetAmount: Number, unit: String, description: String },
 //     },
 //     rationale: String,
 //   } }
 //
 // MODE 2 — POST /api/training?mode=today&secret=...
 //   Recommends one specific session for today, Whoop-adjusted.
+//   NOT YET generalized to the Phase 3 cardio shape below — still reads
+//   weekPlan.running specifically (Phase 4, separate work). Between
+//   Phase 3 shipping and Phase 4 starting, weekPlan will actually be
+//   shaped like Phase 3's plan.cardio, which this mode's prompt doesn't
+//   know about yet, so a generated recommendation may reason about
+//   cardio incorrectly for that window — a known, temporary, and
+//   already-flagged gap, not a bug to chase here.
 //   Body: {
 //     weekPlan: { strength: {...}, running: {...}, rationale } | null,   // from mode=plan
 //     progress: {
@@ -218,35 +236,76 @@ const EQUIPMENT_NOTE =
   'bench press variations, tempo/pause reps, or bodyweight movements to fill gaps). Never suggest ' +
   'exercises that require equipment the user does not have.';
 
-function buildPlanSystemPrompt(restrictions) {
+// ------------------------------------------------------------
+// Recommendable activity types (Phase 3 of the multi-activity-type
+// generalization — see api/sync-state.js's resource=activity-types and
+// Phase 1/2's client-side work in gym.html). The client sends only the
+// types currently marked recommendable:true; this file never fetches
+// or knows about the full configured list, same "client gathers
+// context, server stays stateless" convention as restrictions above.
+// Falls back to a single built-in "Running" candidate if the field is
+// missing entirely (an older/uncached client), matching gym.html's own
+// default-seed fallback — but an EXPLICIT empty array is left as-is
+// (a real "nothing is recommendable right now" signal), not upgraded
+// to the fallback.
+// ------------------------------------------------------------
+
+const DEFAULT_RECOMMENDABLE_TYPES = [{ id: 'running', name: 'Running', unit: 'km', unitKind: 'distance' }];
+const UNIT_KINDS = ['distance', 'count', 'duration'];
+
+function sanitizeActivityTypes(raw) {
+  if (!Array.isArray(raw)) return DEFAULT_RECOMMENDABLE_TYPES;
+  return raw.slice(0, 20).map((t) => ({
+    id: typeof (t && t.id) === 'string' ? t.id.slice(0, 60) : '',
+    name: typeof (t && t.name) === 'string' ? t.name.slice(0, 60) : '',
+    unit: typeof (t && t.unit) === 'string' ? t.unit.slice(0, 20) : '',
+    unitKind: UNIT_KINDS.indexOf(t && t.unitKind) !== -1 ? t.unitKind : 'duration',
+  })).filter((t) => t.id && t.name);
+}
+
+function buildPlanSystemPrompt(restrictions, recommendableTypes) {
+  const typesList = recommendableTypes.length
+    ? JSON.stringify(recommendableTypes.map((t) => ({ id: t.id, name: t.name, unit: t.unit, unitKind: t.unitKind })), null, 2)
+    : null;
   return (
     'You are a training coach generating ONE week of concrete objectives for a personal dashboard. ' +
-    'The user does two kinds of training: strength (equipment-limited, see below) and running, with two ' +
-    'distinct running goals that both need to be served every week: improving VO2 max (needs genuine ' +
-    'high-intensity interval/tempo work) and building distance capacity past 10km (needs progressively ' +
-    'longer runs plus easy aerobic volume — standard run periodization, not an ad-hoc guess). ' +
-    'A real weekly running structure balances both: one interval/tempo session for VO2 max, one ' +
-    'progressively-longer long run building toward and past 10km, and additional easy Zone 2 volume. ' +
-    'Do not neglect either goal in favor of the other.\n\n' +
+    'The user does two kinds of training: strength (equipment-limited, see below) and cardio. Cardio needs ' +
+    'two distinct goals served every week, regardless of which specific activity fills them: improving VO2 ' +
+    'max (needs genuine high-intensity interval/tempo work) and building aerobic capacity (needs a ' +
+    'progressively longer session plus easy volume — standard periodization, not an ad-hoc guess). A real ' +
+    'weekly cardio structure balances both: one interval/tempo session for VO2 max, one progressively-' +
+    'longer session building endurance, and additional easy volume. Do not neglect either goal in favor of ' +
+    'the other.\n\n' +
+    (typesList
+      ? 'RECOMMENDABLE ACTIVITY TYPES — choose ONE of these for EACH of the three cardio slots below ' +
+        '(interval, longSession, easyVolume). A slot can reuse the same type as another slot, or use a ' +
+        'different one — whichever makes the best training sense given what\'s available (e.g. running for ' +
+        'the long session, cycling for easy volume, if both are listed). Genuinely distribute across what\'s ' +
+        'available when that serves the training goals better; do not default everything to the first entry ' +
+        'out of habit. NEVER invent a type or choose one not in this list:\n' + typesList + '\n\n'
+      : 'No activity types are currently marked recommendable, so cardio cannot be planned this week. Set ' +
+        'every cardio slot\'s numeric targets to 0, its activityTypeId to null and activityName to "", and ' +
+        'explain why in the rationale (strength targets are unaffected).\n\n') +
     EQUIPMENT_NOTE + '\n\n' +
     buildRestrictionsPromptSection(restrictions) +
-    'Use the recent history you are given (recent strength session frequency, recent running distances/' +
-    'paces/effort, and recent Whoop recovery/strain trends if present) to calibrate — e.g. progress the ' +
-    'long run distance gradually past whatever the recent longest run was, don\'t suddenly jump volume, ' +
-    'and temper targets if strain has been consistently high or recovery consistently low.\n\n' +
+    'Use the recent history you are given (recent strength session frequency, recent activity sessions ' +
+    'across whichever types have actually been logged, and recent Whoop recovery/strain trends if present) ' +
+    'to calibrate — e.g. progress a distance-based long session gradually past whatever the recent longest ' +
+    'session of that same type was, don\'t suddenly jump volume, and temper targets if strain has been ' +
+    'consistently high or recovery consistently low.\n\n' +
     'Reply with ONLY valid JSON, no markdown code fences, no commentary before or after, in exactly this shape:\n' +
     JSON.stringify({
       strength: { targetSessions: 3, focus: 'short phrase, e.g. "full-body bench + single-dumbbell supersets"' },
-      running: {
-        interval: { targetSessions: 1, targetMinutes: 30, description: 'concrete session, e.g. "6x3min hard w/ 2min easy jog recovery"' },
-        longRun: { targetKm: 8, description: 'concrete guidance, e.g. "steady easy pace, first 2km slower"' },
-        easyVolume: { targetKm: 10, description: 'concrete guidance, e.g. "2-3 easy runs, conversational pace"' },
+      cardio: {
+        interval: { activityTypeId: 'id from the list above, or null if none', activityName: 'that type\'s exact name, or ""', targetSessions: 1, targetMinutes: 30, description: 'concrete session, e.g. "6x3min hard w/ 2min easy recovery"' },
+        longSession: { activityTypeId: 'id from the list above, or null', activityName: 'name, or ""', targetAmount: 8, unit: 'the chosen type\'s own unit, e.g. "km"', description: 'concrete guidance, e.g. "steady easy effort, first 20% slower"' },
+        easyVolume: { activityTypeId: 'id from the list above, or null', activityName: 'name, or ""', targetAmount: 10, unit: 'the chosen type\'s own unit', description: 'concrete guidance, e.g. "2-3 easy sessions, conversational effort"' },
       },
-      rationale: '1-3 sentences explaining the targets given the recent history provided',
+      rationale: '1-3 sentences explaining the targets AND which activity type went where, given the recent history provided',
     }, null, 2) +
-    '\n\nEvery number must be a concrete number (sessions, km, or minutes) — never vague advice like ' +
-    '"run more" or "increase distance". If recent history is thin or empty, use sensible conservative ' +
-    'defaults for someone building both VO2 max and distance capacity, and say so in the rationale.'
+    '\n\nEvery number must be concrete (sessions, distance/count amount, or minutes) — never vague advice ' +
+    'like "do more cardio". If recent history is thin or empty, use sensible conservative defaults for ' +
+    'someone building both VO2 max and aerobic capacity, and say so in the rationale.'
   );
 }
 
@@ -255,43 +314,72 @@ function num(v, fallback) {
   return isNaN(n) ? fallback : n;
 }
 
-function normalizePlan(raw, restrictions) {
+// A cardio slot's chosen type is blocked if either: (a) it isn't one of
+// the types the model was actually offered (defense against
+// noncompliance — same "verify, don't just trust the prompt"
+// philosophy as the restriction check below and as strengthRestricted
+// above), or (b) an active restriction's scope matches it. Restriction
+// scope is free text (see api/sync-state.js's active_restrictions
+// table) rather than tied to an activity-type id, so matching is done
+// against BOTH the type's id and its name — this is what lets a
+// restriction created before this generalization existed (scope:
+// "running") still correctly block "running" no matter which of the
+// three cardio slots the model tries to put it in, not just a single
+// hardcoded field the way the old running-only version worked.
+function isCardioTypeBlocked(type, types, restrictedScopes) {
+  if (!type) return true;
+  if (types.length && !types.some((t) => t.id === type.id)) return true;
+  const idL = type.id.toLowerCase();
+  const nameL = type.name.toLowerCase();
+  return restrictedScopes.has(idL) || (!!nameL && restrictedScopes.has(nameL));
+}
+function resolveCardioType(activityTypeId, types) {
+  if (!activityTypeId) return null;
+  return types.find((t) => t.id === activityTypeId) || null;
+}
+function normalizeCardioInterval(raw, types, restrictedScopes) {
+  const s = raw || {};
+  const type = resolveCardioType(s.activityTypeId, types);
+  const blocked = isCardioTypeBlocked(type, types, restrictedScopes);
+  return {
+    activityTypeId: blocked ? null : type.id,
+    activityName: blocked ? '' : type.name,
+    targetSessions: blocked ? 0 : Math.max(0, Math.round(num(s.targetSessions, 1))),
+    targetMinutes: blocked ? 0 : Math.max(0, Math.round(num(s.targetMinutes, 25))),
+    description: blocked ? '' : (typeof s.description === 'string' ? s.description.slice(0, 300) : ''),
+  };
+}
+function normalizeCardioVolume(raw, types, restrictedScopes, defaultAmount) {
+  const s = raw || {};
+  const type = resolveCardioType(s.activityTypeId, types);
+  const blocked = isCardioTypeBlocked(type, types, restrictedScopes);
+  return {
+    activityTypeId: blocked ? null : type.id,
+    activityName: blocked ? '' : type.name,
+    targetAmount: blocked ? 0 : Math.max(0, num(s.targetAmount, defaultAmount)),
+    unit: blocked ? '' : type.unit,
+    description: blocked ? '' : (typeof s.description === 'string' ? s.description.slice(0, 300) : ''),
+  };
+}
+
+function normalizePlan(raw, restrictions, recommendableTypes) {
   const restricted = restrictedScopeSet(restrictions);
+  const types = Array.isArray(recommendableTypes) ? recommendableTypes : [];
   const r = raw || {};
   const strength = r.strength || {};
-  const running = r.running || {};
-  const interval = running.interval || {};
-  const longRun = running.longRun || {};
-  const easyVolume = running.easyVolume || {};
-  // Enforced here in code, not just requested in the prompt above — a
-  // hard override to exactly 0 (same pattern as runningRestricted
-  // below), not merely a relaxed floor: an earlier version of this
-  // only dropped the normal Math.max(1, ...) floor to 0 without
-  // actually zeroing a noncompliant model's own number, so a model
-  // that ignored the restriction and returned targetSessions:4 sailed
-  // straight through. Caught by testing a deliberately noncompliant
-  // mocked response before trusting this.
+  const cardio = r.cardio || {};
+  // Strength side is completely untouched by this generalization — same
+  // hard-override-to-0 enforcement as before.
   const strengthRestricted = restricted.has('strength');
-  const runningRestricted = restricted.has('running');
   return {
     strength: {
       targetSessions: strengthRestricted ? 0 : Math.max(1, Math.round(num(strength.targetSessions, 3))),
       focus: typeof strength.focus === 'string' ? strength.focus.slice(0, 200) : '',
     },
-    running: {
-      interval: {
-        targetSessions: runningRestricted ? 0 : Math.max(0, Math.round(num(interval.targetSessions, 1))),
-        targetMinutes: runningRestricted ? 0 : Math.max(0, Math.round(num(interval.targetMinutes, 25))),
-        description: typeof interval.description === 'string' ? interval.description.slice(0, 300) : '',
-      },
-      longRun: {
-        targetKm: runningRestricted ? 0 : Math.max(0, num(longRun.targetKm, 8)),
-        description: typeof longRun.description === 'string' ? longRun.description.slice(0, 300) : '',
-      },
-      easyVolume: {
-        targetKm: runningRestricted ? 0 : Math.max(0, num(easyVolume.targetKm, 10)),
-        description: typeof easyVolume.description === 'string' ? easyVolume.description.slice(0, 300) : '',
-      },
+    cardio: {
+      interval: normalizeCardioInterval(cardio.interval, types, restricted),
+      longSession: normalizeCardioVolume(cardio.longSession, types, restricted, 8),
+      easyVolume: normalizeCardioVolume(cardio.easyVolume, types, restricted, 10),
     },
     rationale: typeof r.rationale === 'string' ? r.rationale.slice(0, 600) : '',
   };
@@ -299,23 +387,24 @@ function normalizePlan(raw, restrictions) {
 
 async function handlePlan(req, res, apiKey, body) {
   const restrictions = sanitizeRestrictions(body.restrictions);
+  const recommendableTypes = sanitizeActivityTypes(body.recommendableActivityTypes);
   const context = {
     recentStrengthSessions: Array.isArray(body.strengthSessions) ? body.strengthSessions.slice(0, 30) : [],
     recentExerciseNames: Array.isArray(body.recentExerciseNames) ? body.recentExerciseNames.slice(0, 30) : [],
-    recentRunningSessions: Array.isArray(body.runningSessions) ? body.runningSessions.slice(0, 30) : [],
+    recentActivitySessions: Array.isArray(body.activitySessions) ? body.activitySessions.slice(0, 40) : [],
     whoop: body.whoop && typeof body.whoop === 'object' ? body.whoop : null,
     activeRestrictions: restrictions,
   };
 
   const text = await callClaude(apiKey, {
-    system: buildPlanSystemPrompt(restrictions),
+    system: buildPlanSystemPrompt(restrictions, recommendableTypes),
     userContent: 'Recent history:\n' + JSON.stringify(context, null, 2),
     maxTokens: 800,
   });
   const parsed = extractJson(text);
   if (!parsed) return res.status(502).json({ ok: false, error: 'Model did not return valid JSON.' });
 
-  return res.status(200).json({ ok: true, plan: normalizePlan(parsed, restrictions) });
+  return res.status(200).json({ ok: true, plan: normalizePlan(parsed, restrictions, recommendableTypes) });
 }
 
 // ------------------------------------------------------------

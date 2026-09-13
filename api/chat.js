@@ -47,25 +47,42 @@ const MEMORY_ROOT = '/memories';
 // it conversationally (padel days, recovery, time constraints — the
 // same back-and-forth the user described having with a coach before),
 // instead of the Training page's one-click "Generate" button being the
-// only way to set objectives. The input schema mirrors the exact plan
-// shape api/training.js's normalizePlan() already produces and
-// gym.html's "Generate" flow already stores — same fields, same
-// meaning — so the frontend can save it under the identical
-// po_coach_weekly_plan_v1 key with zero changes to how the Training
-// page reads or renders it.
+// only way to set objectives. The input schema mirrors the plan shape
+// api/training.js's normalizePlan() produces (Phase 3 of the multi-
+// activity-type generalization — cardio is no longer hardcoded to
+// running) so the frontend can save it under the identical
+// po_coach_weekly_plan_v1 key with no shape mismatch against what the
+// Training page's own "Generate" button writes there.
+//
+// Unlike api/training.js's mode=plan, this endpoint has no injected
+// list of the user's configured activity types to choose from (this
+// tool works from the conversation, not from structured recent-history
+// context) — so the model just names whichever activity the user
+// mentions (defaulting to "Running" if cardio comes up with no
+// specific activity named) as free text, and topbar.js's save handler
+// resolves that name against the user's ACTUAL configured types before
+// writing anything (case-insensitive match; no match -> saved without
+// a resolved activityTypeId, so labels/targets still display correctly
+// but that slot won't tie into progress-tracking against logged
+// activities). Deliberately does NOT auto-create a new activity type
+// from a casual chat mention the way Phase 2's WHOOP import does from
+// an explicit reviewed list — a stronger confirmation step than a
+// conversational aside warrants.
 const PROPOSE_OBJECTIVES_TOOL = {
   name: 'propose_training_objectives',
   description:
-    'Propose a concrete weekly training plan (strength + running) for the user to review. This does ' +
+    'Propose a concrete weekly training plan (strength + cardio) for the user to review. This does ' +
     'NOT save anything by itself — the user sees the proposal in the chat and explicitly chooses to save ' +
     'it or not. Only call this once you have gathered enough from the conversation to give specific ' +
-    'numbers (padel/other commitments this week, how recovery has been, time available) — do not call it ' +
-    'on the first message about training if you do not have that context yet; ask first. Equipment reality: ' +
-    'the user currently only has a flat/adjustable bench press setup and ONE dumbbell for strength — no ' +
-    'barbell, no rack, no second dumbbell, no machines, so every strength suggestion must be doable with ' +
-    'just those two things. Running should balance VO2 max (interval/tempo work) and building distance ' +
-    'capacity past 10km (a progressively longer long run plus easy Zone 2 volume) — standard periodization, ' +
-    'not an ad-hoc guess.',
+    'numbers (padel/other commitments this week, how recovery has been, time available, which cardio ' +
+    'activity/activities they want this week if it matters to them) — do not call it on the first message ' +
+    'about training if you do not have that context yet; ask first. Equipment reality: the user currently ' +
+    'only has a flat/adjustable bench press setup and ONE dumbbell for strength — no barbell, no rack, no ' +
+    'second dumbbell, no machines, so every strength suggestion must be doable with just those two things. ' +
+    'Cardio should balance VO2 max (interval/tempo work) and building aerobic capacity (a progressively ' +
+    'longer session plus easy volume) — standard periodization, not an ad-hoc guess. Each of the three ' +
+    'cardio slots names its own activity (e.g. "Running", "Cycling") — use whatever the user actually ' +
+    'mentioned for each slot; if they never specify an activity, default all three to "Running".',
   input_schema: {
     type: 'object',
     properties: {
@@ -77,40 +94,45 @@ const PROPOSE_OBJECTIVES_TOOL = {
         },
         required: ['targetSessions', 'focus'],
       },
-      running: {
+      cardio: {
         type: 'object',
         properties: {
           interval: {
             type: 'object',
             properties: {
+              activityName: { type: 'string', description: 'Activity for this slot, e.g. "Running", "Cycling" — default "Running" if unspecified' },
               targetSessions: { type: 'integer' },
               targetMinutes: { type: 'integer' },
-              description: { type: 'string', description: 'Concrete session, e.g. "6x3min hard w/ 2min easy jog recovery"' },
+              description: { type: 'string', description: 'Concrete session, e.g. "6x3min hard w/ 2min easy recovery"' },
             },
-            required: ['targetSessions', 'targetMinutes', 'description'],
+            required: ['activityName', 'targetSessions', 'targetMinutes', 'description'],
           },
-          longRun: {
+          longSession: {
             type: 'object',
             properties: {
-              targetKm: { type: 'number' },
+              activityName: { type: 'string', description: 'Activity for this slot — default "Running" if unspecified' },
+              targetAmount: { type: 'number', description: 'Distance/count target in this activity\'s natural unit' },
+              unit: { type: 'string', description: 'The unit targetAmount is in, e.g. "km"' },
               description: { type: 'string' },
             },
-            required: ['targetKm', 'description'],
+            required: ['activityName', 'targetAmount', 'unit', 'description'],
           },
           easyVolume: {
             type: 'object',
             properties: {
-              targetKm: { type: 'number' },
+              activityName: { type: 'string', description: 'Activity for this slot — default "Running" if unspecified' },
+              targetAmount: { type: 'number' },
+              unit: { type: 'string' },
               description: { type: 'string' },
             },
-            required: ['targetKm', 'description'],
+            required: ['activityName', 'targetAmount', 'unit', 'description'],
           },
         },
-        required: ['interval', 'longRun', 'easyVolume'],
+        required: ['interval', 'longSession', 'easyVolume'],
       },
       rationale: { type: 'string', description: '1-3 sentences explaining the plan given what the user told you' },
     },
-    required: ['strength', 'running', 'rationale'],
+    required: ['strength', 'cardio', 'rationale'],
   },
 };
 
@@ -236,32 +258,39 @@ function numOr(v, fallback) {
   const n = Number(v);
   return isNaN(n) ? fallback : n;
 }
+// activityTypeId is intentionally absent here — this endpoint has no
+// access to the user's configured activity types (see the tool's own
+// header comment), so it can only carry the free-text activityName the
+// model produced. topbar.js's save handler resolves that name against
+// the real configured list before writing po_coach_weekly_plan_v1.
+function normalizeCardioSlot(raw, defaultAmountField, defaultAmount) {
+  const s = raw || {};
+  const out = {
+    activityName: typeof s.activityName === 'string' && s.activityName.trim() ? s.activityName.trim().slice(0, 60) : 'Running',
+    description: typeof s.description === 'string' ? s.description.slice(0, 300) : '',
+  };
+  if (defaultAmountField === 'sessions') {
+    out.targetSessions = Math.max(0, Math.round(numOr(s.targetSessions, 1)));
+    out.targetMinutes = Math.max(0, Math.round(numOr(s.targetMinutes, 25)));
+  } else {
+    out.targetAmount = Math.max(0, numOr(s.targetAmount, defaultAmount));
+    out.unit = typeof s.unit === 'string' && s.unit.trim() ? s.unit.trim().slice(0, 20) : 'km';
+  }
+  return out;
+}
 function normalizeProposedPlan(raw) {
   const r = raw || {};
   const strength = r.strength || {};
-  const running = r.running || {};
-  const interval = running.interval || {};
-  const longRun = running.longRun || {};
-  const easyVolume = running.easyVolume || {};
+  const cardio = r.cardio || {};
   return {
     strength: {
       targetSessions: Math.max(1, Math.round(numOr(strength.targetSessions, 3))),
       focus: typeof strength.focus === 'string' ? strength.focus.slice(0, 200) : '',
     },
-    running: {
-      interval: {
-        targetSessions: Math.max(0, Math.round(numOr(interval.targetSessions, 1))),
-        targetMinutes: Math.max(0, Math.round(numOr(interval.targetMinutes, 25))),
-        description: typeof interval.description === 'string' ? interval.description.slice(0, 300) : '',
-      },
-      longRun: {
-        targetKm: Math.max(0, numOr(longRun.targetKm, 8)),
-        description: typeof longRun.description === 'string' ? longRun.description.slice(0, 300) : '',
-      },
-      easyVolume: {
-        targetKm: Math.max(0, numOr(easyVolume.targetKm, 10)),
-        description: typeof easyVolume.description === 'string' ? easyVolume.description.slice(0, 300) : '',
-      },
+    cardio: {
+      interval: normalizeCardioSlot(cardio.interval, 'sessions'),
+      longSession: normalizeCardioSlot(cardio.longSession, 'amount', 8),
+      easyVolume: normalizeCardioSlot(cardio.easyVolume, 'amount', 10),
     },
     rationale: typeof r.rationale === 'string' ? r.rationale.slice(0, 600) : '',
   };

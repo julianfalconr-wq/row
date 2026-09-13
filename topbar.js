@@ -1207,9 +1207,13 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
     function planRow(label, value, desc) {
       const row = document.createElement('div');
       row.className = 'chat-plan-row';
+      // label is escaped too (not just value/desc) since Phase 3 of the
+      // multi-activity-type feature started interpolating an
+      // activityName into it — ultimately a user-chosen activity type
+      // name from General Settings, no longer a guaranteed-safe literal.
       row.innerHTML =
         '<div class="chat-plan-main">' +
-          '<span class="chat-plan-label">' + label + '</span>' +
+          '<span class="chat-plan-label">' + escapeHtml(label) + '</span>' +
           (desc ? '<span class="chat-plan-desc">' + escapeHtml(desc) + '</span>' : '') +
         '</div>' +
         '<span class="chat-plan-value">' + escapeHtml(value) + '</span>';
@@ -1220,10 +1224,16 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
       const card = document.createElement('div');
       card.className = 'chat-plan-card';
 
+      // Phase 3 of the multi-activity-type generalization: cardio slots
+      // each carry their own assigned activityName now (plan.running is
+      // gone), rather than always being "running".
+      const interval = plan.cardio.interval;
+      const longSession = plan.cardio.longSession;
+      const easyVolume = plan.cardio.easyVolume;
       card.appendChild(planRow('Strength', plan.strength.targetSessions + ' sessions/wk', plan.strength.focus));
-      card.appendChild(planRow('Interval / VO2 max', plan.running.interval.targetSessions + '× · ' + plan.running.interval.targetMinutes + ' min', plan.running.interval.description));
-      card.appendChild(planRow('Long run', plan.running.longRun.targetKm + ' km', plan.running.longRun.description));
-      card.appendChild(planRow('Easy volume', plan.running.easyVolume.targetKm + ' km', plan.running.easyVolume.description));
+      card.appendChild(planRow('Interval / VO2 max' + (interval.activityName ? ' — ' + interval.activityName : ''), interval.targetSessions + '× · ' + interval.targetMinutes + ' min', interval.description));
+      card.appendChild(planRow('Long session' + (longSession.activityName ? ' — ' + longSession.activityName : ''), longSession.targetAmount + (longSession.unit ? ' ' + longSession.unit : ''), longSession.description));
+      card.appendChild(planRow('Easy volume' + (easyVolume.activityName ? ' — ' + easyVolume.activityName : ''), easyVolume.targetAmount + (easyVolume.unit ? ' ' + easyVolume.unit : ''), easyVolume.description));
 
       if (plan.rationale) {
         const rationale = document.createElement('div');
@@ -1244,9 +1254,36 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
       actions.appendChild(dismissBtn);
       card.appendChild(actions);
 
-      saveBtn.addEventListener('click', () => {
+      saveBtn.addEventListener('click', async () => {
+        saveBtn.disabled = true;
         try {
-          localStorage.setItem(PLAN_KEY, JSON.stringify({ weekStart: thisWeekMondayKeyLocal(), plan, generatedAt: new Date().toISOString() }));
+          // Resolve each cardio slot's free-text activityName (all the
+          // chat tool can produce — see PROPOSE_OBJECTIVES_TOOL's header
+          // comment in api/chat.js) against the user's REAL configured
+          // activity types, by exact case-insensitive name match, so a
+          // chat-negotiated plan ties into progress-tracking the same
+          // way a "Generate" button plan does. No match -> leave that
+          // slot's activityTypeId unset; its label/targets still display
+          // correctly, it just won't connect to logged activities.
+          // Deliberately no auto-create here (unlike Phase 2's WHOOP
+          // import) — see that same header comment for why.
+          let types = [];
+          try {
+            const secret = getSecret();
+            if (secret) {
+              const r = await fetch('/api/sync-state?secret=' + encodeURIComponent(secret) + '&resource=activity-types');
+              const j = await r.json();
+              if (j && j.ok && Array.isArray(j.types)) types = j.types;
+            }
+          } catch (e) {}
+          const resolved = JSON.parse(JSON.stringify(plan));
+          ['interval', 'longSession', 'easyVolume'].forEach((slotKey) => {
+            const slot = resolved.cardio && resolved.cardio[slotKey];
+            if (!slot) return;
+            const match = types.find((t) => t && typeof t.name === 'string' && t.name.trim().toLowerCase() === String(slot.activityName || '').trim().toLowerCase());
+            if (match) { slot.activityTypeId = match.id; slot.activityName = match.name; if (match.unit) slot.unit = match.unit; }
+          });
+          localStorage.setItem(PLAN_KEY, JSON.stringify({ weekStart: thisWeekMondayKeyLocal(), plan: resolved, generatedAt: new Date().toISOString() }));
         } catch (e) {}
         actions.remove();
         const status = document.createElement('div');

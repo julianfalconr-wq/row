@@ -1606,7 +1606,7 @@ img, video, canvas, svg { max-width: 100%; }
         <div class="tp-progress-track"><div class="tp-progress-fill" id="tpStrengthProgressFill" style="width:0%"></div></div>
       </div>
       <div class="tp-progress-row">
-        <div class="tp-progress-label"><span>Running</span><span id="tpRunningProgressText">0 of 0 km</span></div>
+        <div class="tp-progress-label"><span>Cardio</span><span id="tpRunningProgressText">0 of 0</span></div>
         <div class="tp-progress-track"><div class="tp-progress-fill" id="tpRunningProgressFill" style="width:0%"></div></div>
       </div>
       <div class="tp-plan-grid">
@@ -1615,15 +1615,15 @@ img, video, canvas, svg { max-width: 100%; }
           <div class="tp-plan-item-desc" id="tpStrengthDesc">—</div>
         </div>
         <div class="tp-plan-item">
-          <div class="tp-plan-item-head"><span class="tp-plan-item-label">Interval / VO2 max</span><span class="tp-plan-item-value" id="tpIntervalValue">—</span></div>
+          <div class="tp-plan-item-head"><span class="tp-plan-item-label" id="tpIntervalLabel">Interval / VO2 max</span><span class="tp-plan-item-value" id="tpIntervalValue">—</span></div>
           <div class="tp-plan-item-desc" id="tpIntervalDesc">—</div>
         </div>
         <div class="tp-plan-item">
-          <div class="tp-plan-item-head"><span class="tp-plan-item-label">Long run</span><span class="tp-plan-item-value" id="tpLongRunValue">—</span></div>
+          <div class="tp-plan-item-head"><span class="tp-plan-item-label" id="tpLongRunLabel">Long session</span><span class="tp-plan-item-value" id="tpLongRunValue">—</span></div>
           <div class="tp-plan-item-desc" id="tpLongRunDesc">—</div>
         </div>
         <div class="tp-plan-item">
-          <div class="tp-plan-item-head"><span class="tp-plan-item-label">Easy volume</span><span class="tp-plan-item-value" id="tpEasyValue">—</span></div>
+          <div class="tp-plan-item-head"><span class="tp-plan-item-label" id="tpEasyLabel">Easy volume</span><span class="tp-plan-item-value" id="tpEasyValue">—</span></div>
           <div class="tp-plan-item-desc" id="tpEasyDesc">—</div>
         </div>
       </div>
@@ -4890,13 +4890,43 @@ img, video, canvas, svg { max-width: 100%; }
     try { doneDays = (window.PoCoach && window.PoCoach.getDoneDays()) || {}; } catch (e) {}
     const strengthDone = Object.keys(doneDays).filter((dk) => dk >= monday && !!doneDays[dk]).length;
 
+    // Cardio progress (Phase 3 of the multi-activity-type generalization):
+    // combine longSession + easyVolume into one "amount done / amount
+    // targeted" bar across whichever activity type(s) they were actually
+    // assigned, but only slots sharing the SAME unit (the common case —
+    // both usually distance-based) — a slot with a different unit is
+    // left out of the sum rather than silently mixed into an
+    // incomparable total.
+    const cardio = plan ? plan.cardio : null;
+    const volumeSlots = cardio ? [cardio.longSession, cardio.easyVolume].filter((s) => s && s.unit) : [];
+    const cardioUnit = volumeSlots.length ? volumeSlots[0].unit : '';
+    const matchingSlots = cardioUnit ? volumeSlots.filter((s) => s.unit === cardioUnit) : [];
+    const amountTarget = Math.round(matchingSlots.reduce((sum, slot) => sum + (Number(slot.targetAmount) || 0), 0) * 10) / 10;
+    const cardioTypeIds = new Set(matchingSlots.map((s) => s.activityTypeId).filter(Boolean));
+    const activitiesThisWeek = activityEntries.filter((a) => a.dateKey >= monday && cardioTypeIds.has(a.activityTypeId));
+    const amountDone = Math.round(activitiesThisWeek.reduce((sum, a) => {
+      const type = activityTypeById(a.activityTypeId);
+      return sum + (Number(type.unitKind === 'count' ? a.count : a.distanceKm) || 0);
+    }, 0) * 10) / 10;
+
+    // Legacy running-specific fields — kept for
+    // generateTodayRecommendation/handleToday (Phase 4, not yet
+    // generalized), which still reasons explicitly about running
+    // distance. Correctly comes out to 0/empty when this week's cardio
+    // was assigned to a different activity type, which is the accurate
+    // answer (no running is actually due this week), not a bug.
+    const runningAssignedThisWeek = cardioTypeIds.has('running');
     const runsThisWeek = runEntries.filter((r) => r.dateKey >= monday);
-    const kmDone = Math.round(runsThisWeek.reduce((s, r) => s + (Number(r.distanceKm) || 0), 0) * 10) / 10;
-    const kmTarget = plan ? Math.round(((plan.running.longRun.targetKm || 0) + (plan.running.easyVolume.targetKm || 0)) * 10) / 10 : 0;
+    const kmDone = runningAssignedThisWeek ? Math.round(runsThisWeek.reduce((s, r) => s + (Number(r.distanceKm) || 0), 0) * 10) / 10 : 0;
+    const kmTarget = runningAssignedThisWeek ? amountTarget : 0;
 
     return {
       strengthDone,
       strengthTarget: plan ? plan.strength.targetSessions : 0,
+      cardioUnit,
+      amountDone,
+      amountTarget,
+      activitiesThisWeek: activitiesThisWeek.map((a) => ({ dateKey: a.dateKey, activityTypeId: a.activityTypeId, distanceKm: a.distanceKm, count: a.count, durationMin: a.durationMin, effort: a.effort })),
       kmDone,
       kmTarget,
       runsThisWeek: runsThisWeek.map((r) => ({ dateKey: r.dateKey, distanceKm: r.distanceKm, durationMin: r.durationMin, effort: r.effort })),
@@ -4918,17 +4948,24 @@ img, video, canvas, svg { max-width: 100%; }
 
     $$('tpStrengthProgressText').textContent = progress.strengthDone + ' of ' + progress.strengthTarget + ' sessions';
     $$('tpStrengthProgressFill').style.width = (progress.strengthTarget ? Math.min(100, (progress.strengthDone / progress.strengthTarget) * 100) : 0) + '%';
-    $$('tpRunningProgressText').textContent = progress.kmDone + ' of ' + progress.kmTarget + ' km';
-    $$('tpRunningProgressFill').style.width = (progress.kmTarget ? Math.min(100, (progress.kmDone / progress.kmTarget) * 100) : 0) + '%';
+    $$('tpRunningProgressText').textContent = progress.amountTarget ? (progress.amountDone + ' of ' + progress.amountTarget + ' ' + progress.cardioUnit) : 'No cardio target this week';
+    $$('tpRunningProgressFill').style.width = (progress.amountTarget ? Math.min(100, (progress.amountDone / progress.amountTarget) * 100) : 0) + '%';
 
     $$('tpStrengthValue').textContent = plan.strength.targetSessions + ' sessions/wk';
     $$('tpStrengthDesc').textContent = plan.strength.focus || '';
-    $$('tpIntervalValue').textContent = plan.running.interval.targetSessions + '× · ' + plan.running.interval.targetMinutes + ' min';
-    $$('tpIntervalDesc').textContent = plan.running.interval.description || '';
-    $$('tpLongRunValue').textContent = plan.running.longRun.targetKm + ' km';
-    $$('tpLongRunDesc').textContent = plan.running.longRun.description || '';
-    $$('tpEasyValue').textContent = plan.running.easyVolume.targetKm + ' km';
-    $$('tpEasyDesc').textContent = plan.running.easyVolume.description || '';
+
+    const interval = plan.cardio.interval;
+    const longSession = plan.cardio.longSession;
+    const easyVolume = plan.cardio.easyVolume;
+    $$('tpIntervalLabel').textContent = 'Interval / VO2 max' + (interval.activityName ? ' — ' + interval.activityName : '');
+    $$('tpIntervalValue').textContent = interval.targetSessions + '× · ' + interval.targetMinutes + ' min';
+    $$('tpIntervalDesc').textContent = interval.description || '';
+    $$('tpLongRunLabel').textContent = 'Long session' + (longSession.activityName ? ' — ' + longSession.activityName : '');
+    $$('tpLongRunValue').textContent = longSession.targetAmount + (longSession.unit ? ' ' + longSession.unit : '');
+    $$('tpLongRunDesc').textContent = longSession.description || '';
+    $$('tpEasyLabel').textContent = 'Easy volume' + (easyVolume.activityName ? ' — ' + easyVolume.activityName : '');
+    $$('tpEasyValue').textContent = easyVolume.targetAmount + (easyVolume.unit ? ' ' + easyVolume.unit : '');
+    $$('tpEasyDesc').textContent = easyVolume.description || '';
     $$('tpRationale').textContent = plan.rationale || '';
 
     return { plan, progress };
@@ -4965,9 +5002,21 @@ img, video, canvas, svg { max-width: 100%; }
           return { date: dk, totalSets, exerciseCount: exSet.size };
         });
       const recentExerciseNames = Array.from(new Set((state.exercises || []).map((e) => e.name)));
-      const runningSessions = runEntries
-        .filter((r) => r.dateKey >= cutoffKey)
-        .map((r) => ({ date: r.dateKey, distanceKm: r.distanceKm, durationMin: r.durationMin, pace: runFmtPace(r.distanceKm, r.durationMin), effort: r.effort, notes: r.notes }));
+      // Generalized from running-only (Phase 3 of the multi-activity-type
+      // feature): every logged activity, any type, not just runEntries —
+      // the model needs recent history across whichever types it's
+      // actually being asked to choose between.
+      const activitySessions = activityEntries
+        .filter((a) => a.dateKey >= cutoffKey)
+        .map((a) => ({ activityTypeId: a.activityTypeId, date: a.dateKey, distanceKm: a.distanceKm, count: a.count, durationMin: a.durationMin, pace: (a.distanceKm && a.durationMin) ? runFmtPace(a.distanceKm, a.durationMin) : null, effort: a.effort, notes: a.notes }));
+      // Fetched fresh, not the cached module-level `activityTypes`, same
+      // reasoning as fetchActiveRestrictions() below: recommendable
+      // status can change at any time via General Settings and a stale
+      // client-side cache shouldn't decide what this deliberate,
+      // infrequent action considers.
+      const recommendableActivityTypes = (await fetchActivityTypes())
+        .filter((t) => t.recommendable)
+        .map((t) => ({ id: t.id, name: t.name, unit: t.unit, unitKind: t.unitKind }));
 
       const whoopTrend = await fetchWhoopTrend(14);
       const whoop = whoopTrend.connected ? { recentRecovery: whoopTrend.recentRecovery, recentStrain: whoopTrend.recentStrain } : null;
@@ -4975,7 +5024,7 @@ img, video, canvas, svg { max-width: 100%; }
 
       const res = await fetch('/api/training?mode=plan&secret=' + encodeURIComponent(secret), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ strengthSessions, recentExerciseNames, runningSessions, whoop, restrictions }),
+        body: JSON.stringify({ strengthSessions, recentExerciseNames, activitySessions, recommendableActivityTypes, whoop, restrictions }),
       });
       const json = await res.json();
       if (!res.ok || !json.ok) throw new Error((json && json.error) || ('HTTP ' + res.status));
