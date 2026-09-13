@@ -521,15 +521,40 @@ async function handleDayPlan(req, res, apiKey, body) {
     activeRestrictions: restrictions,
   };
 
+  // Confirmed via the logged raw text: it came back as a literal empty
+  // string, the same failure class as the earlier mode=today bug —
+  // high-effort adaptive thinking (the API default when `effort` is
+  // omitted, which this call was doing) consuming the entire max_tokens
+  // budget before ever writing output text. callClaude() already finds
+  // the actual type==="text" block rather than assuming content[0] (the
+  // OTHER half of that earlier bug) — double-checked, that fix already
+  // covers every caller in this file, so nothing to change there.
+  //
+  // Unlike handleToday's one-line recommendation, day-plan's own
+  // reasoning is genuinely nontrivial (fitting up to ~9 blocks around
+  // real fixed calendar events across two days with zero overlap,
+  // exact wake/bed times, recovery-based adjustments, restrictions) —
+  // dropping to effort:'low' the way handleToday did risks the model
+  // skipping that reasoning and producing an overlapping/invalid
+  // schedule. Per Anthropic's current effort guidance for claude-
+  // sonnet-5 ("medium: cost-saving step-down from the default,
+  // comparable to Sonnet 4.6 at high effort" — and their explicit
+  // recommendation to set effort explicitly rather than rely on the
+  // unpredictable default), this uses 'medium' instead: real reasoning
+  // headroom without high effort's tendency to spend unboundedly. Paired
+  // with a much larger max_tokens (thinking and the ~9-block JSON output
+  // share the same budget), per Anthropic's own guidance to pair anything
+  // above low effort with a large max_tokens ceiling.
   const text = await callClaude(apiKey, {
     system: buildDayPlanSystemPrompt(restrictions),
     userContent: 'Context:\n' + JSON.stringify(context, null, 2),
-    maxTokens: 1500,
+    maxTokens: 4000,
+    effort: 'medium',
   });
-  // TEMPORARY — remove once the root cause of "Model did not return valid
-  // JSON" from mode=day-plan is confirmed. Logs to Vercel's function
-  // logs, not the client. Same diagnostic pattern used for the earlier
-  // mode=today JSON failures (see git history: e5dcc39/f5dfa48/f6c3731).
+  // TEMPORARY — keeping this one more round to verify the fix above
+  // against real output before removing it, per this project's
+  // established diagnostic protocol (see git history: e5dcc39/f5dfa48/
+  // f6c3731). Logs to Vercel's function logs, not the client.
   console.log('[training mode=day-plan] raw text:', JSON.stringify(text));
   const parsed = extractJson(text);
   console.log('[training mode=day-plan] extractJson result:', JSON.stringify(parsed));
