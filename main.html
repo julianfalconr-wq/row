@@ -2692,35 +2692,43 @@ document.addEventListener('DOMContentLoaded', function () {
   // requirement.
   // =============================================================
 
-  // No configurable sleep-duration-target setting exists yet anywhere
-  // in General Settings/profile — verified before assuming one. Using
-  // a fixed, documented default instead; a future addition could
-  // expose this in General Settings the same way day-end-time and
-  // category weights already are.
-  const DEFAULT_SLEEP_TARGET_HOURS = 8;
   // Buffer before tomorrow's earliest fixed commitment to allow
   // getting ready — a documented assumption (no per-user prep-time
   // setting exists either), not derived from real routine data.
   const WAKE_PREP_BUFFER_MINUTES = 45;
   const DEFAULT_WAKE_UP_TIME = '07:00'; // used only if tomorrow has no fixed events at all
 
-  // TODAY's own wake time, read from the Day Ring's per-weekday
+  // TODAY's own wake/sleep times, read from the Day Ring's per-weekday
   // schedule (General Settings — see main.html's Day Ring feature) by
   // today's actual weekday — deliberately NOT the tomorrow-calendar
   // inference above (wakeUpTime/DEFAULT_WAKE_UP_TIME), which is a
-  // different thing used only for tonight's Wind-down/bedtime math.
+  // different thing used only for tomorrow's own "Wake up" block. (An
+  // earlier version of this file computed tonight's bedtime the same
+  // tomorrow-inferred way — via a DEFAULT_SLEEP_TARGET_HOURS subtracted
+  // from wakeUpTime — which ignored the user's actual configured sleep
+  // time entirely, same bug class already fixed for wake-up. Removed
+  // that computation; todayBedtimeFromDayRingSchedule() below replaces
+  // it completely, and nothing else read DEFAULT_SLEEP_TARGET_HOURS.)
   // This small lookup is duplicated here rather than shared, matching
   // this file's own established convention (see
   // fetchActiveRestrictionsForPlan's comment) of small per-closure
   // copies rather than reaching into a different script's IIFE scope.
   const PLAN_DAY_WEEKDAY_KEYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']; // matches Date.getDay()
   const PLAN_DAY_DEFAULT_WAKE = '08:00'; // matches the Day Ring feature's own DAY_RING_DEFAULT_WAKE
-  function todayWakeUpTimeFromDayRingSchedule(todayDateKey) {
+  const PLAN_DAY_DEFAULT_SLEEP = '00:00'; // matches the Day Ring feature's own DAY_RING_DEFAULT_SLEEP
+  function todayDayRingScheduleEntry(todayDateKey) {
     const profile = (typeof window.DayLib !== 'undefined') ? window.DayLib.loadProfile() : null;
     const schedule = (profile && profile.dayRingSchedule) || {};
     const weekday = PLAN_DAY_WEEKDAY_KEYS[DayLib.parseDateKey(todayDateKey).getDay()];
-    const entry = schedule[weekday];
+    return schedule[weekday] || {};
+  }
+  function todayWakeUpTimeFromDayRingSchedule(todayDateKey) {
+    const entry = todayDayRingScheduleEntry(todayDateKey);
     return (entry && typeof entry.wake === 'string' && entry.wake) ? entry.wake : PLAN_DAY_DEFAULT_WAKE;
+  }
+  function todayBedtimeFromDayRingSchedule(todayDateKey) {
+    const entry = todayDayRingScheduleEntry(todayDateKey);
+    return (entry && typeof entry.sleep === 'string' && entry.sleep) ? entry.sleep : PLAN_DAY_DEFAULT_SLEEP;
   }
   function currentTimeHHMM() {
     const d = new Date();
@@ -2840,15 +2848,19 @@ document.addEventListener('DOMContentLoaded', function () {
         return { date: s.date, start: s.time, end: e.time, title: ev.summary || '(untitled)', allDay: false };
       });
 
-      // Wake-up: WAKE_PREP_BUFFER_MINUTES before tomorrow's earliest
-      // TIMED fixed event (all-day entries don't have a clock time to
-      // anchor to); DEFAULT_WAKE_UP_TIME if tomorrow has nothing fixed
-      // at all. Computed here in plain code, not by the model — see
-      // api/training.js's mode=day-plan comment on why.
+      // Wake-up (TOMORROW): WAKE_PREP_BUFFER_MINUTES before tomorrow's
+      // earliest TIMED fixed event (all-day entries don't have a clock
+      // time to anchor to); DEFAULT_WAKE_UP_TIME if tomorrow has
+      // nothing fixed at all. Computed here in plain code, not by the
+      // model — see api/training.js's mode=day-plan comment on why.
+      // Only used for tomorrow's own "Wake up" block.
       const tomorrowTimed = fixedEvents.filter((e) => e.date === tomorrowDateKey && !e.allDay && e.start).sort((a, b) => a.start.localeCompare(b.start));
       const wakeUpTime = tomorrowTimed.length ? subtractMinutesFromTime(tomorrowTimed[0].start, WAKE_PREP_BUFFER_MINUTES) : DEFAULT_WAKE_UP_TIME;
-      const bedtime = subtractMinutesFromTime(wakeUpTime, DEFAULT_SLEEP_TARGET_HOURS * 60);
+      // TODAY's own configured wake/sleep times — the anchor for
+      // today's morning blocks and tonight's Wind-down block,
+      // respectively. Not derived from wakeUpTime above at all.
       const todayWakeUpTime = todayWakeUpTimeFromDayRingSchedule(todayDateKey);
+      const todayBedtime = todayBedtimeFromDayRingSchedule(todayDateKey);
 
       $('planDayStatus').textContent = 'Checking WHOOP recovery…';
       const whoopToday = await fetchRecoveryForPlan();
@@ -2869,9 +2881,8 @@ document.addEventListener('DOMContentLoaded', function () {
           todayRecommendation,
           whoopToday,
           fixedEvents,
-          sleepTargetHours: DEFAULT_SLEEP_TARGET_HOURS,
-          wakeUpTime, bedtime,
-          todayWakeUpTime,
+          wakeUpTime,
+          todayWakeUpTime, todayBedtime,
           restrictions,
         }),
       });

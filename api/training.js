@@ -112,23 +112,23 @@
 //     todayRecommendation: String | null,   // gym.html's cached mode=today result (Phase 1, padel-aware) — reused verbatim, NOT recomputed here
 //     whoopToday: { recoveryPct: Number|null } | null,
 //     fixedEvents: [{ date, start, end, title, allDay }],   // today + tomorrow's REAL existing Calendar events — immovable
-//     sleepTargetHours: Number,   // default 8 (no configurable setting for this yet — see main.html's comment)
-//     wakeUpTime: 'HH:MM', bedtime: 'HH:MM',
-//     // Both pre-computed CLIENT-SIDE (plain arithmetic on tomorrow's
-//     // earliest fixedEvents entry, not by this endpoint) rather than
-//     // asked of the model — exact clock-arithmetic is a poor fit for an
-//     // LLM to get reliably right, whereas fitting flexible blocks
-//     // (training/work/meals/walks) around fixed anchors is exactly the
-//     // kind of judgment call worth spending a model call on. See
-//     // buildDayPlanSystemPrompt's FIXED section below. THIS PAIR IS
-//     // ABOUT TOMORROW — computing tonight's Wind-down/bedtime and
-//     // tomorrow's Wake-up block from tomorrow's earliest commitment —
-//     // do not confuse with todayWakeUpTime below, a different thing.
-//     todayWakeUpTime: 'HH:MM',   // TODAY's own already-configured wake time, read client-side from
-//     // General Settings' Day Ring per-weekday schedule (dayRingSchedule[todayWeekday].wake — see
-//     // main.html's Day Ring feature) by TODAY's actual weekday, NOT inferred from any calendar event.
-//     // Used only as the anchor for how early today's morning-anchored blocks (breakfast) may start;
-//     // unlike wakeUpTime above, this is never itself output as a block.
+//     wakeUpTime: 'HH:MM',   // pre-computed CLIENT-SIDE from tomorrow's earliest TIMED fixedEvents
+//     // entry (minus a prep buffer), not asked of the model — exact clock-arithmetic is a poor fit for
+//     // an LLM to get reliably right, whereas fitting flexible blocks around fixed anchors is exactly
+//     // the kind of judgment call worth spending a model call on. See buildDayPlanSystemPrompt's FIXED
+//     // section below. ONLY used for tomorrow's "Wake up" block — do not confuse with todayWakeUpTime
+//     // or todayBedtime below, both different things about TODAY.
+//     todayWakeUpTime: 'HH:MM', todayBedtime: 'HH:MM',
+//     // TODAY's own already-configured wake/sleep times, read client-side from General Settings' Day
+//     // Ring per-weekday schedule (dayRingSchedule[todayWeekday].wake/.sleep — see main.html's Day Ring
+//     // feature) by TODAY's actual weekday, NOT inferred from any calendar event. todayWakeUpTime is the
+//     // anchor for how early today's morning-anchored blocks (breakfast) may start; todayBedtime is
+//     // where tonight's "Wind-down" block ends. Neither is itself output as a block (todayWakeUpTime
+//     // isn't output at all; todayBedtime is only ever the END time of the Wind-down block).
+//     // (An earlier version of this endpoint instead inferred tonight's bedtime from tomorrow's
+//     // wakeUpTime and a sleepTargetHours target — that ignored the user's actual configured sleep
+//     // time entirely, the same class of bug already fixed for wake-up via todayWakeUpTime. Removed:
+//     // nothing else read sleepTargetHours or that inferred bedtime once Wind-down uses todayBedtime.)
 //   }
 //   -> { ok: true, blocks: [{ date, start, end, title, category }] }
 // =============================================================
@@ -549,10 +549,12 @@ function buildDayPlanSystemPrompt(restrictions) {
     'FIXED, NON-NEGOTIABLE — never overlap these, and never move or omit them:\n' +
     '- fixedEvents: the user\'s ACTUAL existing calendar events for today and tomorrow (meetings, padel, ' +
     'appointments, etc. — already-booked real time). Every block you propose must fit strictly around these.\n' +
-    '- wakeUpTime and bedtime are already computed (from tomorrow\'s earliest fixed commitment and the ' +
-    'user\'s sleep-duration target) — do NOT recalculate them yourself. Output a short "Wake up" block on ' +
-    'tomorrowDateKey starting at wakeUpTime, and a "Wind-down" block on todayDateKey ending exactly at ' +
-    'bedtime, using the exact given times. Never schedule anything else between bedtime and wakeUpTime.\n' +
+    '- wakeUpTime is already computed (from tomorrow\'s earliest fixed commitment) — do NOT recalculate ' +
+    'it yourself. Output a short "Wake up" block on tomorrowDateKey starting at wakeUpTime, and never ' +
+    'schedule anything else on tomorrowDateKey before it.\n' +
+    '- todayBedtime is today\'s already-configured sleep time (do NOT recalculate it) — output a ' +
+    '"Wind-down" block on todayDateKey ending exactly at todayBedtime, using the exact given time, and ' +
+    'never schedule anything else on todayDateKey after it.\n' +
     '- nowTime is the actual current wall-clock time this plan is being generated at, "HH:MM". EVERY block ' +
     'you propose on todayDateKey must start at or after nowTime — never propose a start time on todayDateKey ' +
     'that has already passed, even for a normally-morning item. If a default item like breakfast would only ' +
@@ -650,8 +652,8 @@ function normalizeDayPlanBlocks(raw, todayDateKey, tomorrowDateKey, fixedEvents)
 async function handleDayPlan(req, res, apiKey, body) {
   const todayDateKey = typeof body.todayDateKey === 'string' ? body.todayDateKey.slice(0, 10) : '';
   const tomorrowDateKey = typeof body.tomorrowDateKey === 'string' ? body.tomorrowDateKey.slice(0, 10) : '';
-  // nowTime is REQUIRED (not defaulted like wakeUpTime/bedtime/
-  // todayWakeUpTime below) — defaulting it to anything would silently
+  // nowTime is REQUIRED (not defaulted like wakeUpTime/todayWakeUpTime/
+  // todayBedtime below) — defaulting it to anything would silently
   // defeat Fix 1 (e.g. defaulting to '00:00' would never filter a
   // single already-passed block), so a missing/malformed value fails
   // loudly instead of quietly reproducing the original bug.
@@ -674,16 +676,19 @@ async function handleDayPlan(req, res, apiKey, body) {
       title: typeof (e && e.title) === 'string' ? e.title.slice(0, 200) : '',
       allDay: !!(e && e.allDay),
     })) : [],
-    sleepTargetHours: Math.max(4, Math.min(12, numOrNull(body.sleepTargetHours) || 8)),
+    // TOMORROW's inferred wake time (from tomorrow's earliest fixed
+    // commitment) — used only for the "Wake up" block on
+    // tomorrowDateKey. Do not confuse with todayWakeUpTime/todayBedtime
+    // below, both about TODAY's own configured schedule instead.
     wakeUpTime: typeof body.wakeUpTime === 'string' && HHMM_RE.test(body.wakeUpTime) ? body.wakeUpTime : '07:00',
-    bedtime: typeof body.bedtime === 'string' && HHMM_RE.test(body.bedtime) ? body.bedtime : '23:00',
-    // Today's own already-configured wake time (Day Ring's per-weekday
-    // dayRingSchedule, read client-side by TODAY's actual weekday) —
-    // deliberately separate from wakeUpTime above, which is about
-    // TOMORROW's inferred wake time for tonight's Wind-down/bedtime
-    // math. Defaults to '08:00' to match the Day Ring feature's own
-    // DAY_RING_DEFAULT_WAKE if the client omits it for any reason.
+    // TODAY's own already-configured wake/sleep times (Day Ring's
+    // per-weekday dayRingSchedule, read client-side by TODAY's actual
+    // weekday). todayWakeUpTime anchors how early breakfast may start;
+    // todayBedtime is where tonight's Wind-down block ends. Defaults
+    // match the Day Ring feature's own DAY_RING_DEFAULT_WAKE/_SLEEP if
+    // the client omits either for any reason.
     todayWakeUpTime: typeof body.todayWakeUpTime === 'string' && HHMM_RE.test(body.todayWakeUpTime) ? body.todayWakeUpTime : '08:00',
+    todayBedtime: typeof body.todayBedtime === 'string' && HHMM_RE.test(body.todayBedtime) ? body.todayBedtime : '00:00',
     activeRestrictions: restrictions,
   };
 
