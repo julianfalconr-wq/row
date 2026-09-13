@@ -1022,6 +1022,11 @@ body::after {
   font-family: inherit; font-size: 13.5px; padding: 9px 10px; border-radius: 9px; outline: none;
 }
 .gs-habits-note { font-size: 12.5px; color: var(--text-tertiary); margin-bottom: 10px; line-height: 1.5; }
+.gs-weekday-time-grid { display: flex; flex-direction: column; gap: 6px; }
+.gs-weekday-time-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; cursor: pointer; }
+.gs-weekday-time-row span { font-size: 12.5px; color: var(--text-secondary); font-weight: 600; width: 36px; flex-shrink: 0; }
+/* [type="time"] here ties in specificity with ".gs-field input[type='time']" above (both one class + one attribute selector) — placed AFTER it in the cascade so width:auto correctly wins over that rule's width:100%, same specificity gotcha already hit once in the Routines feature's .po-field input[type="number"] fix. */
+.gs-weekday-time-row input[type="time"] { width: auto; flex: 1; min-width: 0; }
 
 .gs-restrictions-list { display: flex; flex-direction: column; gap: 8px; }
 .gs-restriction-row {
@@ -1209,9 +1214,17 @@ body::after {
       <div class="set-section">
         <h4>Category Weights (Daily Score)</h4>
         <div class="field gs-field" style="margin-bottom:14px">
-          <label>Today's Score circle — day ends at</label>
-          <input type="time" id="gsScoreCardDayEndTime" value="00:00">
-          <div class="gs-habits-note" style="margin-top:6px">Only affects the "Today's Score" circle and its Habits mini-gauge — separate from the app-wide "Day ends at" above, which Training/Calendar/Cronometer/Habits/Daily Stack all still use unchanged.</div>
+          <label>Today's Score circle — day ends at (per weekday)</label>
+          <div class="gs-weekday-time-grid" id="gsScoreCardDayEndTimes">
+            <label class="gs-weekday-time-row"><span>Mon</span><input type="time" data-day="monday"></label>
+            <label class="gs-weekday-time-row"><span>Tue</span><input type="time" data-day="tuesday"></label>
+            <label class="gs-weekday-time-row"><span>Wed</span><input type="time" data-day="wednesday"></label>
+            <label class="gs-weekday-time-row"><span>Thu</span><input type="time" data-day="thursday"></label>
+            <label class="gs-weekday-time-row"><span>Fri</span><input type="time" data-day="friday"></label>
+            <label class="gs-weekday-time-row"><span>Sat</span><input type="time" data-day="saturday"></label>
+            <label class="gs-weekday-time-row"><span>Sun</span><input type="time" data-day="sunday"></label>
+          </div>
+          <div class="gs-habits-note" style="margin-top:6px">Only affects the "Today's Score" circle and its Habits mini-gauge — separate from the app-wide "Day ends at" above, which Training/Calendar/Cronometer/Habits/Daily Stack all still use unchanged. Each day can have its own cutoff, e.g. stay open later on Fridays only.</div>
         </div>
         <div class="gs-weight-row"><label for="gsWeightHabits">Habits</label><input type="number" id="gsWeightHabits" min="0" max="100"></div>
         <div class="gs-weight-row"><label for="gsWeightTraining">Training</label><input type="number" id="gsWeightTraining" min="0" max="100"></div>
@@ -2954,10 +2967,22 @@ document.addEventListener('DOMContentLoaded', function () {
   // recomputed fresh on every render() call (render() is called again
   // right after a successful Settings save — see that button's
   // handler below) instead of a one-time module-level const.
+  // Part 2 (per-weekday score-card cutoff): scoreCardDayEndTime is now
+  // an object keyed by weekday (daylib.js migrates an old single
+  // string up to this shape automatically — see its loadProfile()).
+  // Which day's value applies is picked by TODAY's actual, un-shifted
+  // weekday (DayLib.currentWeekdayName() — deliberately NOT the
+  // already-effective/shifted date, see that function's own comment on
+  // why), then plugged into the exact same single-dayEndTime override
+  // mechanism effectiveDateKey() has always used — the date-shifting
+  // math itself is completely unchanged, only how the ONE applicable
+  // "HH:MM" gets chosen is new.
   function computeScoreCardDates() {
     const generalProfile = DayLib.loadProfile();
+    const todayWeekday = DayLib.currentWeekdayName(null, generalProfile);
+    const scoreCardDayEndTime = (generalProfile.scoreCardDayEndTime && generalProfile.scoreCardDayEndTime[todayWeekday]) || generalProfile.dayEndTime || '00:00';
     const scoreCardProfile = Object.assign({}, generalProfile, {
-      dayEndTime: generalProfile.scoreCardDayEndTime || generalProfile.dayEndTime,
+      dayEndTime: scoreCardDayEndTime,
     });
     const todayActive = DayLib.effectiveDateKey(null, scoreCardProfile);
     const todayPlain = DayLib.effectiveDateKey(null, scoreCardProfile);
@@ -3850,12 +3875,22 @@ document.addEventListener('DOMContentLoaded', function () {
     try { await saveActivityTypesToServer(activityTypesDraft); } catch (e) { alert("Couldn't save: " + (e.message || e)); }
   });
 
+  const SCORE_CARD_WEEKDAY_KEYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
   function openGeneralSettings() {
-    const profile = (typeof window.DayLib !== 'undefined') ? window.DayLib.loadProfile() : { dayEndTime: '00:00', timezone: 'auto', categoryWeights: { habits: 35, training: 20, nutrition: 20, water: 10, dailyStack: 10 } };
+    const fallbackDefault = { dayEndTime: '00:00', timezone: 'auto', categoryWeights: { habits: 35, training: 20, nutrition: 20, water: 10, dailyStack: 10 }, scoreCardDayEndTime: {} };
+    const profile = (typeof window.DayLib !== 'undefined') ? window.DayLib.loadProfile() : fallbackDefault;
     $('gsTimezone').innerHTML = '<option value="auto">Auto-detect</option>';
     populateTimezoneOptions(profile.timezone);
     $('gsDayEndTime').value = profile.dayEndTime || '00:00';
-    $('gsScoreCardDayEndTime').value = profile.scoreCardDayEndTime || profile.dayEndTime || '00:00';
+    // Per-weekday (Part 2) — daylib.js's loadProfile() already migrates
+    // an old single-string value up to a fully-populated per-weekday
+    // object, so this is always safe to index directly; the `|| '00:00'`
+    // is just a last-resort fallback for the DayLib-unavailable case above.
+    const scoreCardTimes = profile.scoreCardDayEndTime || {};
+    SCORE_CARD_WEEKDAY_KEYS.forEach((day) => {
+      const input = $('gsScoreCardDayEndTimes').querySelector('input[data-day="' + day + '"]');
+      if (input) input.value = scoreCardTimes[day] || profile.dayEndTime || '00:00';
+    });
     Object.keys(gsWeightIds).forEach((k) => { $(gsWeightIds[k]).value = (profile.categoryWeights && profile.categoryWeights[k] != null) ? profile.categoryWeights[k] : 0; });
     updateWeightSum();
     renderActivityTypesList();
@@ -3877,9 +3912,14 @@ document.addEventListener('DOMContentLoaded', function () {
   Object.values(gsWeightIds).forEach((id) => $(id).addEventListener('input', updateWeightSum));
   $('generalSettingsSaveBtn').addEventListener('click', async () => {
     if (!updateWeightSum()) { alert('Category weights must sum to 100.'); return; }
+    const scoreCardDayEndTime = {};
+    SCORE_CARD_WEEKDAY_KEYS.forEach((day) => {
+      const input = $('gsScoreCardDayEndTimes').querySelector('input[data-day="' + day + '"]');
+      scoreCardDayEndTime[day] = (input && input.value) || '00:00';
+    });
     const settings = {
       dayEndTime: $('gsDayEndTime').value || '00:00',
-      scoreCardDayEndTime: $('gsScoreCardDayEndTime').value || '00:00',
+      scoreCardDayEndTime,
       timezone: $('gsTimezone').value || 'auto',
       categoryWeights: {},
     };
