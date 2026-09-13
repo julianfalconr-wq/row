@@ -174,6 +174,89 @@ const PROPOSE_CALENDAR_EVENT_TOOL = {
   },
 };
 
+// ---------- propose_calendar_event_update tool ----------
+// Lets the user ask the chat to move/edit a REAL, already-existing
+// calendar event conversationally (e.g. "move my walk to 4pm", "push
+// my 5pm call to 6pm") — including events "Plan my day" itself already
+// created, since once confirmed those are ordinary real Google Calendar
+// events indistinguishable from any other (they show up in
+// calendar.upcoming exactly the same way). This is what makes
+// "adjust my day plan" work without a separate plan-specific
+// mechanism: the model just looks at calendar.upcoming for what's
+// already there and proposes whichever move/delete/create calls
+// achieve what the user asked for, each its own separate proposal.
+//
+// Real destructive/modifying calendar access (unlike
+// propose_calendar_event, which only ever creates something new) — so
+// eventId must be a REAL id copied verbatim from calendar.upcoming,
+// never invented, and this tool still only ever proposes; nothing is
+// changed until the user taps Update event on the card (see
+// topbar.js's renderCalendarEventUpdateCard).
+const PROPOSE_CALENDAR_EVENT_UPDATE_TOOL = {
+  name: 'propose_calendar_event_update',
+  description:
+    'Propose moving and/or renaming an EXISTING real calendar event (e.g. "move my walk to 4pm", "push my ' +
+    '5pm call to 6pm", "rename my 3pm block to Errand") for the user to review. This does NOT change ' +
+    'anything by itself — the user sees a before/after card in the chat and explicitly chooses to apply it ' +
+    'or not. eventId MUST be copied verbatim from the "id" field of an entry in calendar.upcoming in ' +
+    'TODAY\'S DATA — NEVER invent or guess an id. If the user describes an event you cannot find in ' +
+    'calendar.upcoming (wrong day, too far out, or just not there), say so and ask them to clarify rather ' +
+    'than guessing which one they mean. Always include that same event\'s CURRENT summary/date/start/end as ' +
+    'originalSummary/originalDate/originalStartTime/originalEndTime (copied from calendar.upcoming, so the ' +
+    'user sees an accurate before/after) — then include ONLY whichever of summary/date/startTime/endTime is ' +
+    'actually changing; omit any that stay the same. Only call this once you have a concrete new time/date/ ' +
+    'title — ask a brief clarifying question first if the request is vague (e.g. "move it later" with no ' +
+    'specific time).',
+  input_schema: {
+    type: 'object',
+    properties: {
+      eventId: { type: 'string', description: 'The real event id, copied verbatim from calendar.upcoming — never invented' },
+      originalSummary: { type: 'string', description: 'The event\'s CURRENT title, from calendar.upcoming' },
+      originalDate: { type: 'string', description: 'YYYY-MM-DD, the event\'s CURRENT date, from calendar.upcoming' },
+      originalStartTime: { type: 'string', description: 'HH:MM, the event\'s CURRENT start time, from calendar.upcoming' },
+      originalEndTime: { type: 'string', description: 'HH:MM, the event\'s CURRENT end time, from calendar.upcoming' },
+      summary: { type: 'string', description: 'New title — only include if it is actually changing' },
+      date: { type: 'string', description: 'New date YYYY-MM-DD — only include if it is actually changing' },
+      startTime: { type: 'string', description: 'New start time HH:MM — only include if it is actually changing' },
+      endTime: { type: 'string', description: 'New end time HH:MM — only include if it is actually changing' },
+    },
+    required: ['eventId', 'originalSummary', 'originalDate', 'originalStartTime', 'originalEndTime'],
+  },
+};
+
+// ---------- propose_calendar_event_delete tool ----------
+// Lets the user ask the chat to cancel a REAL, already-existing
+// calendar event conversationally (e.g. "cancel my 5pm call", "delete
+// the errand block") — same "real events are just real events" logic
+// as the update tool above applies here too (a Plan-my-day-created
+// event is deleted exactly the same way as any other). This is the
+// single most irreversible tool in this file, so it gets its own
+// visually distinct danger-styled confirm button client-side
+// (topbar.js's renderCalendarEventDeleteCard) on top of the same
+// explicit-confirmation requirement every other propose_* tool has.
+const PROPOSE_CALENDAR_EVENT_DELETE_TOOL = {
+  name: 'propose_calendar_event_delete',
+  description:
+    'Propose deleting an EXISTING real calendar event (e.g. "cancel my 5pm call", "delete the errand ' +
+    'block") for the user to review. This does NOT delete anything by itself — the user sees the event in ' +
+    'a card and explicitly chooses to delete it or not; there is no undo once they do. eventId MUST be ' +
+    'copied verbatim from the "id" field of an entry in calendar.upcoming in TODAY\'S DATA — NEVER invent ' +
+    'or guess an id. If the user describes an event you cannot find in calendar.upcoming, say so and ask ' +
+    'them to clarify rather than guessing which one they mean. Copy summary/date/start/end straight from ' +
+    'that same calendar.upcoming entry for display in the confirmation card.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      eventId: { type: 'string', description: 'The real event id, copied verbatim from calendar.upcoming — never invented' },
+      summary: { type: 'string', description: 'The event\'s current title, from calendar.upcoming, for display' },
+      date: { type: 'string', description: 'YYYY-MM-DD, the event\'s current date, from calendar.upcoming, for display' },
+      startTime: { type: 'string', description: 'HH:MM, the event\'s current start time, from calendar.upcoming, for display' },
+      endTime: { type: 'string', description: 'HH:MM, the event\'s current end time, from calendar.upcoming, for display' },
+    },
+    required: ['eventId', 'summary', 'date', 'startTime', 'endTime'],
+  },
+};
+
 // ---------- propose_restriction tool ----------
 // Lets the user tell the chat about a temporary training constraint
 // ("no running this week", "no padel — knee recovery") ONCE and have
@@ -306,6 +389,47 @@ function normalizeProposedEvent(raw) {
   return {
     summary: typeof r.summary === 'string' ? r.summary.slice(0, 200) : '',
     description: typeof r.description === 'string' ? r.description.slice(0, 1000) : '',
+    date: typeof r.date === 'string' ? r.date.slice(0, 10) : '',
+    startTime: typeof r.startTime === 'string' ? r.startTime.slice(0, 5) : '',
+    endTime: typeof r.endTime === 'string' ? r.endTime.slice(0, 5) : '',
+  };
+}
+
+// Defensive normalization for propose_calendar_event_update — eventId
+// has NO fallback (unlike every string field elsewhere in this file,
+// which default to '' on a bad model response): an update with no
+// target id is meaningless and must never reach the client looking
+// like a valid proposal, so the handler below checks for an empty
+// eventId and drops the proposal entirely rather than showing a card
+// that can't actually apply to anything.
+function normalizeProposedEventUpdate(raw) {
+  const r = raw || {};
+  return {
+    eventId: typeof r.eventId === 'string' ? r.eventId.slice(0, 500) : '',
+    originalSummary: typeof r.originalSummary === 'string' ? r.originalSummary.slice(0, 200) : '',
+    originalDate: typeof r.originalDate === 'string' ? r.originalDate.slice(0, 10) : '',
+    originalStartTime: typeof r.originalStartTime === 'string' ? r.originalStartTime.slice(0, 5) : '',
+    originalEndTime: typeof r.originalEndTime === 'string' ? r.originalEndTime.slice(0, 5) : '',
+    // These four are only ever populated by the model when actually
+    // changing — '' here (not falling back to the original) so the
+    // client can tell "unchanged" apart from "explicitly set to the
+    // same value" and only sends the fields that actually changed.
+    summary: typeof r.summary === 'string' ? r.summary.slice(0, 200) : '',
+    date: typeof r.date === 'string' ? r.date.slice(0, 10) : '',
+    startTime: typeof r.startTime === 'string' ? r.startTime.slice(0, 5) : '',
+    endTime: typeof r.endTime === 'string' ? r.endTime.slice(0, 5) : '',
+  };
+}
+
+// Defensive normalization for propose_calendar_event_delete — same
+// no-fallback treatment for eventId as the update tool above, for the
+// same reason (a deletion with no target id must never reach the
+// client as an apparently-valid card).
+function normalizeProposedEventDelete(raw) {
+  const r = raw || {};
+  return {
+    eventId: typeof r.eventId === 'string' ? r.eventId.slice(0, 500) : '',
+    summary: typeof r.summary === 'string' ? r.summary.slice(0, 200) : '',
     date: typeof r.date === 'string' ? r.date.slice(0, 10) : '',
     startTime: typeof r.startTime === 'string' ? r.startTime.slice(0, 5) : '',
     endTime: typeof r.endTime === 'string' ? r.endTime.slice(0, 5) : '',
@@ -564,20 +688,40 @@ function buildStaticSystemPrompt() {
     'When you do call it, also say a short summary sentence of the plan in your normal reply text (the ' +
     'proposal itself is shown to the user as a card with its own Save button, so don\'t repeat every number ' +
     'in prose — just enough that the message reads fine on its own).\n\n' +
-    'CALENDAR: the user can also ask you to schedule something on their Google Calendar — they\'ll ' +
-    'describe what they want (e.g. "put a gym session on my calendar tomorrow evening") and may mention ' +
+    'CALENDAR: the user can also ask you to schedule, move, or cancel something on their Google Calendar — ' +
+    'they\'ll describe what they want (e.g. "put a gym session on my calendar tomorrow evening", "move my ' +
+    'walk to 4pm", "I have an errand at 3, adjust my plan", "cancel my 5pm call") and may mention ' +
     'constraints like preferred time of day. TODAY\'S DATA includes calendar.connected and ' +
-    'calendar.upcoming (their actual scheduled events for the next few days, each with title/start/end) ' +
-    'when Google Calendar is connected. ALWAYS check calendar.upcoming before proposing a time — never ' +
-    'propose something that overlaps an existing event; if the time they asked for conflicts, say so ' +
-    'and propose a nearby free slot instead of silently ignoring the conflict. If calendar.connected is ' +
+    'calendar.upcoming (their actual scheduled events for the next few days, each with id/title/start/end) ' +
+    'when Google Calendar is connected — this INCLUDES events "Plan my day" already created, since once ' +
+    'confirmed those are ordinary real calendar events, not a separate thing. If calendar.connected is ' +
     'false, tell them to connect Google Calendar on the main dashboard first rather than proposing ' +
-    'anything. Ask a brief clarifying question if the request is too vague to pick a specific day/time, ' +
-    'but don\'t ask unnecessary questions if there\'s already enough to work with — resolve relative ' +
-    'terms like "tomorrow" or "Friday" against TODAY\'S DATA\'s own "date" field, never guess today\'s ' +
-    'date. Only call propose_calendar_event once you have a concrete date and start/end time — never ' +
-    'call it speculatively. When you do call it, also say a short summary sentence in your normal reply ' +
-    'text (the proposal is shown as its own card with a Create button, so don\'t repeat every detail in ' +
+    'anything. Resolve relative terms like "tomorrow" or "Friday" against TODAY\'S DATA\'s own "date" ' +
+    'field, never guess today\'s date.\n' +
+    '- To schedule something NEW, call propose_calendar_event once you have a concrete date and start/end ' +
+    'time. ALWAYS check calendar.upcoming for conflicts first — never propose a time that overlaps an ' +
+    'existing event; if the time they asked for conflicts, say so and propose a nearby free slot instead ' +
+    'of silently ignoring the conflict.\n' +
+    '- To MOVE or RENAME an existing real event (e.g. "move my walk to 4pm"), call ' +
+    'propose_calendar_event_update with that event\'s real "id" from calendar.upcoming — never guess or ' +
+    'invent an id, and never target an event you can\'t actually find in calendar.upcoming (ask the user ' +
+    'to clarify instead). Also check the NEW time doesn\'t overlap a different existing event.\n' +
+    '- To CANCEL an existing real event (e.g. "cancel my 5pm call"), call propose_calendar_event_delete ' +
+    'the same way — real id from calendar.upcoming, never guessed.\n' +
+    '- "Adjust my day plan"-style requests (e.g. "I have an errand at 3pm, adjust my plan") are handled with ' +
+    'exactly these same three tools, not a separate mechanism: look at what\'s currently in ' +
+    'calendar.upcoming for today, and propose whichever combination of create/move/delete calls actually ' +
+    'accommodates the new request (e.g. move a conflicting block earlier, delete one that no longer fits, ' +
+    'add the new commitment). Call each one SEPARATELY, one tool call per concrete change — never bundle ' +
+    'several changes into one call, since each becomes its own confirmation card and the user needs to see ' +
+    'and approve every single change to their real calendar individually, not one vague "apply everything" ' +
+    'button.\n' +
+    'None of these three tools change, create, or delete anything by itself — every one only shows the ' +
+    'user a card with an explicit button, and nothing happens to their real calendar until they tap it. ' +
+    'Ask a brief clarifying question if a request is too vague to act on (which event, what new time), but ' +
+    'don\'t ask unnecessary questions if there\'s already enough to work with. When you do call any of ' +
+    'these three tools, also say a short summary sentence in your normal reply text for each one (the ' +
+    'proposal itself is shown as its own card with its own button, so don\'t repeat every detail in ' +
     'prose).\n\n' +
     'RESTRICTIONS: the user can tell you about a temporary training constraint — an injury, "no running ' +
     'this week", a padel tournament, anything that should make the OTHER training AI features (this ' +
@@ -695,7 +839,7 @@ export default async function handler(req, res) {
           max_tokens: 1024,
           system: systemBlocks,
           messages,
-          tools: [{ type: 'memory_20250818', name: 'memory' }, PROPOSE_OBJECTIVES_TOOL, PROPOSE_CALENDAR_EVENT_TOOL, PROPOSE_RESTRICTION_TOOL, PROPOSE_TODAY_SESSION_TOOL],
+          tools: [{ type: 'memory_20250818', name: 'memory' }, PROPOSE_OBJECTIVES_TOOL, PROPOSE_CALENDAR_EVENT_TOOL, PROPOSE_CALENDAR_EVENT_UPDATE_TOOL, PROPOSE_CALENDAR_EVENT_DELETE_TOOL, PROPOSE_RESTRICTION_TOOL, PROPOSE_TODAY_SESSION_TOOL],
         }),
       });
 
@@ -727,6 +871,8 @@ export default async function handler(req, res) {
       // another model turn once a proposal is found.
       let proposedObjectives = null;
       let proposedCalendarEvent = null;
+      let proposedCalendarEventUpdate = null;
+      let proposedCalendarEventDelete = null;
       let proposedRestriction = null;
       let proposedTodaySession = null;
       const toolResults = [];
@@ -746,6 +892,48 @@ export default async function handler(req, res) {
             type: 'tool_result',
             tool_use_id: toolUse.id,
             content: 'Proposal shown to the user in the chat UI for review. Not created automatically — only the user can create it.',
+          });
+          continue;
+        }
+        if (toolUse.name === 'propose_calendar_event_update') {
+          const normalized = normalizeProposedEventUpdate(toolUse.input);
+          if (!normalized.eventId) {
+            // No real target id — never show this as a valid card (see
+            // normalizeProposedEventUpdate's own comment). Tell the
+            // model so it can ask the user to clarify which event they
+            // mean instead of silently failing.
+            toolResults.push({
+              type: 'tool_result',
+              tool_use_id: toolUse.id,
+              content: 'No valid eventId was given — this must be copied verbatim from an entry in calendar.upcoming. Ask the user to clarify which event they mean, or check calendar.upcoming again for the right one.',
+              is_error: true,
+            });
+            continue;
+          }
+          proposedCalendarEventUpdate = normalized;
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: toolUse.id,
+            content: 'Proposal shown to the user in the chat UI for review. The real calendar event is NOT changed automatically — only the user can apply it.',
+          });
+          continue;
+        }
+        if (toolUse.name === 'propose_calendar_event_delete') {
+          const normalized = normalizeProposedEventDelete(toolUse.input);
+          if (!normalized.eventId) {
+            toolResults.push({
+              type: 'tool_result',
+              tool_use_id: toolUse.id,
+              content: 'No valid eventId was given — this must be copied verbatim from an entry in calendar.upcoming. Ask the user to clarify which event they mean, or check calendar.upcoming again for the right one.',
+              is_error: true,
+            });
+            continue;
+          }
+          proposedCalendarEventDelete = normalized;
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: toolUse.id,
+            content: 'Proposal shown to the user in the chat UI for review. The real calendar event is NOT deleted automatically — only the user can confirm the deletion.',
           });
           continue;
         }
@@ -777,11 +965,13 @@ export default async function handler(req, res) {
       }
       messages.push({ role: 'user', content: toolResults });
 
-      if (proposedObjectives || proposedCalendarEvent || proposedRestriction || proposedTodaySession) {
+      if (proposedObjectives || proposedCalendarEvent || proposedCalendarEventUpdate || proposedCalendarEventDelete || proposedRestriction || proposedTodaySession) {
         const textBlock = (data.content || []).find((b) => b.type === 'text');
         const responseBody = { reply: textBlock ? textBlock.text : '', history: messages };
         if (proposedObjectives) responseBody.proposedObjectives = proposedObjectives;
         if (proposedCalendarEvent) responseBody.proposedCalendarEvent = proposedCalendarEvent;
+        if (proposedCalendarEventUpdate) responseBody.proposedCalendarEventUpdate = proposedCalendarEventUpdate;
+        if (proposedCalendarEventDelete) responseBody.proposedCalendarEventDelete = proposedCalendarEventDelete;
         if (proposedRestriction) responseBody.proposedRestriction = proposedRestriction;
         if (proposedTodaySession) responseBody.proposedTodaySession = proposedTodaySession;
         return res.status(200).json(responseBody);

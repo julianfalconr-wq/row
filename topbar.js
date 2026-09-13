@@ -325,6 +325,17 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
   cursor: pointer;
 }
 .chat-plan-save-btn:disabled { opacity: 0.5; cursor: default; }
+/* Destructive variant (delete-event proposal only) — same layout as
+   .chat-plan-save-btn, distinct color so a real deletion doesn't look
+   identical to every other "confirm" action. #E5484D matches the mic
+   button's existing "is-listening"/recording red above, the one other
+   place this file already uses a danger accent. */
+.chat-plan-danger-btn {
+  flex: 1; padding: 10px; border-radius: 10px; border: none;
+  background: #E5484D; color: #FAFAFA; font-family: inherit; font-size: 12.5px; font-weight: 700;
+  cursor: pointer;
+}
+.chat-plan-danger-btn:disabled { opacity: 0.5; cursor: default; }
 .chat-plan-dismiss-btn {
   padding: 10px 14px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.10);
   background: transparent; color: #A5A3A0; font-family: inherit; font-size: 12.5px; font-weight: 600;
@@ -993,6 +1004,11 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
         const qs = new URLSearchParams({ timeMin: timeMin.toISOString(), timeMax: timeMax.toISOString() }).toString();
         const data = await calendarFetch(qs, t);
         calendar.upcoming = (Array.isArray(data.items) ? data.items : []).slice(0, 20).map((ev) => ({
+          // id is the real Google Calendar event id — added so the chat's
+          // propose_calendar_event_update/propose_calendar_event_delete
+          // tools (api/chat.js) have something real to target. Every
+          // Calendar API event always carries one; never guessed/derived.
+          id: ev.id || null,
           title: ev.summary || '(untitled)',
           start: (ev.start && (ev.start.dateTime || ev.start.date)) || null,
           end: (ev.end && (ev.end.dateTime || ev.end.date)) || null,
@@ -1411,6 +1427,220 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
       container.appendChild(card);
     }
 
+    // ---------- calendar event UPDATE proposal (move/edit a REAL
+    // existing event — see api/chat.js's propose_calendar_event_update
+    // tool) ----------
+    // Same explicit-confirmation pattern as renderCalendarEventCard
+    // above, and duplicates the same small Google token load/refresh
+    // helpers rather than sharing them (this project's established
+    // per-scope-duplication convention — see that function's own
+    // comment). Real destructive/modifying calendar access (unlike
+    // create), so there is still no auto-apply path here at all: the
+    // event is only ever touched after the user taps "Update event".
+    function renderCalendarEventUpdateCard(container, update) {
+      const card = document.createElement('div');
+      card.className = 'chat-plan-card';
+
+      const finalDate = update.date || update.originalDate;
+      const finalStart = update.startTime || update.originalStartTime;
+      const finalEnd = update.endTime || update.originalEndTime;
+      const finalSummary = update.summary || update.originalSummary;
+
+      card.appendChild(planRow('Event', finalSummary, finalSummary !== update.originalSummary ? ('was: ' + update.originalSummary) : ''));
+      card.appendChild(planRow('Date', finalDate, finalDate !== update.originalDate ? ('was: ' + update.originalDate) : ''));
+      card.appendChild(planRow(
+        'Time',
+        finalStart + '–' + finalEnd,
+        (finalStart !== update.originalStartTime || finalEnd !== update.originalEndTime)
+          ? ('was: ' + update.originalStartTime + '–' + update.originalEndTime)
+          : ''
+      ));
+
+      const actions = document.createElement('div');
+      actions.className = 'chat-plan-actions';
+      const applyBtn = document.createElement('button');
+      applyBtn.type = 'button'; applyBtn.className = 'chat-plan-save-btn';
+      applyBtn.textContent = 'Update event';
+      const dismissBtn = document.createElement('button');
+      dismissBtn.type = 'button'; dismissBtn.className = 'chat-plan-dismiss-btn';
+      dismissBtn.textContent = 'Not now';
+      actions.appendChild(applyBtn);
+      actions.appendChild(dismissBtn);
+      card.appendChild(actions);
+
+      function showStatus(text, isSaved) {
+        actions.remove();
+        const status = document.createElement('div');
+        status.className = 'chat-plan-status ' + (isSaved ? 'is-saved' : 'is-dismissed');
+        status.textContent = text;
+        card.appendChild(status);
+      }
+
+      const GOOGLE_KEY = 'google_tokens_v1';
+      const GOOGLE_COOLDOWN_KEY = 'google_refresh_cooldown_until';
+      const GOOGLE_COOLDOWN_MS = 20 * 60 * 1000;
+      function loadGoogleTokens() { try { return JSON.parse(localStorage.getItem(GOOGLE_KEY)); } catch (e) { return null; } }
+      function saveGoogleTokens(t) { try { localStorage.setItem(GOOGLE_KEY, JSON.stringify(t)); } catch (e) {} }
+      function isGoogleCoolingDown() { return Date.now() < (Number(localStorage.getItem(GOOGLE_COOLDOWN_KEY)) || 0); }
+      function startGoogleCooldown() { try { localStorage.setItem(GOOGLE_COOLDOWN_KEY, String(Date.now() + GOOGLE_COOLDOWN_MS)); } catch (e) {} }
+      function clearGoogleCooldown() { try { localStorage.removeItem(GOOGLE_COOLDOWN_KEY); } catch (e) {} }
+
+      async function refreshGoogle(t) {
+        if (!t.refresh) return null;
+        if (isGoogleCoolingDown()) return null;
+        try {
+          const r = await fetch('/api/google-callback?action=refresh', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ refresh_token: t.refresh }),
+          });
+          const j = await r.json();
+          if (j.access_token) {
+            const next = { access: j.access_token, refresh: j.refresh_token || t.refresh, expires: Date.now() + (j.expires_in || 3500) * 1000 };
+            saveGoogleTokens(next);
+            clearGoogleCooldown();
+            return next;
+          }
+        } catch (e) {}
+        startGoogleCooldown();
+        return null;
+      }
+
+      // Always sends a COMPLETE start/end pair (never a lone dateTime)
+      // whenever either changed — Google's PATCH treats start/end as
+      // whole nested objects, not deep-merged field-by-field, so a
+      // partial {dateTime} with the other end left off would silently
+      // corrupt the event's other boundary rather than actually moving it.
+      async function doUpdate(tok) {
+        const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        const eventBody = {};
+        if (update.summary && update.summary !== update.originalSummary) eventBody.summary = update.summary;
+        if (finalDate !== update.originalDate || finalStart !== update.originalStartTime || finalEnd !== update.originalEndTime) {
+          eventBody.start = { dateTime: finalDate + 'T' + finalStart + ':00', timeZone: tz };
+          eventBody.end = { dateTime: finalDate + 'T' + finalEnd + ':00', timeZone: tz };
+        }
+        const r = await fetch('/api/google-callback?action=update&eventId=' + encodeURIComponent(update.eventId), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok.access },
+          body: JSON.stringify(eventBody),
+        });
+        if (r.status === 401) {
+          const n = await refreshGoogle(tok);
+          if (n) return doUpdate(n);
+          throw new Error('unauthorized');
+        }
+        if (!r.ok) throw new Error('Calendar ' + r.status);
+        return r.json();
+      }
+
+      applyBtn.addEventListener('click', async () => {
+        const t = loadGoogleTokens();
+        if (!t || !t.access) { showStatus('Connect Google Calendar on the main dashboard first.', false); return; }
+        applyBtn.disabled = true;
+        try {
+          await doUpdate(t);
+          showStatus('Updated ✓ — check your calendar', true);
+        } catch (e) {
+          applyBtn.disabled = false;
+          showStatus('Could not update event: ' + (e.message || String(e)), false);
+        }
+      });
+      dismissBtn.addEventListener('click', () => showStatus('Not changed', false));
+
+      container.appendChild(card);
+    }
+
+    // ---------- calendar event DELETE proposal (cancel a REAL existing
+    // event — see api/chat.js's propose_calendar_event_delete tool)
+    // ----------
+    // Same pattern as the update card above, with a visually distinct
+    // danger-styled confirm button (.chat-plan-danger-btn) since this is
+    // the one card type whose confirmation is irreversible.
+    function renderCalendarEventDeleteCard(container, del) {
+      const card = document.createElement('div');
+      card.className = 'chat-plan-card';
+
+      card.appendChild(planRow('Delete event', del.summary, del.date));
+      card.appendChild(planRow('Time', del.startTime + '–' + del.endTime, ''));
+
+      const actions = document.createElement('div');
+      actions.className = 'chat-plan-actions';
+      const deleteBtn = document.createElement('button');
+      deleteBtn.type = 'button'; deleteBtn.className = 'chat-plan-danger-btn';
+      deleteBtn.textContent = 'Delete event';
+      const dismissBtn = document.createElement('button');
+      dismissBtn.type = 'button'; dismissBtn.className = 'chat-plan-dismiss-btn';
+      dismissBtn.textContent = 'Keep it';
+      actions.appendChild(deleteBtn);
+      actions.appendChild(dismissBtn);
+      card.appendChild(actions);
+
+      function showStatus(text, isSaved) {
+        actions.remove();
+        const status = document.createElement('div');
+        status.className = 'chat-plan-status ' + (isSaved ? 'is-saved' : 'is-dismissed');
+        status.textContent = text;
+        card.appendChild(status);
+      }
+
+      const GOOGLE_KEY = 'google_tokens_v1';
+      const GOOGLE_COOLDOWN_KEY = 'google_refresh_cooldown_until';
+      const GOOGLE_COOLDOWN_MS = 20 * 60 * 1000;
+      function loadGoogleTokens() { try { return JSON.parse(localStorage.getItem(GOOGLE_KEY)); } catch (e) { return null; } }
+      function saveGoogleTokens(t) { try { localStorage.setItem(GOOGLE_KEY, JSON.stringify(t)); } catch (e) {} }
+      function isGoogleCoolingDown() { return Date.now() < (Number(localStorage.getItem(GOOGLE_COOLDOWN_KEY)) || 0); }
+      function startGoogleCooldown() { try { localStorage.setItem(GOOGLE_COOLDOWN_KEY, String(Date.now() + GOOGLE_COOLDOWN_MS)); } catch (e) {} }
+      function clearGoogleCooldown() { try { localStorage.removeItem(GOOGLE_COOLDOWN_KEY); } catch (e) {} }
+
+      async function refreshGoogle(t) {
+        if (!t.refresh) return null;
+        if (isGoogleCoolingDown()) return null;
+        try {
+          const r = await fetch('/api/google-callback?action=refresh', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ refresh_token: t.refresh }),
+          });
+          const j = await r.json();
+          if (j.access_token) {
+            const next = { access: j.access_token, refresh: j.refresh_token || t.refresh, expires: Date.now() + (j.expires_in || 3500) * 1000 };
+            saveGoogleTokens(next);
+            clearGoogleCooldown();
+            return next;
+          }
+        } catch (e) {}
+        startGoogleCooldown();
+        return null;
+      }
+
+      async function doDelete(tok) {
+        const r = await fetch('/api/google-callback?action=delete&eventId=' + encodeURIComponent(del.eventId), {
+          method: 'POST',
+          headers: { Authorization: 'Bearer ' + tok.access },
+        });
+        if (r.status === 401) {
+          const n = await refreshGoogle(tok);
+          if (n) return doDelete(n);
+          throw new Error('unauthorized');
+        }
+        if (!r.ok) throw new Error('Calendar ' + r.status);
+      }
+
+      deleteBtn.addEventListener('click', async () => {
+        const t = loadGoogleTokens();
+        if (!t || !t.access) { showStatus('Connect Google Calendar on the main dashboard first.', false); return; }
+        deleteBtn.disabled = true;
+        try {
+          await doDelete(t);
+          showStatus('Deleted ✓', true);
+        } catch (e) {
+          deleteBtn.disabled = false;
+          showStatus('Could not delete event: ' + (e.message || String(e)), false);
+        }
+      });
+      dismissBtn.addEventListener('click', () => showStatus('Kept — not deleted', false));
+
+      container.appendChild(card);
+    }
+
     // ---------- restriction proposal (see api/chat.js's
     // propose_restriction tool) ----------
     // Same explicit-confirmation pattern as the two cards above. Saving
@@ -1531,7 +1761,7 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
       container.appendChild(card);
     }
 
-    function addBubble(role, text, proposedObjectives, proposedCalendarEvent, proposedRestriction, proposedTodaySession) {
+    function addBubble(role, text, proposedObjectives, proposedCalendarEvent, proposedRestriction, proposedTodaySession, proposedCalendarEventUpdate, proposedCalendarEventDelete) {
       emptyEl.style.display = 'none';
       const el = document.createElement('div');
       el.className = 'chat-bubble ' + role;
@@ -1540,6 +1770,8 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
       if (proposedCalendarEvent) renderCalendarEventCard(el, proposedCalendarEvent);
       if (proposedRestriction) renderRestrictionCard(el, proposedRestriction);
       if (proposedTodaySession) renderTodaySessionCard(el, proposedTodaySession);
+      if (proposedCalendarEventUpdate) renderCalendarEventUpdateCard(el, proposedCalendarEventUpdate);
+      if (proposedCalendarEventDelete) renderCalendarEventDeleteCard(el, proposedCalendarEventDelete);
       messagesEl.appendChild(el);
       messagesEl.scrollTop = messagesEl.scrollHeight;
       return el;
@@ -1845,8 +2077,13 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
         saveChatHistory(chatHistory);
         const fallbackText = json.proposedObjectives
           ? "Here's what I'm proposing for this week:"
-          : (json.proposedCalendarEvent ? "Here's the event I'm proposing:" : (json.proposedRestriction ? "Here's the restriction I'm proposing:" : (json.proposedTodaySession ? "Here's the replacement I'm proposing for today's session:" : '(no reply)')));
-        addBubble('assistant', json.reply || fallbackText, json.proposedObjectives || null, json.proposedCalendarEvent || null, json.proposedRestriction || null, json.proposedTodaySession || null);
+          : (json.proposedCalendarEvent ? "Here's the event I'm proposing:"
+          : (json.proposedRestriction ? "Here's the restriction I'm proposing:"
+          : (json.proposedTodaySession ? "Here's the replacement I'm proposing for today's session:"
+          : (json.proposedCalendarEventUpdate ? "Here's the change I'm proposing:"
+          : (json.proposedCalendarEventDelete ? "Here's what I'm proposing to delete:"
+          : '(no reply)')))));
+        addBubble('assistant', json.reply || fallbackText, json.proposedObjectives || null, json.proposedCalendarEvent || null, json.proposedRestriction || null, json.proposedTodaySession || null, json.proposedCalendarEventUpdate || null, json.proposedCalendarEventDelete || null);
         archiveToServer(chatTodayKey(), chatHistory); // best-effort, doesn't block the UI
       } catch (e) {
         typingEl.remove();

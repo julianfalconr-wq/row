@@ -67,6 +67,26 @@
 //   {dateTime, timeZone} or {date} exactly as the client already
 //   builds them (see main.html), passed straight through.
 //   Proxies to POST .../calendars/primary/events.
+//
+// MODE 5 — POST /api/google-callback?action=update&eventId=...
+//   Header: Authorization: Bearer <access_token>
+//   Body: { summary?, description?, start?, end? } — any subset;
+//   proxies to PATCH .../calendars/primary/events/{eventId}, so
+//   omitted fields are left untouched by Google (confirmed against
+//   Google's own Events.patch docs — this is a real partial update,
+//   not a full replace). start/end, when given, MUST each be a
+//   complete {dateTime, timeZone} object — Calendar does not deep-merge
+//   a partial start/end across a PATCH, so the CALLER (topbar.js's
+//   propose_calendar_event_update card) is responsible for always
+//   sending both boundaries together whenever either one moves, never
+//   a lone dateTime with the other boundary implied.
+//
+// MODE 6 — POST /api/google-callback?action=delete&eventId=...
+//   Header: Authorization: Bearer <access_token>
+//   No body. Proxies to DELETE .../calendars/primary/events/{eventId}.
+//   Google returns an empty body on success (confirmed against its own
+//   Events.delete docs) — this proxy synthesizes {ok:true} in that case
+//   rather than trying to relay a non-existent JSON body.
 // =============================================================
 
 const GOOGLE_REDIRECT_URI = 'https://row-phi-six.vercel.app/api/google-callback';
@@ -259,6 +279,69 @@ async function handleCreateEvent(req, res) {
   }
 }
 
+// ---------- MODE 5: update event (proxy) ----------
+async function handleUpdateEvent(req, res) {
+  const auth = req.headers.authorization || '';
+  if (!auth.startsWith('Bearer ')) return res.status(401).json({ error: 'missing bearer token' });
+
+  const eventId = req.query && req.query.eventId;
+  if (!eventId) return res.status(400).json({ error: 'eventId query param required' });
+
+  let body = req.body;
+  if (typeof body === 'string') { try { body = JSON.parse(body); } catch { body = {}; } }
+  const eventBody = {};
+  if (body && body.summary) eventBody.summary = body.summary;
+  if (body && body.description) eventBody.description = body.description;
+  if (body && body.start) eventBody.start = body.start;
+  if (body && body.end) eventBody.end = body.end;
+  if (!Object.keys(eventBody).length) {
+    return res.status(400).json({ error: 'expected at least one of { summary, description, start, end }' });
+  }
+
+  try {
+    // PATCH, not PUT — confirmed against Google's Events.patch docs: a
+    // partial update that leaves every field NOT included here
+    // untouched, unlike PUT's full-replace semantics.
+    const r = await fetch(CALENDAR_EVENTS_URL + '/' + encodeURIComponent(eventId), {
+      method: 'PATCH',
+      headers: { Authorization: auth, 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify(eventBody),
+    });
+    const text = await r.text();
+    res.status(r.status).setHeader('Content-Type', 'application/json');
+    return res.send(text);
+  } catch (e) {
+    return res.status(500).json({ error: 'proxy fetch failed: ' + (e.message || String(e)) });
+  }
+}
+
+// ---------- MODE 6: delete event (proxy) ----------
+async function handleDeleteEvent(req, res) {
+  const auth = req.headers.authorization || '';
+  if (!auth.startsWith('Bearer ')) return res.status(401).json({ error: 'missing bearer token' });
+
+  const eventId = req.query && req.query.eventId;
+  if (!eventId) return res.status(400).json({ error: 'eventId query param required' });
+
+  try {
+    const r = await fetch(CALENDAR_EVENTS_URL + '/' + encodeURIComponent(eventId), {
+      method: 'DELETE',
+      headers: { Authorization: auth, Accept: 'application/json' },
+    });
+    // Google returns an empty body on a successful delete (confirmed
+    // against its own docs) — unlike every other mode here, there's no
+    // JSON to relay, so synthesize a small body the client can check
+    // .ok against instead of trying to res.send() an empty string as
+    // if it were meaningful JSON.
+    if (r.ok) return res.status(200).json({ ok: true });
+    const text = await r.text();
+    res.status(r.status).setHeader('Content-Type', 'application/json');
+    return res.send(text);
+  } catch (e) {
+    return res.status(500).json({ error: 'proxy fetch failed: ' + (e.message || String(e)) });
+  }
+}
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -275,6 +358,8 @@ export default async function handler(req, res) {
   if (req.method === 'POST' && action === 'refresh') return handleRefresh(req, res);
   if (req.method === 'GET' && action === 'list') return handleListEvents(req, res);
   if (req.method === 'POST' && action === 'create') return handleCreateEvent(req, res);
+  if (req.method === 'POST' && action === 'update') return handleUpdateEvent(req, res);
+  if (req.method === 'POST' && action === 'delete') return handleDeleteEvent(req, res);
 
   return res.status(405).json({ error: 'method not allowed' });
 }
