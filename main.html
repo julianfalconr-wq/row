@@ -2300,6 +2300,22 @@ document.addEventListener('DOMContentLoaded', function () {
       return;
     }
     const latest = dates[0];
+    // Same staleness check as every other auto-sourced category in this
+    // app (see health.html's renderForDate() — "a day with no synced
+    // rows is not the same as caught-up-to-today"): listAvailableDates()
+    // just returns whatever the most RECENT sync happens to be, with no
+    // idea whether that's actually today. Comparing it against the same
+    // app-wide DayLib.effectiveDateKey() every other section uses (not
+    // a bare local date) keeps this consistent with a non-default
+    // day-end time too. Bail out here with the same "No data synced
+    // yet" wording this card already uses for the no-rows-at-all case,
+    // rather than silently presenting a days-old score as today's.
+    if (latest !== DayLib.effectiveDateKey()) {
+      percentEl.textContent = '—';
+      subEl.textContent = 'No data synced yet';
+      setRing(0);
+      return;
+    }
     const targets = window.CronoLib.loadTargets();
     const totals = window.CronoLib.sumNutrientsForDate(result.rows, result.headers, latest, targets);
     totals.supplements = window.CronoLib.getStackCompletionForDate(latest);
