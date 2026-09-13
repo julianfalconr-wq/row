@@ -201,6 +201,8 @@ body::after {
 .entry-btn.active { background: linear-gradient(180deg, var(--btn-primary-a), var(--btn-primary-b)); color: var(--btn-primary-text); border-color: transparent; }
 .entry-btn.na-btn { color: var(--text-tertiary); font-weight: 600; }
 .entry-btn.na-btn.active { background: var(--text-tertiary); color: var(--surface-2); }
+.entry-btn.entry-binary-x, .entry-btn.entry-binary-check { min-width: 40px; font-size: 15px; }
+.entry-btn.entry-binary-x.active { background: var(--danger); color: #fff; }
 .entry-num-input {
   width: 52px; height: 30px; text-align: center; border-radius: 8px;
   border: 1px solid var(--line); background: var(--inset-bg); color: var(--text-primary);
@@ -825,11 +827,44 @@ document.addEventListener('DOMContentLoaded', function () {
     if (!na && existing && existing.value != null) {
       v = existing.value === true ? 1 : existing.value === false ? 0 : existing.value;
     }
+    // dailyGoal:1 with no advanced config (zeroTolerance/weeklyCap keep
+    // the numeric stepper — the task explicitly scopes this to plain
+    // binary-equivalent habits only) reads as a simple yes/no, so a
+    // checkmark/X toggle fits better than "how many times". A second
+    // tap of the checkmark (logged it more than once) escalates the
+    // row to the full stepper below — see switchRowToStepper() — and
+    // an existing value of 2+ (already escalated in a previous save)
+    // renders straight into stepper mode on load, same as that.
+    const numericV = v === '' ? null : Number(v);
+    const isBinaryGoal = Number(h.dailyGoal) === 1 && !h.advanced;
+    if (isBinaryGoal && !(numericV != null && numericV >= 2)) {
+      const xActive = numericV === 0;
+      const checkActive = numericV === 1;
+      return '<div class="entry-habit-controls" data-habit="' + h.id + '" data-type="binary">' +
+        '<input type="number" class="entry-num-input" style="display:none" value="' + escapeHtml(String(v)) + '">' +
+        '<button type="button" class="entry-btn entry-binary-x' + (xActive ? ' active' : '') + '" data-v="x"' + (na ? ' disabled' : '') + '>✕</button>' +
+        '<button type="button" class="entry-btn entry-binary-check' + (checkActive ? ' active' : '') + '" data-v="check"' + (na ? ' disabled' : '') + '>✓</button>' +
+        '<button type="button" class="entry-btn na-btn' + (na ? ' active' : '') + '" data-v="na">N/A</button></div>';
+    }
     return '<div class="entry-habit-controls" data-habit="' + h.id + '" data-type="numeric">' +
       '<button type="button" class="entry-btn num-btn" data-v="dec">−</button>' +
       '<input type="number" class="entry-num-input" inputmode="decimal" min="0" placeholder="0" value="' + escapeHtml(String(v)) + '"' + (na ? ' disabled' : '') + '>' +
       '<button type="button" class="entry-btn num-btn" data-v="inc">+</button>' +
       '<button type="button" class="entry-btn na-btn' + (na ? ' active' : '') + '" data-v="na">N/A</button></div>';
+  }
+  // Replaces a binary (X/check) row's controls with the standard −/input/+
+  // stepper, seeded at `newValue` — triggered when the checkmark is
+  // tapped a second time ("I did it again"). The click handler below is
+  // bound to the ROW via delegation, so replacing innerHTML here doesn't
+  // lose it; no re-binding needed.
+  function switchRowToStepper(row, newValue) {
+    const naActive = row.querySelector('.na-btn').classList.contains('active');
+    row.dataset.type = 'numeric';
+    row.innerHTML =
+      '<button type="button" class="entry-btn num-btn" data-v="dec">−</button>' +
+      '<input type="number" class="entry-num-input" inputmode="decimal" min="0" placeholder="0" value="' + newValue + '"' + (naActive ? ' disabled' : '') + '>' +
+      '<button type="button" class="entry-btn num-btn" data-v="inc">+</button>' +
+      '<button type="button" class="entry-btn na-btn' + (naActive ? ' active' : '') + '" data-v="na">N/A</button>';
   }
   function renderNightlyEntry() {
     const existingEntry = entriesByDate[viewDateKey] || {};
@@ -858,6 +893,27 @@ document.addEventListener('DOMContentLoaded', function () {
         }
         naBtn.classList.remove('active');
         input.disabled = false;
+
+        if (btn.dataset.v === 'x') {
+          input.value = '0';
+          row.querySelectorAll('.entry-binary-x, .entry-binary-check').forEach((b) => b.classList.remove('active'));
+          btn.classList.add('active');
+          return;
+        }
+        if (btn.dataset.v === 'check') {
+          if (btn.classList.contains('active')) {
+            // Second tap — "I did it again" — escalate to the full
+            // stepper, continuing to increment rather than resetting,
+            // so the user can go beyond the original goal of 1.
+            switchRowToStepper(row, (Number(input.value) || 1) + 1);
+            return;
+          }
+          input.value = '1';
+          row.querySelectorAll('.entry-binary-x, .entry-binary-check').forEach((b) => b.classList.remove('active'));
+          btn.classList.add('active');
+          return;
+        }
+
         const cur = input.value === '' ? 0 : (Number(input.value) || 0);
         if (btn.dataset.v === 'inc') input.value = String(cur + 1);
         else if (btn.dataset.v === 'dec') input.value = String(Math.max(0, cur - 1));
