@@ -1761,17 +1761,24 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
       container.appendChild(card);
     }
 
-    function addBubble(role, text, proposedObjectives, proposedCalendarEvent, proposedRestriction, proposedTodaySession, proposedCalendarEventUpdate, proposedCalendarEventDelete) {
+    // proposedCalendarEvents/Updates/Deletes are ARRAYS — a complex
+    // request (e.g. "fit my run in before dinner, move whatever you
+    // need to") can produce several proposals of the same type in one
+    // reply, each rendered as its OWN separate confirmation card (never
+    // merged into one), so the user sees and approves every real-
+    // calendar change individually. See api/chat.js's handler comment
+    // on why this can't just be a single object per type.
+    function addBubble(role, text, proposedObjectives, proposedCalendarEvents, proposedRestriction, proposedTodaySession, proposedCalendarEventUpdates, proposedCalendarEventDeletes) {
       emptyEl.style.display = 'none';
       const el = document.createElement('div');
       el.className = 'chat-bubble ' + role;
       renderBubbleContent(el, text);
       if (proposedObjectives) renderPlanCard(el, proposedObjectives);
-      if (proposedCalendarEvent) renderCalendarEventCard(el, proposedCalendarEvent);
+      (proposedCalendarEvents || []).forEach((ev) => renderCalendarEventCard(el, ev));
       if (proposedRestriction) renderRestrictionCard(el, proposedRestriction);
       if (proposedTodaySession) renderTodaySessionCard(el, proposedTodaySession);
-      if (proposedCalendarEventUpdate) renderCalendarEventUpdateCard(el, proposedCalendarEventUpdate);
-      if (proposedCalendarEventDelete) renderCalendarEventDeleteCard(el, proposedCalendarEventDelete);
+      (proposedCalendarEventUpdates || []).forEach((u) => renderCalendarEventUpdateCard(el, u));
+      (proposedCalendarEventDeletes || []).forEach((d) => renderCalendarEventDeleteCard(el, d));
       messagesEl.appendChild(el);
       messagesEl.scrollTop = messagesEl.scrollHeight;
       return el;
@@ -2075,15 +2082,18 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
 
         chatHistory = Array.isArray(json.history) ? json.history : chatHistory;
         saveChatHistory(chatHistory);
+        const events = Array.isArray(json.proposedCalendarEvents) ? json.proposedCalendarEvents : [];
+        const updates = Array.isArray(json.proposedCalendarEventUpdates) ? json.proposedCalendarEventUpdates : [];
+        const deletes = Array.isArray(json.proposedCalendarEventDeletes) ? json.proposedCalendarEventDeletes : [];
         const fallbackText = json.proposedObjectives
           ? "Here's what I'm proposing for this week:"
-          : (json.proposedCalendarEvent ? "Here's the event I'm proposing:"
+          : (events.length ? (events.length > 1 ? "Here are the events I'm proposing:" : "Here's the event I'm proposing:")
           : (json.proposedRestriction ? "Here's the restriction I'm proposing:"
           : (json.proposedTodaySession ? "Here's the replacement I'm proposing for today's session:"
-          : (json.proposedCalendarEventUpdate ? "Here's the change I'm proposing:"
-          : (json.proposedCalendarEventDelete ? "Here's what I'm proposing to delete:"
+          : (updates.length ? (updates.length > 1 ? "Here are the changes I'm proposing:" : "Here's the change I'm proposing:")
+          : (deletes.length ? (deletes.length > 1 ? "Here are the events I'm proposing to delete:" : "Here's what I'm proposing to delete:")
           : '(no reply)')))));
-        addBubble('assistant', json.reply || fallbackText, json.proposedObjectives || null, json.proposedCalendarEvent || null, json.proposedRestriction || null, json.proposedTodaySession || null, json.proposedCalendarEventUpdate || null, json.proposedCalendarEventDelete || null);
+        addBubble('assistant', json.reply || fallbackText, json.proposedObjectives || null, events, json.proposedRestriction || null, json.proposedTodaySession || null, updates, deletes);
         archiveToServer(chatTodayKey(), chatHistory); // best-effort, doesn't block the UI
       } catch (e) {
         typingEl.remove();

@@ -913,9 +913,23 @@ export default async function handler(req, res) {
       // we answer the acknowledgment ourselves instead of looping back for
       // another model turn once a proposal is found.
       let proposedObjectives = null;
-      let proposedCalendarEvent = null;
-      let proposedCalendarEventUpdate = null;
-      let proposedCalendarEventDelete = null;
+      // Arrays, not single objects — a complex request (e.g. "fit my
+      // interval run before dinner, move/remove whatever you need to")
+      // can legitimately need several of the SAME proposal type in one
+      // turn (e.g. two separate propose_calendar_event_update calls to
+      // move two different events out of the way). Confirmed live: the
+      // model correctly emitted multiple tool_use blocks of the same
+      // name in one response; a single overwritten variable here would
+      // silently keep only the last one and drop the rest, defeating
+      // the "each change is its own confirmation" requirement these
+      // three tools were built for. propose_training_objectives/
+      // propose_restriction/propose_today_session stay singular — there
+      // is only ever one coherent weekly plan, restriction, or today's-
+      // session override to propose at a time, unlike an open-ended set
+      // of calendar edits.
+      const proposedCalendarEvents = [];
+      const proposedCalendarEventUpdates = [];
+      const proposedCalendarEventDeletes = [];
       let proposedRestriction = null;
       let proposedTodaySession = null;
       const toolResults = [];
@@ -930,7 +944,7 @@ export default async function handler(req, res) {
           continue;
         }
         if (toolUse.name === 'propose_calendar_event') {
-          proposedCalendarEvent = normalizeProposedEvent(toolUse.input);
+          proposedCalendarEvents.push(normalizeProposedEvent(toolUse.input));
           toolResults.push({
             type: 'tool_result',
             tool_use_id: toolUse.id,
@@ -953,7 +967,7 @@ export default async function handler(req, res) {
             });
             continue;
           }
-          proposedCalendarEventUpdate = normalized;
+          proposedCalendarEventUpdates.push(normalized);
           toolResults.push({
             type: 'tool_result',
             tool_use_id: toolUse.id,
@@ -972,7 +986,7 @@ export default async function handler(req, res) {
             });
             continue;
           }
-          proposedCalendarEventDelete = normalized;
+          proposedCalendarEventDeletes.push(normalized);
           toolResults.push({
             type: 'tool_result',
             tool_use_id: toolUse.id,
@@ -1008,13 +1022,13 @@ export default async function handler(req, res) {
       }
       messages.push({ role: 'user', content: toolResults });
 
-      if (proposedObjectives || proposedCalendarEvent || proposedCalendarEventUpdate || proposedCalendarEventDelete || proposedRestriction || proposedTodaySession) {
+      if (proposedObjectives || proposedCalendarEvents.length || proposedCalendarEventUpdates.length || proposedCalendarEventDeletes.length || proposedRestriction || proposedTodaySession) {
         const textBlock = (data.content || []).find((b) => b.type === 'text');
         const responseBody = { reply: textBlock ? textBlock.text : '', history: messages };
         if (proposedObjectives) responseBody.proposedObjectives = proposedObjectives;
-        if (proposedCalendarEvent) responseBody.proposedCalendarEvent = proposedCalendarEvent;
-        if (proposedCalendarEventUpdate) responseBody.proposedCalendarEventUpdate = proposedCalendarEventUpdate;
-        if (proposedCalendarEventDelete) responseBody.proposedCalendarEventDelete = proposedCalendarEventDelete;
+        if (proposedCalendarEvents.length) responseBody.proposedCalendarEvents = proposedCalendarEvents;
+        if (proposedCalendarEventUpdates.length) responseBody.proposedCalendarEventUpdates = proposedCalendarEventUpdates;
+        if (proposedCalendarEventDeletes.length) responseBody.proposedCalendarEventDeletes = proposedCalendarEventDeletes;
         if (proposedRestriction) responseBody.proposedRestriction = proposedRestriction;
         if (proposedTodaySession) responseBody.proposedTodaySession = proposedTodaySession;
         return res.status(200).json(responseBody);
