@@ -91,6 +91,16 @@ html, body {
   -moz-osx-font-smoothing: grayscale;
 }
 body { min-height: 100vh; position: relative; overflow-x: hidden; }
+/* iOS Safari auto-zooms on focus for any input/textarea/select under
+   16px font-size, and never zooms back out on blur since this page's
+   viewport meta tag has no maximum-scale/user-scalable restriction.
+   Several of this file's own inputs are well under that threshold
+   (e.g. .crono-metric-row input at 12px, .stack-input at 13px).
+   !important reliably beats every existing per-component rule, none
+   of which use !important themselves. */
+@media (max-width: 480px) {
+  input, textarea, select { font-size: 16px !important; }
+}
 
 body::before {
   content: ''; position: fixed; inset: 0;

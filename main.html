@@ -97,6 +97,21 @@ body {
   overflow-x: hidden;
   padding: max(28px, env(safe-area-inset-top)) 20px 60px;
 }
+/* iOS Safari auto-zooms the whole page when a text input/textarea/
+   select with a computed font-size under 16px receives focus, and —
+   since this page's own viewport meta tag deliberately has no
+   maximum-scale/user-scalable restriction (disabling zoom app-wide is
+   an accessibility anti-pattern) — never zooms back out on blur,
+   leaving the page stuck zoomed in. Several of this file's own input
+   rules are well under that threshold (e.g. .cal-add-form input at
+   13px). Forcing every text-entry control to 16px+ at mobile widths
+   removes the trigger entirely, rather than disabling zoom itself.
+   !important because this needs to reliably beat every existing
+   per-component input rule regardless of its own specificity — none
+   of them use !important themselves, so this always wins. */
+@media (max-width: 480px) {
+  input, textarea, select { font-size: 16px !important; }
+}
 body::before {
   content: '';
   position: fixed; inset: 0;
@@ -536,6 +551,7 @@ body::after {
 .cal-event-nested-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
 .cal-event-nested-chip {
   display: flex; align-items: baseline; gap: 8px;
+  flex-wrap: wrap;
   padding: 6px 10px;
   background: rgba(255, 255, 255, 0.07);
   border-radius: 8px;
@@ -545,7 +561,23 @@ body::after {
   font-family: var(--font-mono); font-size: 10px; color: var(--text-tertiary);
   white-space: nowrap; flex-shrink: 0;
 }
-.cal-event-nested-title { font-size: 11.5px; color: var(--text-secondary); font-weight: 600; word-break: break-word; }
+/* flex-shrink:1 (the default) plus word-break:break-word is a trap in
+   WebKit: with no flex-wrap, a fixed-width sibling (.cal-event-nested-
+   time, flex-shrink:0) forces ALL the squeeze onto this element alone,
+   and break-word lets WebKit's automatic min-width floor drop to a
+   single glyph — so a long/localized time string could crush this
+   down to a few px wide and wrap every letter onto its own line (e.g.
+   "Padel" rendering as a vertical P/a/d/e/l stack). flex-wrap: wrap on
+   the chip above means that once time+title can't share one line, the
+   title drops to its own full-width line instead of being crushed on
+   the same one; min-width keeps it from ever getting squeezed below a
+   few characters even on that first line. */
+.cal-event-nested-title {
+  font-size: 11.5px; color: var(--text-secondary); font-weight: 600;
+  word-break: break-word;
+  min-width: 60px;
+  flex: 1 1 auto;
+}
 .cal-empty { text-align: center; font-size: 12px; color: var(--text-tertiary); font-style: italic; padding: 14px 0; }
 .cal-add-toggle {
   width: 100%; margin-top: 12px; padding: 10px;
@@ -2754,19 +2786,20 @@ document.addEventListener('DOMContentLoaded', function () {
   // getting ready — a documented assumption (no per-user prep-time
   // setting exists either), not derived from real routine data.
   const WAKE_PREP_BUFFER_MINUTES = 45;
-  const DEFAULT_WAKE_UP_TIME = '07:00'; // used only if tomorrow has no fixed events at all
 
-  // TODAY's own wake/sleep times, read from the Day Ring's per-weekday
-  // schedule (General Settings — see main.html's Day Ring feature) by
-  // today's actual weekday — deliberately NOT the tomorrow-calendar
-  // inference above (wakeUpTime/DEFAULT_WAKE_UP_TIME), which is a
-  // different thing used only for tomorrow's own "Wake up" block. (An
-  // earlier version of this file computed tonight's bedtime the same
-  // tomorrow-inferred way — via a DEFAULT_SLEEP_TARGET_HOURS subtracted
-  // from wakeUpTime — which ignored the user's actual configured sleep
-  // time entirely, same bug class already fixed for wake-up. Removed
-  // that computation; todayBedtimeFromDayRingSchedule() below replaces
-  // it completely, and nothing else read DEFAULT_SLEEP_TARGET_HOURS.)
+  // Wake/sleep times read from the Day Ring's per-weekday schedule
+  // (General Settings — see main.html's Day Ring feature), keyed by
+  // whichever date key is passed in — used both for TODAY's own
+  // anchor times below, and (per the "Padel"-adjacent wrong-time Wake
+  // up bug) for TOMORROW's actual "Wake up" block, which used to come
+  // only from the tomorrow-calendar buffer inference further below
+  // and never consulted this schedule at all. (An earlier version of
+  // this file computed tonight's bedtime the same tomorrow-inferred
+  // way — via a DEFAULT_SLEEP_TARGET_HOURS subtracted from wakeUpTime
+  // — which ignored the user's actual configured sleep time entirely,
+  // same bug class already fixed for today's wake-up. Removed that
+  // computation; bedtimeFromDayRingSchedule() below replaces it
+  // completely, and nothing else read DEFAULT_SLEEP_TARGET_HOURS.)
   // This small lookup is duplicated here rather than shared, matching
   // this file's own established convention (see
   // fetchActiveRestrictionsForPlan's comment) of small per-closure
@@ -2774,18 +2807,18 @@ document.addEventListener('DOMContentLoaded', function () {
   const PLAN_DAY_WEEKDAY_KEYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']; // matches Date.getDay()
   const PLAN_DAY_DEFAULT_WAKE = '08:00'; // matches the Day Ring feature's own DAY_RING_DEFAULT_WAKE
   const PLAN_DAY_DEFAULT_SLEEP = '00:00'; // matches the Day Ring feature's own DAY_RING_DEFAULT_SLEEP
-  function todayDayRingScheduleEntry(todayDateKey) {
+  function dayRingScheduleEntry(dateKey) {
     const profile = (typeof window.DayLib !== 'undefined') ? window.DayLib.loadProfile() : null;
     const schedule = (profile && profile.dayRingSchedule) || {};
-    const weekday = PLAN_DAY_WEEKDAY_KEYS[DayLib.parseDateKey(todayDateKey).getDay()];
+    const weekday = PLAN_DAY_WEEKDAY_KEYS[DayLib.parseDateKey(dateKey).getDay()];
     return schedule[weekday] || {};
   }
-  function todayWakeUpTimeFromDayRingSchedule(todayDateKey) {
-    const entry = todayDayRingScheduleEntry(todayDateKey);
+  function wakeUpTimeFromDayRingSchedule(dateKey) {
+    const entry = dayRingScheduleEntry(dateKey);
     return (entry && typeof entry.wake === 'string' && entry.wake) ? entry.wake : PLAN_DAY_DEFAULT_WAKE;
   }
-  function todayBedtimeFromDayRingSchedule(todayDateKey) {
-    const entry = todayDayRingScheduleEntry(todayDateKey);
+  function bedtimeFromDayRingSchedule(dateKey) {
+    const entry = dayRingScheduleEntry(dateKey);
     return (entry && typeof entry.sleep === 'string' && entry.sleep) ? entry.sleep : PLAN_DAY_DEFAULT_SLEEP;
   }
   function currentTimeHHMM() {
@@ -2906,19 +2939,30 @@ document.addEventListener('DOMContentLoaded', function () {
         return { date: s.date, start: s.time, end: e.time, title: ev.summary || '(untitled)', allDay: false };
       });
 
-      // Wake-up (TOMORROW): WAKE_PREP_BUFFER_MINUTES before tomorrow's
-      // earliest TIMED fixed event (all-day entries don't have a clock
-      // time to anchor to); DEFAULT_WAKE_UP_TIME if tomorrow has
-      // nothing fixed at all. Computed here in plain code, not by the
-      // model — see api/training.js's mode=day-plan comment on why.
-      // Only used for tomorrow's own "Wake up" block.
+      // Wake-up (TOMORROW): the EARLIER of (a) tomorrow's own
+      // configured Day Ring wake time, and (b) WAKE_PREP_BUFFER_MINUTES
+      // before tomorrow's earliest TIMED fixed event, if any (all-day
+      // entries don't have a clock time to anchor to). Taking the
+      // earlier of the two means a normal day still wakes up at the
+      // user's actual configured time, while a genuinely early fixed
+      // commitment (e.g. a 6am flight) still pulls wake-up earlier to
+      // make room for it — rather than ALWAYS deriving from the
+      // calendar alone, which is what previously sent a "Wake up"
+      // block to 1:30pm on a day whose only fixed event happened to
+      // start at 2:15pm in the afternoon (45min-before-2:15pm, with no
+      // regard for the configured wake time at all). Computed here in
+      // plain code, not by the model — see api/training.js's
+      // mode=day-plan comment on why. Only used for tomorrow's own
+      // "Wake up" block.
       const tomorrowTimed = fixedEvents.filter((e) => e.date === tomorrowDateKey && !e.allDay && e.start).sort((a, b) => a.start.localeCompare(b.start));
-      const wakeUpTime = tomorrowTimed.length ? subtractMinutesFromTime(tomorrowTimed[0].start, WAKE_PREP_BUFFER_MINUTES) : DEFAULT_WAKE_UP_TIME;
+      const tomorrowConfiguredWake = wakeUpTimeFromDayRingSchedule(tomorrowDateKey);
+      const tomorrowCalendarInferredWake = tomorrowTimed.length ? subtractMinutesFromTime(tomorrowTimed[0].start, WAKE_PREP_BUFFER_MINUTES) : null;
+      const wakeUpTime = (tomorrowCalendarInferredWake && tomorrowCalendarInferredWake < tomorrowConfiguredWake) ? tomorrowCalendarInferredWake : tomorrowConfiguredWake;
       // TODAY's own configured wake/sleep times — the anchor for
       // today's morning blocks and tonight's Wind-down block,
-      // respectively. Not derived from wakeUpTime above at all.
-      const todayWakeUpTime = todayWakeUpTimeFromDayRingSchedule(todayDateKey);
-      const todayBedtime = todayBedtimeFromDayRingSchedule(todayDateKey);
+      // respectively.
+      const todayWakeUpTime = wakeUpTimeFromDayRingSchedule(todayDateKey);
+      const todayBedtime = bedtimeFromDayRingSchedule(todayDateKey);
 
       $('planDayStatus').textContent = 'Checking WHOOP recovery…';
       const whoopToday = await fetchRecoveryForPlan();

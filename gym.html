@@ -157,6 +157,16 @@ html, body {
   width: 100%;
   max-width: 100vw;
 }
+/* iOS Safari auto-zooms on focus for any input/textarea/select under
+   16px font-size, and never zooms back out on blur since this page's
+   viewport meta tag has no maximum-scale/user-scalable restriction.
+   Several of this file's own inputs are well under that threshold
+   (e.g. the [type="number"] rule at 12px). !important reliably beats
+   every existing per-component rule, none of which use !important
+   themselves. */
+@media (max-width: 480px) {
+  input, textarea, select { font-size: 16px !important; }
+}
 .po-shell {
   width: 100%; max-width: min(720px, 100vw);
   margin: 0 auto;

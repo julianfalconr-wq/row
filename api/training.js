@@ -112,12 +112,18 @@
 //     todayRecommendation: String | null,   // gym.html's cached mode=today result (Phase 1, padel-aware) — reused verbatim, NOT recomputed here
 //     whoopToday: { recoveryPct: Number|null } | null,
 //     fixedEvents: [{ date, start, end, title, allDay }],   // today + tomorrow's REAL existing Calendar events — immovable
-//     wakeUpTime: 'HH:MM',   // pre-computed CLIENT-SIDE from tomorrow's earliest TIMED fixedEvents
-//     // entry (minus a prep buffer), not asked of the model — exact clock-arithmetic is a poor fit for
-//     // an LLM to get reliably right, whereas fitting flexible blocks around fixed anchors is exactly
-//     // the kind of judgment call worth spending a model call on. See buildDayPlanSystemPrompt's FIXED
-//     // section below. ONLY used for tomorrow's "Wake up" block — do not confuse with todayWakeUpTime
-//     // or todayBedtime below, both different things about TODAY.
+//     wakeUpTime: 'HH:MM',   // pre-computed CLIENT-SIDE as the EARLIER of tomorrow's own configured Day
+//     // Ring wake time (dayRingSchedule[tomorrowWeekday].wake) and a prep buffer before tomorrow's
+//     // earliest TIMED fixedEvents entry, if any — not asked of the model — exact clock-arithmetic is a
+//     // poor fit for an LLM to get reliably right, whereas fitting flexible blocks around fixed anchors
+//     // is exactly the kind of judgment call worth spending a model call on. See
+//     // buildDayPlanSystemPrompt's FIXED section below. (Previously this was ALWAYS derived from
+//     // tomorrow's earliest fixed event alone, with no floor from the configured wake time — so a day
+//     // whose only fixed event was in the afternoon [e.g. 2:15pm] produced a nonsensical afternoon
+//     // "Wake up" block [1:30pm, 45min before it]. Taking the earlier of the two fixes that while still
+//     // pulling wake-up earlier for a genuine early commitment, like a 6am flight.) ONLY used for
+//     // tomorrow's "Wake up" block — do not confuse with todayWakeUpTime or todayBedtime below, both
+//     // different things about TODAY.
 //     todayWakeUpTime: 'HH:MM', todayBedtime: 'HH:MM',
 //     // TODAY's own already-configured wake/sleep times, read client-side from General Settings' Day
 //     // Ring per-weekday schedule (dayRingSchedule[todayWeekday].wake/.sleep — see main.html's Day Ring
@@ -549,9 +555,10 @@ function buildDayPlanSystemPrompt(restrictions) {
     'FIXED, NON-NEGOTIABLE — never overlap these, and never move or omit them:\n' +
     '- fixedEvents: the user\'s ACTUAL existing calendar events for today and tomorrow (meetings, padel, ' +
     'appointments, etc. — already-booked real time). Every block you propose must fit strictly around these.\n' +
-    '- wakeUpTime is already computed (from tomorrow\'s earliest fixed commitment) — do NOT recalculate ' +
-    'it yourself. Output a short "Wake up" block on tomorrowDateKey starting at wakeUpTime, and never ' +
-    'schedule anything else on tomorrowDateKey before it.\n' +
+    '- wakeUpTime is already computed (the earlier of tomorrow\'s configured wake time and a buffer before ' +
+    'tomorrow\'s earliest fixed commitment) — do NOT recalculate it yourself. Output a short "Wake up" ' +
+    'block on tomorrowDateKey starting at wakeUpTime, and never schedule anything else on tomorrowDateKey ' +
+    'before it.\n' +
     '- todayBedtime is today\'s already-configured sleep time (do NOT recalculate it) — output a ' +
     '"Wind-down" block on todayDateKey ending exactly at todayBedtime, using the exact given time, and ' +
     'never schedule anything else on todayDateKey after it.\n' +
