@@ -197,6 +197,14 @@ body::after {
 
   <div class="trend-card">
     <div class="trend-card-head">
+      <h3>Habits — Daily Completion %</h3>
+      <span class="trend-card-sub" id="habitsTrendSub">Loading…</span>
+    </div>
+    <div class="trend-chart-wrap"><canvas id="habitsTrendChart"></canvas></div>
+  </div>
+
+  <div class="trend-card">
+    <div class="trend-card-head">
       <h3>Body Weight</h3>
       <span class="trend-card-sub" id="weightTrendSub">Loading…</span>
     </div>
@@ -205,10 +213,34 @@ body::after {
 
   <div class="trend-card">
     <div class="trend-card-head">
+      <h3>Strength — Sessions per Week</h3>
+      <span class="trend-card-sub" id="strengthTrendSub">Loading…</span>
+    </div>
+    <div class="trend-chart-wrap"><canvas id="strengthTrendChart"></canvas></div>
+  </div>
+
+  <div class="trend-card">
+    <div class="trend-card-head">
       <h3>Nutrition — Protein &amp; Calories</h3>
       <span class="trend-card-sub" id="nutritionTrendSub">Loading…</span>
     </div>
     <div class="trend-chart-wrap"><canvas id="nutritionTrendChart"></canvas></div>
+  </div>
+
+  <div class="trend-card">
+    <div class="trend-card-head">
+      <h3>Activities — Distance per Session</h3>
+      <span class="trend-card-sub" id="activitiesDistanceSub">Loading…</span>
+    </div>
+    <div class="trend-chart-wrap"><canvas id="activitiesDistanceChart"></canvas></div>
+  </div>
+
+  <div class="trend-card">
+    <div class="trend-card-head">
+      <h3>Activities — Pace per Session</h3>
+      <span class="trend-card-sub" id="activitiesPaceSub">Loading…</span>
+    </div>
+    <div class="trend-chart-wrap"><canvas id="activitiesPaceChart"></canvas></div>
   </div>
 
   <div class="trend-card">
@@ -505,10 +537,15 @@ document.addEventListener('DOMContentLoaded', function () {
     const fraction = expected > 0 ? Math.min(1, kmDone / expected) : 1;
     return { available: true, fraction };
   }
-  // One day's score, given already-fetched shared context (habitConfig/
-  // entriesByDate/cronoCache/weights) — mirrors main.html's own
-  // weekly-average loop body exactly, just generalized to any date
-  // instead of only the current week's days.
+  // One day's score AND its habits-only completion %, given
+  // already-fetched shared context (habitConfig/entriesByDate/
+  // cronoCache/weights) — mirrors main.html's own weekly-average loop
+  // body exactly, just generalized to any date instead of only the
+  // current week's days. habitPct is the EXACT same derivation
+  // main.html's own render() uses for the Habits mini-gauge
+  // ("today.manual.possible > 0 ? round(earned/possible*100) : null")
+  // — returned alongside score rather than recomputed a second time,
+  // since both come from the same scoreManualHabitsForDate() call.
   function computeDayScoreFromCache(dk, habitConfig, entriesByDate, cronoCache, weights) {
     const weekMonday = mondayOfKey(dk);
     let nutrition = { available: false };
@@ -528,17 +565,23 @@ document.addEventListener('DOMContentLoaded', function () {
     const running = computeRunningCategory(dk, weekMonday);
     const training = combineTrainingFraction(strength, running);
     const habits = manual.possible > 0 ? { available: true, fraction: manual.earned / manual.possible } : { available: false };
-    return combineWeightedCategories([
+    const score = combineWeightedCategories([
       { key: 'habits', c: habits },
       { key: 'training', c: training },
       { key: 'nutrition', c: nutrition },
       { key: 'water', c: water },
       { key: 'dailyStack', c: stack },
     ], weights);
+    const habitPct = manual.possible > 0 ? Math.round((manual.earned / manual.possible) * 100) : null;
+    return { score, habitPct };
   }
   // Total network calls for the whole range, matching main.html's own
   // weekly-loop precedent: 1 (habit config) + 1 (daily-habits range) +
   // 1 (Cronometer blob) = 3, regardless of how many days are in range.
+  // Drives BOTH the Today's Score chart and the Habits completion %
+  // chart from this one pass — the habits chart needs no network calls
+  // of its own since scoreManualHabitsForDate() is already being run
+  // per day for the score.
   async function loadScoreTrend(dates, fromKey, toKey) {
     const habitConfig = await fetchHabitConfig();
     const entriesByDate = await fetchDailyHabitsRange(fromKey, toKey);
@@ -547,10 +590,16 @@ document.addEventListener('DOMContentLoaded', function () {
       try { const r = await window.CronoLib.fetchCronometerData(); if (r.ok) cronoCache = r; } catch (e) {}
     }
     const weights = (DayLib.loadProfile().categoryWeights) || DayLib.DEFAULT_PROFILE.categoryWeights;
-    const data = dates.map((dk) => computeDayScoreFromCache(dk, habitConfig, entriesByDate, cronoCache, weights));
-    renderLineChart('scoreTrendChart', dates.map(shortLabel), [{ label: "Today's Score", data, color: '#1D9E75' }]);
+    const results = dates.map((dk) => computeDayScoreFromCache(dk, habitConfig, entriesByDate, cronoCache, weights));
+    const data = results.map((r) => r.score);
+    renderChart('scoreTrendChart', dates.map(shortLabel), [{ label: "Today's Score", data, color: '#1D9E75' }]);
     const loggedCount = data.filter((v) => v != null).length;
     $('scoreTrendSub').textContent = loggedCount ? (loggedCount + ' of ' + dates.length + ' days scored') : 'Not enough data to score any day in this range';
+
+    const habitData = results.map((r) => r.habitPct);
+    renderChart('habitsTrendChart', dates.map(shortLabel), [{ label: 'Habits %', data: habitData, color: '#1D9E75' }]);
+    const habitLoggedCount = habitData.filter((v) => v != null).length;
+    $('habitsTrendSub').textContent = habitLoggedCount ? (habitLoggedCount + ' of ' + dates.length + ' days logged') : 'No habits logged in this range';
   }
 
   // =============================================================
@@ -566,7 +615,7 @@ document.addEventListener('DOMContentLoaded', function () {
     const data = dates.map((dk) => (byDate[dk] != null ? byDate[dk] : null));
     let units = 'kg';
     try { const pc = JSON.parse(localStorage.getItem('po_coach_v1')); if (pc && pc.units) units = pc.units; } catch (e) {}
-    renderLineChart('weightTrendChart', dates.map(shortLabel), [{ label: 'Weight (' + units + ')', data, color: '#1D9E75' }]);
+    renderChart('weightTrendChart', dates.map(shortLabel), [{ label: 'Weight (' + units + ')', data, color: '#1D9E75' }]);
     const loggedCount = data.filter((v) => v != null).length;
     $('weightTrendSub').textContent = loggedCount ? (loggedCount + ' logged ' + (loggedCount === 1 ? 'entry' : 'entries')) : 'No weight logged in this range';
   }
@@ -582,7 +631,7 @@ document.addEventListener('DOMContentLoaded', function () {
   // =============================================================
   async function loadNutritionTrend(dates) {
     if (typeof window.CronoLib === 'undefined' || !window.CronoLib.getSecret()) {
-      renderLineChart('nutritionTrendChart', dates.map(shortLabel), [
+      renderChart('nutritionTrendChart', dates.map(shortLabel), [
         { label: 'Protein %', data: dates.map(() => null), color: '#1D9E75' },
         { label: 'Calories %', data: dates.map(() => null), color: '#FFC93C' },
       ]);
@@ -604,7 +653,7 @@ document.addEventListener('DOMContentLoaded', function () {
       proteinData.push(protein && protein.fraction != null ? Math.round(protein.fraction * 100) : null);
       caloriesData.push(energy && energy.fraction != null ? Math.round(energy.fraction * 100) : null);
     });
-    renderLineChart('nutritionTrendChart', dates.map(shortLabel), [
+    renderChart('nutritionTrendChart', dates.map(shortLabel), [
       { label: 'Protein %', data: proteinData, color: '#1D9E75' },
       { label: 'Calories %', data: caloriesData, color: '#FFC93C' },
     ]);
@@ -677,7 +726,7 @@ document.addEventListener('DOMContentLoaded', function () {
     let tokens = null;
     try { tokens = JSON.parse(localStorage.getItem(WHOOP_KEY)); } catch (e) {}
     if (!tokens || !tokens.access) {
-      renderLineChart('whoopTrendChart', dates.map(shortLabel), [
+      renderChart('whoopTrendChart', dates.map(shortLabel), [
         { label: 'Recovery %', data: dates.map(() => null), color: '#1D9E75' },
         { label: 'Sleep %', data: dates.map(() => null), color: '#FFC93C' },
       ]);
@@ -707,19 +756,97 @@ document.addEventListener('DOMContentLoaded', function () {
       });
       const recoveryData = dates.map((dk) => (dk in recoveryByDate ? recoveryByDate[dk] : null));
       const sleepData = dates.map((dk) => (dk in sleepByDate ? sleepByDate[dk] : null));
-      renderLineChart('whoopTrendChart', dates.map(shortLabel), [
+      renderChart('whoopTrendChart', dates.map(shortLabel), [
         { label: 'Recovery %', data: recoveryData, color: '#1D9E75' },
         { label: 'Sleep %', data: sleepData, color: '#FFC93C' },
       ]);
       const loggedCount = recoveryData.filter((v) => v != null).length;
       $('whoopTrendSub').textContent = loggedCount ? (loggedCount + ' of ' + dates.length + ' days with recovery data') : 'No WHOOP data synced in this range';
     } catch (e) {
-      renderLineChart('whoopTrendChart', dates.map(shortLabel), [
+      renderChart('whoopTrendChart', dates.map(shortLabel), [
         { label: 'Recovery %', data: dates.map(() => null), color: '#1D9E75' },
         { label: 'Sleep %', data: dates.map(() => null), color: '#FFC93C' },
       ]);
       $('whoopTrendSub').textContent = 'Could not load WHOOP data';
     }
+  }
+
+  // =============================================================
+  // Strength — sessions completed per week, from po_coach_workout_done
+  // (gym.html's WORKOUT_DONE_KEY, a plain {dateKey: isoTimestamp} map),
+  // the exact same boolean map computeStrengthCategory() above already
+  // reads for "was a session done on day X" — reused directly rather
+  // than re-detecting sessions from workout logs. This is deliberately
+  // NOT run through computeStrengthCategory()/todaySplitFor() — those
+  // add split-rotation/rest-day gating for SCORING purposes, which is
+  // a different question from "did a real session happen that day".
+  // Aggregated by week (Monday-start, same mondayOfKey() as the rest
+  // of this page) rather than reusing gym.html's own single "since
+  // this week's Monday" count (computeWeekProgress()'s strengthDone)
+  // since this chart needs a bucket per week across the WHOLE range,
+  // not just the current one. Zero network calls. A week's count is a
+  // real 0 when no session happened, not a gap — spanGaps doesn't come
+  // into play here at all, matching this section's own comment on the
+  // renderChart() bar-mode note.
+  // =============================================================
+  function loadStrengthTrend(dates) {
+    let doneDays = {};
+    try { doneDays = JSON.parse(localStorage.getItem('po_coach_workout_done')) || {}; } catch (e) {}
+    const weekOrder = [];
+    const weekCounts = {};
+    dates.forEach((dk) => {
+      const wk = mondayOfKey(dk);
+      if (!(wk in weekCounts)) { weekCounts[wk] = 0; weekOrder.push(wk); }
+      if (doneDays[dk]) weekCounts[wk]++;
+    });
+    const labels = weekOrder.map((wk) => shortLabel(wk));
+    const data = weekOrder.map((wk) => weekCounts[wk]);
+    renderChart('strengthTrendChart', labels, [{ label: 'Sessions', data, color: '#1D9E75' }], 'bar');
+    const totalSessions = data.reduce((a, b) => a + b, 0);
+    $('strengthTrendSub').textContent = totalSessions
+      ? (totalSessions + ' session' + (totalSessions === 1 ? '' : 's') + ' across ' + weekOrder.length + ' week' + (weekOrder.length === 1 ? '' : 's'))
+      : 'No strength sessions logged in this range';
+  }
+
+  // =============================================================
+  // Activities — distance and pace per session, from po_coach_activities
+  // (gym.html's ACTIVITY_KEY — see its own header comment: [{ id,
+  // dateKey, activityTypeId, distanceKm?, count?, durationMin?, effort,
+  // notes }]), read directly. Pace is derived from durationMin/distanceKm
+  // on the fly, not looked up from any separately-stored pace value —
+  // none exists. Indexed by SESSION (chronological, one point per real
+  // entry) rather than by calendar day like the other charts: unlike a
+  // daily metric, "no activity that day" isn't a meaningful gap to show
+  // for a per-session view, it would just be most of the axis. Distance
+  // and pace get their own independent session lists (an entry missing
+  // durationMin still contributes a distance point; one missing
+  // distanceKm entirely is simply not plottable on either chart) —
+  // deliberately combined across all activity types rather than
+  // faceted, per this task's own explicit allowance to keep this
+  // simple. Zero network calls.
+  // =============================================================
+  function loadActivitiesTrend(fromKey, toKey) {
+    let activities = [];
+    try { activities = JSON.parse(localStorage.getItem('po_coach_activities')) || []; } catch (e) {}
+    const inRange = (Array.isArray(activities) ? activities : [])
+      .filter((a) => a && a.dateKey && a.dateKey >= fromKey && a.dateKey <= toKey)
+      .sort((a, b) => (a.dateKey < b.dateKey ? -1 : a.dateKey > b.dateKey ? 1 : 0));
+
+    const distanceEntries = inRange.filter((a) => a.distanceKm != null);
+    const distanceLabels = distanceEntries.map((a) => shortLabel(a.dateKey));
+    const distanceData = distanceEntries.map((a) => Math.round(a.distanceKm * 100) / 100);
+    renderChart('activitiesDistanceChart', distanceLabels, [{ label: 'Distance (km)', data: distanceData, color: '#1D9E75' }]);
+    $('activitiesDistanceSub').textContent = distanceEntries.length
+      ? (distanceEntries.length + ' session' + (distanceEntries.length === 1 ? '' : 's') + ' with distance logged')
+      : 'No distance-based activities logged in this range';
+
+    const paceEntries = inRange.filter((a) => a.distanceKm != null && a.distanceKm > 0 && a.durationMin != null);
+    const paceLabels = paceEntries.map((a) => shortLabel(a.dateKey));
+    const paceData = paceEntries.map((a) => Math.round((a.durationMin / a.distanceKm) * 100) / 100); // minutes per km
+    renderChart('activitiesPaceChart', paceLabels, [{ label: 'Pace (min/km)', data: paceData, color: '#FFC93C' }]);
+    $('activitiesPaceSub').textContent = paceEntries.length
+      ? (paceEntries.length + ' session' + (paceEntries.length === 1 ? '' : 's') + ' with pace data')
+      : 'No sessions with both distance and duration in this range';
   }
 
   // =============================================================
@@ -738,28 +865,36 @@ document.addEventListener('DOMContentLoaded', function () {
     const v = getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
     return v || fallback;
   }
-  function renderLineChart(canvasId, labels, datasetsSpec) {
+  // chartType defaults to 'line' (every one of the original 4 charts);
+  // 'bar' is used for the new weekly strength-session count, matching
+  // topbar.js's own chat-chart feature's bar/line convention
+  // (renderChartCanvas() there) — a per-bucket COUNT reads more
+  // naturally as bars than as a connected line, and unlike the line
+  // charts here a week bucket with zero sessions is a real 0, not a
+  // gap, so spanGaps has no effect on a bar dataset either way.
+  function renderChart(canvasId, labels, datasetsSpec, chartType) {
     if (typeof window.Chart === 'undefined') return; // CDN failed to load — charts just don't render, no fake fallback data
     const canvas = $(canvasId);
     if (!canvas) return;
     if (chartInstances[canvasId]) chartInstances[canvasId].destroy();
     const tickColor = themeColor('--text-tertiary', '#76746E');
     const gridColor = themeColor('--line-soft', 'rgba(255,255,255,0.06)');
+    const type = chartType === 'bar' ? 'bar' : 'line';
     const datasets = datasetsSpec.map((ds) => ({
       label: ds.label,
       data: ds.data,
       borderColor: ds.color,
-      backgroundColor: ds.color + '26',
+      backgroundColor: type === 'bar' ? ds.color + '99' : ds.color + '26',
       pointRadius: 2,
       pointHoverRadius: 4,
       pointBackgroundColor: ds.color,
       borderWidth: 2,
       tension: 0.3,
-      fill: datasetsSpec.length === 1,
+      fill: type === 'line' && datasetsSpec.length === 1,
       spanGaps: false,
     }));
     chartInstances[canvasId] = new window.Chart(canvas.getContext('2d'), {
-      type: 'line',
+      type,
       data: { labels, datasets },
       options: {
         responsive: true,
@@ -770,7 +905,7 @@ document.addEventListener('DOMContentLoaded', function () {
         },
         scales: {
           x: { ticks: { color: tickColor, font: { size: 10 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 8 }, grid: { color: gridColor } },
-          y: { ticks: { color: tickColor, font: { size: 10 } }, grid: { color: gridColor } },
+          y: { ticks: { color: tickColor, font: { size: 10 } }, grid: { color: gridColor }, beginAtZero: type === 'bar' },
         },
       },
     });
@@ -790,6 +925,8 @@ document.addEventListener('DOMContentLoaded', function () {
       loadWeightTrend(dates),
       loadNutritionTrend(dates),
       loadWhoopTrend(dates, fromKey, toKey),
+      loadStrengthTrend(dates),
+      loadActivitiesTrend(fromKey, toKey),
     ]);
   }
 
