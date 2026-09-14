@@ -210,7 +210,7 @@ body::after {
 }
 .goal-ticker-stage {
   position: relative; overflow: hidden;
-  flex: 1; height: 22px;
+  flex: 1; min-width: 0; height: 22px;
 }
 /* A single persistent row that fades in place — no second row ever
    exists at the same time, and nothing slides. The previous design
@@ -243,7 +243,7 @@ body::after {
 .goal-ticker-status[data-status="done"]    { color: var(--success); }
 .goal-ticker-status[data-status="pending"] { color: var(--text-tertiary); }
 .goal-ticker-text {
-  flex: 1;
+  flex: 1; min-width: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .goal-ticker-meta {
@@ -709,6 +709,12 @@ body::after {
   border-radius: 12px;
   transition: background 0.2s, opacity 0.3s;
   position: relative;
+  /* Defense in depth, not the actual fix (draggable="true" now lives
+     only on .gm-handle — see wireDragReorder()'s own comment): guards
+     against WebKit's own default-draggable behavior for anything
+     nested in here later (an <a> or <img>, say) ever being able to
+     start a native drag from the row's own surface. */
+  -webkit-user-drag: none;
 }
 .gm-row:hover { filter: brightness(1.25); }
 .gm-row.gm-row-done {
@@ -741,6 +747,11 @@ body::after {
   opacity: 0;
   transition: opacity 0.2s;
   user-select: none;
+  /* This is the one place draggable="true" actually lives now — telling
+     the browser up front that this small element is a drag surface,
+     not something to pan/scroll through, removes any gesture-
+     recognition ambiguity between the two. */
+  touch-action: none;
 }
 .gm-row:hover .gm-handle { opacity: 1; }
 .gm-handle:active { cursor: grabbing; }
@@ -1954,9 +1965,22 @@ body::after {
     });
   }
 
-  function wireDragReorder(row, listEl, key, reload) {
-    row.setAttribute('draggable', 'true');
-    row.addEventListener('dragstart', (e) => {
+  // draggable="true" lives ONLY on the handle (not the row) — this is
+  // what actually scopes drag initiation to it: a browser only starts
+  // a native HTML5 drag from an element that is itself draggable=true
+  // (or one of its own draggable descendants), so with the attribute
+  // moved off the row entirely, nothing else in the row — the
+  // checkbox, the editable text, the queue/delete buttons — can ever
+  // initiate one, in either direction. Confirmed via main.html's own
+  // .gm-handle CSS (cursor:grab, opacity:0 except on :hover) that this
+  // was always the INTENDED affordance; draggable="true" had just been
+  // applied to the whole <li> instead of scoped to it. dragover/
+  // dragleave/drop stay on the row itself — those need to fire
+  // wherever the pointer is over ANY part of a target row while
+  // dragging, not just its handle, so a drop lands correctly.
+  function wireDragReorder(row, handle, listEl, key, reload) {
+    handle.setAttribute('draggable', 'true');
+    handle.addEventListener('dragstart', (e) => {
       e.dataTransfer.effectAllowed = 'move';
       e.dataTransfer.setData('text/plain', row.dataset.idx);
     });
@@ -2042,7 +2066,12 @@ body::after {
     });
     li.appendChild(del);
 
-    wireDragReorder(li, null, key, reload);
+    // Only wired for editable (today's) rows — a read-only row (e.g.
+    // tomorrow's list, before its own day) was previously STILL made
+    // draggable despite its checkbox/queue button already being
+    // disabled for the same reason; reordering something you can't
+    // otherwise touch yet was never intended.
+    if (!readOnly) wireDragReorder(li, handle, null, key, reload);
     return li;
   }
 

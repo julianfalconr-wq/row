@@ -120,6 +120,7 @@
       }
       #rowLockOverlay .row-lock-card {
         width: 100%; max-width: 320px; text-align: center;
+        cursor: pointer; -webkit-tap-highlight-color: transparent;
       }
       #rowLockOverlay .row-lock-title {
         color: #FAFAFA; font-size: 19px; font-weight: 800; margin-bottom: 8px;
@@ -199,6 +200,27 @@
     digitEls = Array.from(wrap.querySelectorAll('.row-lock-dot'));
     const input = wrap.querySelector('#rowLockInput');
     input.addEventListener('input', onInput);
+    // Guaranteed fallback for iOS Safari's real, well-documented
+    // restriction: .focus() only opens the on-screen keyboard when
+    // called SYNCHRONOUSLY inside an actual user gesture (a tap/click
+    // handler) — never from a setTimeout, and never from code that
+    // ultimately traces back to a page-load event like DOMContentLoaded
+    // (which is exactly how this overlay's very first appearance was
+    // reached, via boot() below). So the FIRST time this screen shows,
+    // there is no real user gesture to piggyback on at all — the best
+    // any auto-focus attempt can do is a no-op-safe best effort (see
+    // focusInput()), and the user needs something obviously tappable
+    // that DOES count as a gesture. This whole card is that: a tap
+    // anywhere on it (while in a PIN-entry mode, not the "forgot"
+    // screen's own already-visible/tappable secret-input row)
+    // re-focuses the hidden input synchronously inside this real click
+    // handler, which reliably brings up the keyboard even when the
+    // earlier automatic attempt silently did nothing.
+    wrap.querySelector('.row-lock-card').addEventListener('click', (e) => {
+      if (mode === 'forgot') return;
+      if (e.target.closest('#rowLockForgotBtn')) return;
+      input.focus();
+    });
     wrap.querySelector('#rowLockForgotBtn').addEventListener('click', () => {
       if (mode === 'forgot') showUnlock(); else showForgot();
     });
@@ -223,7 +245,18 @@
     const input = overlayEl.querySelector('#rowLockInput');
     input.value = '';
     updateDots('');
-    setTimeout(() => input.focus(), 30);
+    // Synchronous now, not setTimeout-deferred — a deferred call is
+    // GUARANTEED to lose whatever user-gesture context it might have
+    // had (the .row-lock-card click handler above is the one place
+    // that actually has real gesture context for THIS call; boot()'s
+    // own initial call has none regardless of timing — see that
+    // handler's own comment). Removing the delay costs nothing and
+    // fixes the one case (re-entering a PIN after a wrong attempt,
+    // triggered by showError()/onInput() below, both themselves
+    // already inside the real 'input' event's call stack) where this
+    // WAS gesture-backed and the setTimeout was needlessly throwing
+    // that away.
+    input.focus();
   }
 
   function updateDots(value) {
@@ -251,7 +284,17 @@
     if (isForgot) {
       const secretInput = overlayEl.querySelector('#rowLockSecretInput');
       secretInput.value = '';
-      setTimeout(() => secretInput.focus(), 30);
+      // Synchronous, not setTimeout-deferred — setScreen('forgot', ...)
+      // is only ever reached via the "Forgot PIN?" button's own click
+      // handler, a genuine user gesture, so calling .focus() directly
+      // in that same call stack is exactly what iOS requires to
+      // reliably bring up the keyboard (unlike focusInput()'s own
+      // comment on the unlock/create/confirm screens, this one WAS
+      // always gesture-backed — the setTimeout was throwing that away
+      // for no benefit). This input is also a normal, visibly-sized,
+      // directly-tappable field (unlike the hidden PIN input), so even
+      // if focus is somehow lost, the user has an obvious fallback.
+      secretInput.focus();
     } else {
       buildDots(overlayEl.querySelector('#rowLockDots'));
       focusInput();

@@ -271,6 +271,34 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
   font-size: 16px; cursor: pointer; padding: 0 2px;
 }
 .chat-ios-banner button:hover { color: #FAFAFA; }
+/* "New version available" toast — see setupFreshnessGuard() below.
+   Fixed at the top, above everything (max z-index, same convention as
+   the chat FAB/modal), since it needs to be reachable from any page
+   regardless of what else is on screen. Literal colors, not
+   var(--something) — same reasoning as every other rule in this file
+   (see this file's own header comment): this must render correctly
+   across all of this project's incompatible CSS-variable schemes. */
+.row-update-toast {
+  position: fixed; top: max(12px, env(safe-area-inset-top)); left: 50%;
+  transform: translateX(-50%);
+  z-index: 2147483647;
+  display: none;
+  align-items: center; gap: 10px;
+  padding: 10px 10px 10px 16px;
+  background: #17E88F; color: #08110D;
+  border-radius: 999px;
+  font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+  font-size: 12.5px; font-weight: 700;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+  max-width: calc(100vw - 24px);
+}
+.row-update-toast.show { display: flex; }
+.row-update-toast button {
+  flex-shrink: 0; border: 0; border-radius: 999px; cursor: pointer;
+  font-family: inherit; font-weight: 700; -webkit-tap-highlight-color: transparent;
+}
+.row-update-reload-btn { padding: 6px 12px; background: #08110D; color: #17E88F; font-size: 12px; }
+.row-update-dismiss-btn { padding: 4px 6px; background: transparent; color: #08110D; opacity: 0.6; font-size: 15px; }
 .chat-empty { text-align: center; font-size: 12px; font-style: italic; color: #76746E; padding: 20px 10px; }
 .chat-bubble {
   max-width: 82%;
@@ -2069,7 +2097,16 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
         if (!secret) { console.log('[push] ABORT: no dashboard:secret — never reached service worker registration'); return; }
 
         console.log('[push] registering /sw.js ...');
-        const reg = await navigator.serviceWorker.register('/sw.js');
+        // updateViaCache:'none' — without it, the DEFAULT is 'imports',
+        // meaning the browser's update check for sw.js itself (and any
+        // importScripts()'d file) may be satisfied from HTTP cache
+        // rather than the network. This app's HTTP responses are
+        // already max-age=0 (confirmed against the live deployment),
+        // so this is belt-and-suspenders rather than the fix for a
+        // confirmed bug, but it's the technically-correct explicit
+        // option regardless — see setupFreshnessGuard() for the actual
+        // update-detection/reload-prompt mechanism.
+        const reg = await navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' });
         console.log('[push] service worker registered, scope:', reg.scope);
 
         console.log('[push] fetching VAPID public key from /api/push ...');
@@ -2329,11 +2366,89 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
     },
   };
 
+  // =============================================================
+  // Freshness guard — mitigates "the app on my phone feels stuck on an
+  // old version" reports. Investigated first, not assumed: sw.js does
+  // no caching at all (no fetch handler), and this app's own HTTP
+  // responses are already `cache-control: max-age=0, must-revalidate`
+  // (confirmed against the live deployment), so neither explains
+  // staleness by itself. The most likely real cause — iOS suspending/
+  // freezing the standalone PWA's WebKit process instead of reloading
+  // it on reopen, or a plain browser bfcache restore — can't be
+  // confirmed from this environment, but both are exactly what these
+  // two standard, independently-useful mechanisms detect and recover
+  // from, so both are added rather than betting on one specific theory.
+  //
+  // 1. bfcache/frozen-page resume (pageshow + event.persisted): fires
+  //    whenever the browser hands back a previously-rendered page from
+  //    a frozen snapshot instead of actually re-running this page's
+  //    scripts, which is exactly the "reopened the app, it's showing
+  //    what it showed before I backgrounded it" symptom. Applies to
+  //    every visitor, service worker or not.
+  // 2. Service worker update detection: only meaningful for the subset
+  //    of users with push notifications enabled — sw.js is ONLY ever
+  //    registered inside subscribeForPush() below, never
+  //    unconditionally, so this deliberately does not register one
+  //    itself (that would be a real behavior change for everyone else,
+  //    out of scope here); it only acts on a registration that already
+  //    exists. Shows a dismissible "tap to refresh" toast rather than
+  //    silently reloading — an unprompted reload could drop an
+  //    in-progress PIN entry, chat message, or Settings edit.
+  // =============================================================
+  function showUpdateToast() {
+    let toast = document.getElementById('rowUpdateToast');
+    if (!toast) {
+      toast = document.createElement('div');
+      toast.id = 'rowUpdateToast';
+      toast.className = 'row-update-toast';
+      toast.innerHTML =
+        '<span>Update available</span>' +
+        '<button type="button" class="row-update-reload-btn" id="rowUpdateReloadBtn">Refresh</button>' +
+        '<button type="button" class="row-update-dismiss-btn" id="rowUpdateDismissBtn" aria-label="Dismiss">×</button>';
+      document.body.appendChild(toast);
+      toast.querySelector('#rowUpdateReloadBtn').addEventListener('click', () => location.reload());
+      toast.querySelector('#rowUpdateDismissBtn').addEventListener('click', () => toast.classList.remove('show'));
+    }
+    toast.classList.add('show');
+  }
+
+  function setupFreshnessGuard() {
+    window.addEventListener('pageshow', (e) => {
+      if (e.persisted) location.reload();
+    });
+
+    if (!('serviceWorker' in navigator)) return;
+    navigator.serviceWorker.getRegistration().then((reg) => {
+      if (!reg) return;
+      // A worker sitting in 'installed' (waiting) state right now means
+      // an update was already found and finished installing before this
+      // listener was attached (e.g. it happened between page loads) —
+      // surface the toast immediately instead of only for FUTURE updates.
+      if (reg.waiting) showUpdateToast();
+      reg.addEventListener('updatefound', () => {
+        const nw = reg.installing;
+        if (!nw) return;
+        nw.addEventListener('statechange', () => {
+          // 'installed' + an existing controller means this is a real
+          // UPDATE (not the very first install, which also passes
+          // through 'installed' but has no controller yet to replace).
+          if (nw.state === 'installed' && navigator.serviceWorker.controller) showUpdateToast();
+        });
+      });
+      // Browsers only check for a new sw.js on navigation or roughly
+      // every 24h on their own — too infrequent for an app that can sit
+      // open/backgrounded for a long time between real navigations.
+      reg.update().catch(() => {});
+      setInterval(() => reg.update().catch(() => {}), 60 * 60 * 1000);
+    }).catch(() => {});
+  }
+
   function boot() {
     injectStyle();
     injectChrome();
     injectChat();
     applyChatVisibility();
+    setupFreshnessGuard();
     window.RowIcons.render();
     const btn = document.getElementById('topbarWaterAdd');
     if (btn) btn.addEventListener('click', (e) => { e.preventDefault(); addWater(); });

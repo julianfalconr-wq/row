@@ -647,7 +647,7 @@ main {
 }
 .stack-ticker-sep { color: var(--text-quaternary); flex-shrink: 0; }
 .stack-ticker-msg {
-  flex: 1;
+  flex: 1; min-width: 0;
   font-size: 12px;
   font-weight: 600;
   color: var(--text-primary);
@@ -673,7 +673,14 @@ main {
 .stack-add-label { margin-bottom: 10px; }
 .stack-add-row {
   display: grid;
-  grid-template-columns: 1fr 1fr 110px 90px;
+  /* minmax(0, 1fr), not bare 1fr — a bare `1fr` track has an implicit
+     min-width:auto, the grid equivalent of flexbox's own min-width:auto
+     trap (see .stack-ticker-msg above): it won't shrink a column below
+     its content's intrinsic width (a text <input>'s own default
+     minimum rendering width), which is exactly what was overflowing
+     this row by ~30px at mobile widths despite the @media override
+     below already reducing it to two columns. */
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 110px 90px;
   gap: 6px;
   align-items: center;
 }
@@ -777,7 +784,7 @@ main {
   .stack-card { padding: 18px 16px 14px; }
   .stack-item { grid-template-columns: 28px 1fr auto; gap: 8px; }
   .stack-item .stack-low-btn { grid-column: 2 / 4; margin-top: 4px; justify-self: start; }
-  .stack-add-row { grid-template-columns: 1fr 1fr; }
+  .stack-add-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .stack-add-row .stack-add-btn { grid-column: 1 / -1; }
   .stack-add-row .stack-select { grid-column: 1 / -1; }
   .stack-search-results { width: 100%; }
