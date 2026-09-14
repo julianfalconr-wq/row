@@ -1,0 +1,809 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<!-- Not deferred, on purpose and first — see lock.js's own header
+     comment. Matches main.html/gym.html's exact head ordering. -->
+<script src="lock.js"></script>
+<script>
+(function () {
+  try {
+    var t = localStorage.getItem('dashboard:theme');
+    if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+  } catch (e) {}
+})();
+</script>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#050506">
+<title>Trends · Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="sync.js" defer></script>
+<script src="https://unpkg.com/lucide@1.43.0/dist/umd/lucide.js" defer></script>
+<script src="topbar.js" defer></script>
+<script src="cronometer-lib.js" defer></script>
+<!-- Not deferred — matches main.html/gym.html's daylib.js tag exactly
+     (see daylib.js's own header comment on why); this page's own
+     script is DOMContentLoaded-wrapped so defer would also technically
+     work here, but there's nothing to gain from diverging from the
+     established pattern. -->
+<script src="daylib.js"></script>
+<!-- Same exact version main.html/topbar.js's chat feature already
+     loads for its own charts (see topbar.js's loadChartJs()) — kept
+     in sync deliberately so both chart surfaces in this app render
+     with the same library/behavior. Loaded up front (not lazily) here
+     since charts are this whole page's purpose, unlike the chat's
+     occasional inline chart. -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js" defer></script>
+<style>
+/* Design tokens copied verbatim from main.html — same scheme (one of
+   three incompatible ones this project uses across pages, per
+   topbar.js's own header comment), so this page matches main.html's
+   look exactly rather than introducing a fourth. */
+:root {
+  --surface-1: #050506;
+  --surface-2: #121214;
+  --inset-bg: rgba(0,0,0,0.30);
+  --line: rgba(255,255,255,0.09);
+  --line-soft: rgba(255,255,255,0.06);
+  --text-primary: #FAFAFA;
+  --text-secondary: #A5A3A0;
+  --text-tertiary: #6E6C68;
+  --success: #17E88F;
+  --warning: #FFC93C;
+  --danger: #FF4D5E;
+  --shadow-card: 0 14px 34px rgba(0,0,0,0.45);
+  --title-grad-a: #FFFFFF;
+  --title-grad-b: #C7C4BC;
+  --btn-primary-a: #FFFFFF;
+  --btn-primary-b: #E8E5DD;
+  --btn-primary-text: #0A0A0B;
+  --glow-opacity: 1;
+  --font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+:root[data-theme="light"] {
+  --surface-1: #F3F3F1;
+  --surface-2: #FFFFFF;
+  --inset-bg: rgba(0,0,0,0.035);
+  --line: rgba(15,15,20,0.10);
+  --line-soft: rgba(15,15,20,0.07);
+  --text-primary: #141416;
+  --text-secondary: #55545C;
+  --text-tertiary: #8B8A90;
+  --shadow-card: 0 10px 26px rgba(20,20,26,0.08);
+  --title-grad-a: #141416;
+  --title-grad-b: #4A4952;
+  --btn-primary-a: #141416;
+  --btn-primary-b: #2B2A30;
+  --btn-primary-text: #FAFAFA;
+  --glow-opacity: 0.35;
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; padding: 0;
+  background: var(--surface-1);
+  color: var(--text-secondary);
+  font-family: var(--font);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-text-size-adjust: 100%;
+  transition: background 0.3s, color 0.3s;
+}
+body {
+  min-height: 100vh;
+  position: relative;
+  overflow-x: hidden;
+  padding: max(28px, env(safe-area-inset-top)) 20px 60px;
+}
+body::before {
+  content: '';
+  position: fixed; inset: 0;
+  background:
+    radial-gradient(circle at 82% 14%, rgba(23, 232, 143, 0.14), transparent 45%),
+    radial-gradient(circle at 18% 90%, rgba(180, 180, 200, 0.06), transparent 50%);
+  filter: blur(40px);
+  opacity: var(--glow-opacity);
+  pointer-events: none;
+  z-index: -2;
+  animation: drift 36s ease-in-out infinite alternate;
+}
+body::after {
+  content: '';
+  position: fixed; inset: 0;
+  background-image: radial-gradient(rgba(255,255,255,0.014) 1px, transparent 1px);
+  background-size: 3px 3px;
+  opacity: var(--glow-opacity);
+  pointer-events: none;
+  z-index: -1;
+}
+@keyframes drift {
+  0%   { transform: translate3d(0,0,0); }
+  100% { transform: translate3d(-22px, 14px, 0); }
+}
+
+.page { max-width: 1100px; margin: 0 auto; }
+
+.section-title {
+  font-size: 10.5px; font-weight: 800;
+  letter-spacing: 0.20em; text-transform: uppercase;
+  color: var(--text-tertiary);
+  display: flex; align-items: center; gap: 12px;
+  margin-bottom: 12px;
+}
+.section-title::after { content: ''; flex: 1; height: 1px; background: linear-gradient(90deg, var(--line), transparent); }
+
+.trends-head { margin-bottom: 4px; }
+.trends-title { font-size: 22px; font-weight: 800; color: var(--text-primary); letter-spacing: -0.02em; }
+.trends-subtitle { font-size: 13px; color: var(--text-tertiary); margin-top: 4px; line-height: 1.5; }
+
+/* Time-range selector — same segmented-control look/behavior as
+   main.html's Calendar card tabs (.cal-tabs/.cal-tab), reused verbatim
+   for visual consistency rather than a new pattern. */
+.trend-range-row { display: flex; justify-content: flex-end; margin: 18px 0 16px; }
+.cal-tabs { display: flex; gap: 4px; background: var(--inset-bg); border: 1px solid var(--line); border-radius: 10px; padding: 3px; }
+.cal-tab {
+  padding: 7px 14px; border: none; background: transparent; color: var(--text-tertiary);
+  border-radius: 7px; font-family: inherit; font-size: 11.5px; font-weight: 700;
+  cursor: pointer; -webkit-tap-highlight-color: transparent; transition: background 0.15s, color 0.15s;
+}
+.cal-tab:hover { color: var(--text-secondary); }
+.cal-tab.active { background: linear-gradient(180deg, var(--btn-primary-a), var(--btn-primary-b)); color: var(--btn-primary-text); }
+
+.trend-card {
+  position: relative;
+  background: var(--surface-2);
+  border: 1px solid var(--line-soft);
+  border-radius: 18px;
+  padding: 20px;
+  margin-bottom: 14px;
+  box-shadow: var(--shadow-card);
+  transition: background 0.3s, border-color 0.3s;
+}
+.trend-card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+.trend-card-head h3 { margin: 0; font-size: 15px; font-weight: 700; color: var(--text-primary); }
+.trend-card-sub { font-size: 11.5px; color: var(--text-tertiary); font-family: var(--font-mono); }
+.trend-chart-wrap { position: relative; height: 220px; }
+@media (max-width: 480px) {
+  .trend-chart-wrap { height: 190px; }
+  .trend-card { padding: 16px; }
+}
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="trends-head">
+    <div class="trends-title">Trends</div>
+    <div class="trends-subtitle">Today's Score, body weight, nutrition, and WHOOP recovery/sleep over time. Gaps in a line mean no data was logged/synced that day — never a guessed or interpolated value.</div>
+  </div>
+
+  <div class="trend-range-row">
+    <div class="cal-tabs" id="trendRangeTabs">
+      <button type="button" class="cal-tab" data-days="7">7D</button>
+      <button type="button" class="cal-tab active" data-days="30">30D</button>
+      <button type="button" class="cal-tab" data-days="90">90D</button>
+    </div>
+  </div>
+
+  <div class="trend-card">
+    <div class="trend-card-head">
+      <h3>Today's Score</h3>
+      <span class="trend-card-sub" id="scoreTrendSub">Loading…</span>
+    </div>
+    <div class="trend-chart-wrap"><canvas id="scoreTrendChart"></canvas></div>
+  </div>
+
+  <div class="trend-card">
+    <div class="trend-card-head">
+      <h3>Body Weight</h3>
+      <span class="trend-card-sub" id="weightTrendSub">Loading…</span>
+    </div>
+    <div class="trend-chart-wrap"><canvas id="weightTrendChart"></canvas></div>
+  </div>
+
+  <div class="trend-card">
+    <div class="trend-card-head">
+      <h3>Nutrition — Protein &amp; Calories</h3>
+      <span class="trend-card-sub" id="nutritionTrendSub">Loading…</span>
+    </div>
+    <div class="trend-chart-wrap"><canvas id="nutritionTrendChart"></canvas></div>
+  </div>
+
+  <div class="trend-card">
+    <div class="trend-card-head">
+      <h3>WHOOP — Recovery &amp; Sleep</h3>
+      <span class="trend-card-sub" id="whoopTrendSub">Loading…</span>
+    </div>
+    <div class="trend-chart-wrap"><canvas id="whoopTrendChart"></canvas></div>
+  </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+  function getSecret() { try { return localStorage.getItem('dashboard:secret') || ''; } catch (e) { return ''; } }
+
+  // =============================================================
+  // Date helpers — ported verbatim from main.html's score-engine
+  // script (mondayOfKey/addDaysKey/mondayBasedDayIndex/datesFromTo),
+  // per this project's established per-page small-duplication
+  // convention (no shared module for this — see e.g. topbar.js's
+  // Google-token helpers duplicated per render function). datesFromTo's
+  // guard is raised from main.html's own 8 (that copy only ever walks
+  // a single week) to 400, since this page needs up to 90 days.
+  // =============================================================
+  function addDaysKey(dateKeyStr, n) {
+    const d = DayLib.parseDateKey(dateKeyStr);
+    d.setDate(d.getDate() + n);
+    return DayLib.plainDateKey(d);
+  }
+  function mondayOfKey(dateKeyStr) {
+    const date = DayLib.parseDateKey(dateKeyStr);
+    const day = date.getDay();
+    const diff = (day === 0 ? -6 : 1) - day;
+    date.setDate(date.getDate() + diff);
+    return DayLib.plainDateKey(date);
+  }
+  function mondayBasedDayIndex(dateKeyStr) {
+    const day = DayLib.parseDateKey(dateKeyStr).getDay();
+    return day === 0 ? 6 : day - 1;
+  }
+  function datesFromTo(fromKey, toKey) {
+    const out = [];
+    let k = fromKey;
+    let guard = 0;
+    while (k <= toKey && guard++ < 400) { out.push(k); k = addDaysKey(k, 1); }
+    return out;
+  }
+  // Reads a WHOOP-style ISO created_at timestamp back into a LOCAL
+  // calendar-date key — the correct local-date derivation (mirrors
+  // topbar.js's calDateKey(new Date(...)) for the same WHOOP field),
+  // not the naive UTC-slice main.html's own single-day "is this today"
+  // check uses, which matters more here since this page buckets many
+  // records across a wide range rather than comparing just one.
+  function localDateKeyFromIso(iso) {
+    const d = new Date(iso);
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+  function shortLabel(dateKeyStr) {
+    return DayLib.parseDateKey(dateKeyStr).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  }
+
+  // =============================================================
+  // Today's Score engine — ported verbatim from main.html (habit
+  // config/defaults, all 5 category-scoring functions, the weighted
+  // combine) so this page computes EXACTLY the same score main.html's
+  // own hero ring does for any given day, not an approximation. The
+  // one deliberate deviation: scoreManualHabitsForDate() is called
+  // WITHOUT an autoSources argument, matching main.html's own
+  // established precedent for PAST days (see its weekly-average loop) —
+  // every auto_threshold habit is gracefully excluded rather than
+  // firing a live WHOOP "?limit=1" fetch that is structurally
+  // incapable of answering for a historical date (it can only ever
+  // tell you about the single most recent record, never a chosen past
+  // day) — doing that per day across a 90-day range would also be
+  // ~180 wasted network calls for a guaranteed-negative result.
+  // =============================================================
+  function defaultHabitConfig() {
+    return {
+      habits: [
+        { id: 'sleep_wake',   name: 'Slept early & woke early',    points: 10, buildOrQuit: 'build', frequency: { type: 'daily' }, dailyGoal: 2, unit: 'times', advanced: null },
+        { id: 'brush_teeth',  name: 'Brush teeth (AM + PM)',       points: 4,  buildOrQuit: 'build', frequency: { type: 'daily' }, dailyGoal: 2, unit: 'times', advanced: null },
+        { id: 'productivity', name: '1h focused productivity',     points: 8,  buildOrQuit: 'build', frequency: { type: 'daily' }, dailyGoal: 1, unit: 'times', advanced: null },
+        { id: 'screen_time',  name: 'Screen time under 6h',        points: 8,  buildOrQuit: 'build', frequency: { type: 'daily' }, dailyGoal: 1, unit: 'times', advanced: null },
+        { id: 'plan_day',     name: 'Plan the day',                points: 5,  buildOrQuit: 'build', frequency: { type: 'daily' }, dailyGoal: 1, unit: 'times', advanced: null },
+        { id: 'walk_dog',     name: 'Walk the dog (AM + PM)',      points: 6,  buildOrQuit: 'build', frequency: { type: 'daily' }, dailyGoal: 2, unit: 'times', advanced: null },
+        { id: 'no_phone_30',  name: 'No phone first 30 min',       points: 6,  buildOrQuit: 'build', frequency: { type: 'daily' }, dailyGoal: 1, unit: 'times', advanced: null },
+        { id: 'no_porn',      name: 'No porn',                     points: 15, buildOrQuit: 'quit',  frequency: { type: 'daily' }, dailyGoal: 1, unit: 'times', advanced: { zeroTolerance: true } },
+        { id: 'no_fap',       name: 'No fap',                      points: 15, buildOrQuit: 'quit',  frequency: { type: 'daily' }, dailyGoal: 1, unit: 'times', advanced: { weeklyCap: { allowedPerWeek: 2, weeklyPenalty: 15, dailyPenalty: 5 } } },
+        { id: 'read',         name: 'Read',                        points: 4,  buildOrQuit: 'build', frequency: { type: 'daily' }, dailyGoal: 1, unit: 'times', advanced: null },
+        { id: 'stretch',      name: 'Stretching (morning + night)',points: 6,  buildOrQuit: 'build', frequency: { type: 'daily' }, dailyGoal: 2, unit: 'times', advanced: null },
+      ],
+    };
+  }
+  function normalizeHabit(h) {
+    h = h || {};
+    if (h.dailyGoal != null || h.buildOrQuit || h.advanced !== undefined) {
+      return {
+        id: h.id,
+        name: h.name || h.label || '',
+        points: Number(h.points) || 0,
+        buildOrQuit: h.buildOrQuit === 'quit' ? 'quit' : 'build',
+        frequency: h.frequency || { type: 'daily' },
+        dailyGoal: Number(h.dailyGoal) || 1,
+        unit: typeof h.unit === 'string' ? h.unit : 'times',
+        advanced: h.advanced || null,
+      };
+    }
+    const base = { id: h.id, name: h.label || '', points: Number(h.points) || 0, frequency: { type: 'daily' } };
+    if (h.type === 'manual_count2') return { ...base, buildOrQuit: 'build', dailyGoal: 2, unit: 'times', advanced: null };
+    if (h.type === 'manual_numeric') return { ...base, buildOrQuit: 'build', dailyGoal: Number(h.goal) || 1, unit: (h.unit != null ? h.unit : ''), advanced: null };
+    if (h.type === 'zero_tolerance') return { ...base, buildOrQuit: 'quit', dailyGoal: 1, unit: 'times', advanced: { zeroTolerance: true } };
+    if (h.type === 'weekly_cap') return { ...base, buildOrQuit: 'quit', dailyGoal: 1, unit: 'times', advanced: { weeklyCap: { allowedPerWeek: h.weeklyCap, weeklyPenalty: h.weeklyPenaltyPoints, dailyPenalty: h.perExtraDayPenaltyPoints } } };
+    if (h.type === 'auto_threshold') return { ...base, buildOrQuit: 'build', dailyGoal: 1, unit: 'times', advanced: { autoThreshold: { source: h.source, operator: h.operator, value: h.threshold } } };
+    return { ...base, buildOrQuit: 'build', dailyGoal: 1, unit: 'times', advanced: null };
+  }
+  async function fetchHabitConfig() {
+    const secret = getSecret();
+    if (!secret) return defaultHabitConfig();
+    let config = null;
+    try {
+      const r = await fetch('/api/sync-state?resource=habit-config&secret=' + encodeURIComponent(secret));
+      const j = await r.json();
+      if (j && j.ok && j.config && Array.isArray(j.config.habits) && j.config.habits.length) config = j.config;
+    } catch (e) {}
+    if (!config) config = defaultHabitConfig();
+    return { habits: config.habits.map(normalizeHabit) };
+  }
+  async function fetchDailyHabitsRange(fromKey, toKey) {
+    const secret = getSecret();
+    const out = {};
+    if (!secret) return out;
+    try {
+      const r = await fetch('/api/sync-state?resource=daily-habits&secret=' + encodeURIComponent(secret) + '&from=' + fromKey + '&to=' + toKey);
+      const j = await r.json();
+      if (j && j.ok && Array.isArray(j.days)) j.days.forEach((row) => { out[row.date] = row.entries; });
+    } catch (e) {}
+    return out;
+  }
+  function manualHabitFraction(habit, entryVal) {
+    return Math.max(0, Math.min(1, (Number(entryVal) || 0) / (Number(habit.dailyGoal) || 1)));
+  }
+  function weekOccurrenceCount(habit, entriesByDate, fromKey, toKey) {
+    let n = 0;
+    datesFromTo(fromKey, toKey).forEach((k) => {
+      const e = entriesByDate[k] && entriesByDate[k][habit.id];
+      if (e && e.na !== true && manualHabitFraction(habit, e.value) < 1) n++;
+    });
+    return n;
+  }
+  // Identical to main.html's scoreManualHabitsForDate() except the
+  // 5th parameter (autoSources) is always omitted here — see this
+  // section's header comment above for why that's the correct
+  // behavior for a past day, not a shortcut.
+  function scoreManualHabitsForDate(habitConfig, entriesByDate, dateActiveKey, weekMondayActiveKey) {
+    const entry = entriesByDate[dateActiveKey] || null;
+    let earned = 0, possible = 0;
+    const breakdown = [];
+    const flags = [];
+    (habitConfig.habits || []).forEach((h) => {
+      const advanced = h.advanced || null;
+      if (advanced && advanced.autoThreshold) {
+        breakdown.push({ id: h.id, label: h.name, points: h.points, status: 'unlogged' });
+        return;
+      }
+      const e = entry && entry[h.id];
+      if (!e) { breakdown.push({ id: h.id, label: h.name, points: h.points, status: 'unlogged' }); return; }
+      if (e.na === true) { breakdown.push({ id: h.id, label: h.name, points: h.points, status: 'na' }); return; }
+
+      if (advanced && advanced.weeklyCap) {
+        const cfg = advanced.weeklyCap;
+        possible += h.points;
+        if (manualHabitFraction(h, e.value) >= 1) {
+          earned += h.points;
+          breakdown.push({ id: h.id, label: h.name, points: h.points, earnedPts: h.points, status: 'ok' });
+        } else {
+          const countThroughToday = weekOccurrenceCount(h, entriesByDate, weekMondayActiveKey, dateActiveKey);
+          const over = Math.max(0, countThroughToday - (cfg.allowedPerWeek || 0));
+          const pts = Math.max(0, h.points - over * (cfg.dailyPenalty || 0));
+          earned += pts;
+          breakdown.push({ id: h.id, label: h.name, points: h.points, earnedPts: pts, status: pts <= 0 ? 'zero' : 'partial', overCap: countThroughToday > (cfg.allowedPerWeek || 0) });
+        }
+        return;
+      }
+
+      const frac = manualHabitFraction(h, e.value);
+      const pts = frac * h.points;
+      earned += pts; possible += h.points;
+      const zt = !!(advanced && advanced.zeroTolerance) && frac === 0;
+      if (zt) flags.push(h.name);
+      breakdown.push({ id: h.id, label: h.name, points: h.points, earnedPts: pts, status: zt ? 'zero_tolerance_violation' : (pts >= h.points ? 'ok' : (pts <= 0 ? 'zero' : 'partial')) });
+    });
+    return { earned, possible, breakdown, flags };
+  }
+  function combineTrainingFraction(strength, running) {
+    const fracs = [];
+    if (strength.available) fracs.push(strength.fraction);
+    if (running.available) fracs.push(running.fraction);
+    if (!fracs.length) return { available: false };
+    return { available: true, fraction: fracs.reduce((a, b) => a + b, 0) / fracs.length };
+  }
+  function combineWeightedCategories(categories, weights) {
+    let earned = 0, weightSum = 0;
+    categories.forEach(({ key, c }) => {
+      if (!c.available) return;
+      const w = Number(weights[key]) || 0;
+      earned += c.fraction * w;
+      weightSum += w;
+    });
+    return weightSum > 0 ? Math.round((earned / weightSum) * 100) : null;
+  }
+  function computeStackCategory(dateActiveKey) {
+    if (typeof window.CronoLib === 'undefined') return { available: false };
+    const pct = window.CronoLib.getStackCompletionForDate(dateActiveKey);
+    if (pct == null) return { available: false };
+    return { available: true, fraction: pct / 100 };
+  }
+  function computeWaterCategory(datePlainKey) {
+    let s = null;
+    try { s = JSON.parse(localStorage.getItem('po_water_v1')); } catch (e) {}
+    if (!s || typeof s !== 'object') return { available: false };
+    const logs = s.logs || {};
+    if (!Object.prototype.hasOwnProperty.call(logs, datePlainKey)) return { available: false };
+    const count = logs[datePlainKey] || 0;
+    const unitMl = s.unit === 'bottle' ? (s.bottleMl || 500) : s.unit === 'glass' ? (s.glassMl || 250) : s.unit === 'oz' ? 30 : 1;
+    const drankMl = count * unitMl;
+    const p = Object.assign({ weightKg: 75, age: 25, sex: 'm', activityHrsPerWeek: 5 }, s.profile || {});
+    const wKg = s.weightUnit === 'lb' ? p.weightKg / 2.20462 : p.weightKg;
+    const base = wKg * 35;
+    const exercise = (p.activityHrsPerWeek || 0) / 7 * 500;
+    const caffeine = Math.max(0, (s.caffeineMgPerDay != null ? s.caffeineMgPerDay : 200) - 200) * 1.5;
+    let adjust = 0;
+    if (p.sex === 'm') adjust += 200;
+    if ((p.age || 0) >= 50) adjust += 100;
+    const targetMl = base + exercise + caffeine + adjust;
+    if (!targetMl) return { available: false };
+    return { available: true, fraction: Math.min(1, drankMl / targetMl) };
+  }
+  function todaySplitFor(pcState, dateKeyStr) {
+    try {
+      const rot = pcState.splitRotation;
+      if (!rot || !rot.length) return { name: '—' };
+      const a = DayLib.parseDateKey(pcState.splitAnchor.date);
+      const t = DayLib.parseDateKey(dateKeyStr);
+      a.setHours(0, 0, 0, 0); t.setHours(0, 0, 0, 0);
+      const diffDays = Math.round((t - a) / 86400000);
+      const idx = ((pcState.splitAnchor.index + diffDays) % rot.length + rot.length) % rot.length;
+      return { name: rot[idx] };
+    } catch (e) { return { name: '—' }; }
+  }
+  function computeStrengthCategory(datePlainKey) {
+    let pc = null;
+    try { pc = JSON.parse(localStorage.getItem('po_coach_v1')); } catch (e) {}
+    if (!pc || !Array.isArray(pc.splitRotation) || !pc.splitRotation.length || !pc.splitAnchor || !pc.splitAnchor.date) return { available: false };
+    const split = todaySplitFor(pc, datePlainKey);
+    if (/^rest\b/i.test(split.name || '')) return { available: false };
+    let doneDays = {};
+    try { doneDays = JSON.parse(localStorage.getItem('po_coach_workout_done')) || {}; } catch (e) {}
+    return { available: true, fraction: doneDays[datePlainKey] ? 1 : 0 };
+  }
+  function migratePlanCardio(planInner) {
+    if (!planInner || typeof planInner !== 'object' || planInner.cardio) return planInner;
+    const running = planInner.running;
+    if (!running) return planInner;
+    const longRun = running.longRun || {};
+    const easyVolume = running.easyVolume || {};
+    return Object.assign({}, planInner, {
+      cardio: {
+        longSession: { activityTypeId: 'running', targetAmount: longRun.targetKm || 0 },
+        easyVolume: { activityTypeId: 'running', targetAmount: easyVolume.targetKm || 0 },
+      },
+    });
+  }
+  function computeRunningCategory(datePlainKey, weekMondayPlainKey) {
+    let plan = null;
+    try { plan = JSON.parse(localStorage.getItem('po_coach_weekly_plan_v1')); } catch (e) {}
+    if (plan && plan.plan) plan.plan = migratePlanCardio(plan.plan);
+    if (!plan || plan.weekStart !== weekMondayPlainKey || !plan.plan || !plan.plan.cardio) return { available: false };
+    const cardio = plan.plan.cardio;
+    const longSession = cardio.longSession || {};
+    const easyVolume = cardio.easyVolume || {};
+    let kmTarget = 0;
+    if (longSession.activityTypeId === 'running') kmTarget += Number(longSession.targetAmount) || 0;
+    if (easyVolume.activityTypeId === 'running') kmTarget += Number(easyVolume.targetAmount) || 0;
+    kmTarget = Math.round(kmTarget * 10) / 10;
+    if (!kmTarget) return { available: false };
+    let runs = [];
+    try { runs = JSON.parse(localStorage.getItem('po_coach_runs')) || []; } catch (e) { runs = []; }
+    const soFar = runs.filter((r) => r && r.dateKey >= weekMondayPlainKey && r.dateKey <= datePlainKey);
+    const kmDone = Math.round(soFar.reduce((s, r) => s + (Number(r.distanceKm) || 0), 0) * 10) / 10;
+    const dayIdx = mondayBasedDayIndex(datePlainKey);
+    const expected = kmTarget * ((dayIdx + 1) / 7);
+    const fraction = expected > 0 ? Math.min(1, kmDone / expected) : 1;
+    return { available: true, fraction };
+  }
+  // One day's score, given already-fetched shared context (habitConfig/
+  // entriesByDate/cronoCache/weights) — mirrors main.html's own
+  // weekly-average loop body exactly, just generalized to any date
+  // instead of only the current week's days.
+  function computeDayScoreFromCache(dk, habitConfig, entriesByDate, cronoCache, weights) {
+    const weekMonday = mondayOfKey(dk);
+    let nutrition = { available: false };
+    if (cronoCache) {
+      const dates = window.CronoLib.listAvailableDates(cronoCache.rows, cronoCache.headers);
+      if (dates.indexOf(dk) !== -1) {
+        const targets = window.CronoLib.loadTargets();
+        const totals = window.CronoLib.sumNutrientsForDate(cronoCache.rows, cronoCache.headers, dk, targets);
+        const { score: s } = window.CronoLib.computeScore(totals, targets);
+        if (s != null) nutrition = { available: true, fraction: s / 100 };
+      }
+    }
+    const manual = scoreManualHabitsForDate(habitConfig, entriesByDate, dk, weekMonday);
+    const stack = computeStackCategory(dk);
+    const water = computeWaterCategory(dk);
+    const strength = computeStrengthCategory(dk);
+    const running = computeRunningCategory(dk, weekMonday);
+    const training = combineTrainingFraction(strength, running);
+    const habits = manual.possible > 0 ? { available: true, fraction: manual.earned / manual.possible } : { available: false };
+    return combineWeightedCategories([
+      { key: 'habits', c: habits },
+      { key: 'training', c: training },
+      { key: 'nutrition', c: nutrition },
+      { key: 'water', c: water },
+      { key: 'dailyStack', c: stack },
+    ], weights);
+  }
+  // Total network calls for the whole range, matching main.html's own
+  // weekly-loop precedent: 1 (habit config) + 1 (daily-habits range) +
+  // 1 (Cronometer blob) = 3, regardless of how many days are in range.
+  async function loadScoreTrend(dates, fromKey, toKey) {
+    const habitConfig = await fetchHabitConfig();
+    const entriesByDate = await fetchDailyHabitsRange(fromKey, toKey);
+    let cronoCache = null;
+    if (typeof window.CronoLib !== 'undefined' && window.CronoLib.getSecret()) {
+      try { const r = await window.CronoLib.fetchCronometerData(); if (r.ok) cronoCache = r; } catch (e) {}
+    }
+    const weights = (DayLib.loadProfile().categoryWeights) || DayLib.DEFAULT_PROFILE.categoryWeights;
+    const data = dates.map((dk) => computeDayScoreFromCache(dk, habitConfig, entriesByDate, cronoCache, weights));
+    renderLineChart('scoreTrendChart', dates.map(shortLabel), [{ label: "Today's Score", data, color: '#1D9E75' }]);
+    const loggedCount = data.filter((v) => v != null).length;
+    $('scoreTrendSub').textContent = loggedCount ? (loggedCount + ' of ' + dates.length + ' days scored') : 'Not enough data to score any day in this range';
+  }
+
+  // =============================================================
+  // Body weight — po_coach_weights is already a complete, date-keyed,
+  // sorted history array (gym.html's own WT_KEY) — a pure client-side
+  // filter, zero network calls.
+  // =============================================================
+  function loadWeightTrend(dates) {
+    let entries = [];
+    try { entries = JSON.parse(localStorage.getItem('po_coach_weights')) || []; } catch (e) {}
+    const byDate = {};
+    (Array.isArray(entries) ? entries : []).forEach((e) => { if (e && e.dateKey) byDate[e.dateKey] = e.weight; });
+    const data = dates.map((dk) => (byDate[dk] != null ? byDate[dk] : null));
+    let units = 'kg';
+    try { const pc = JSON.parse(localStorage.getItem('po_coach_v1')); if (pc && pc.units) units = pc.units; } catch (e) {}
+    renderLineChart('weightTrendChart', dates.map(shortLabel), [{ label: 'Weight (' + units + ')', data, color: '#1D9E75' }]);
+    const loggedCount = data.filter((v) => v != null).length;
+    $('weightTrendSub').textContent = loggedCount ? (loggedCount + ' logged ' + (loggedCount === 1 ? 'entry' : 'entries')) : 'No weight logged in this range';
+  }
+
+  // =============================================================
+  // Nutrition — protein % and calories % per day, from the SAME
+  // Cronometer blob computeAutoThresholdSources() already extracts
+  // crono_protein/crono_calories from in main.html. Depth-limited to
+  // whatever the last sync actually covers (see the Phase 1 investigation:
+  // api/cronometer-data.js overwrites wholesale on every sync, no
+  // merge/accumulation layer) — days outside that window correctly show
+  // as gaps, not zeros.
+  // =============================================================
+  async function loadNutritionTrend(dates) {
+    if (typeof window.CronoLib === 'undefined' || !window.CronoLib.getSecret()) {
+      renderLineChart('nutritionTrendChart', dates.map(shortLabel), [
+        { label: 'Protein %', data: dates.map(() => null), color: '#1D9E75' },
+        { label: 'Calories %', data: dates.map(() => null), color: '#FFC93C' },
+      ]);
+      $('nutritionTrendSub').textContent = 'Cronometer not connected';
+      return;
+    }
+    let result = null;
+    try { result = await window.CronoLib.fetchCronometerData(); } catch (e) {}
+    let availableDates = [];
+    if (result && result.ok) availableDates = window.CronoLib.listAvailableDates(result.rows, result.headers);
+    const targets = window.CronoLib.loadTargets();
+    const proteinData = [], caloriesData = [];
+    dates.forEach((dk) => {
+      if (!result || !result.ok || availableDates.indexOf(dk) === -1) { proteinData.push(null); caloriesData.push(null); return; }
+      const totals = window.CronoLib.sumNutrientsForDate(result.rows, result.headers, dk, targets);
+      const { breakdown } = window.CronoLib.computeScore(totals, targets);
+      const protein = breakdown.find((b) => b.id === 'protein');
+      const energy = breakdown.find((b) => b.id === 'energy');
+      proteinData.push(protein && protein.fraction != null ? Math.round(protein.fraction * 100) : null);
+      caloriesData.push(energy && energy.fraction != null ? Math.round(energy.fraction * 100) : null);
+    });
+    renderLineChart('nutritionTrendChart', dates.map(shortLabel), [
+      { label: 'Protein %', data: proteinData, color: '#1D9E75' },
+      { label: 'Calories %', data: caloriesData, color: '#FFC93C' },
+    ]);
+    const loggedCount = dates.filter((dk) => availableDates.indexOf(dk) !== -1).length;
+    $('nutritionTrendSub').textContent = loggedCount
+      ? (loggedCount + ' of ' + dates.length + ' days synced' + (loggedCount < dates.length ? ' — sync a longer window on the Cronometer page for more history' : ''))
+      : 'No Cronometer data synced in this range';
+  }
+
+  // =============================================================
+  // WHOOP — confirmed against WHOOP's own current v2 API docs (Phase 1
+  // investigation): the Recovery (/v2/recovery) and Sleep
+  // (/v2/activity/sleep) collections both support start (inclusive)/
+  // end (exclusive) RFC3339 range filtering, limit capped at 25, and
+  // cursor pagination via the `nextToken` request param / `next_token`
+  // response field. api/whoop-data.js needs no changes — it already
+  // forwards every query param verbatim. Every OTHER caller in this
+  // app hardcodes limit=1 (today-only); this is the first to use a
+  // real date range.
+  // =============================================================
+  const WHOOP_KEY = 'whoop_tokens_v1';
+  const WHOOP_REFRESH_COOLDOWN_KEY = 'whoop_refresh_cooldown_until';
+  const WHOOP_REFRESH_COOLDOWN_MS = 20 * 60 * 1000;
+  function isWhoopRefreshCoolingDown() { return Date.now() < (Number(localStorage.getItem(WHOOP_REFRESH_COOLDOWN_KEY)) || 0); }
+  function startWhoopRefreshCooldown() { try { localStorage.setItem(WHOOP_REFRESH_COOLDOWN_KEY, String(Date.now() + WHOOP_REFRESH_COOLDOWN_MS)); } catch (e) {} }
+  function clearWhoopRefreshCooldown() { try { localStorage.removeItem(WHOOP_REFRESH_COOLDOWN_KEY); } catch (e) {} }
+  async function whoopRefreshToken(t) {
+    if (!t.refresh) return null;
+    if (isWhoopRefreshCoolingDown()) return null;
+    try {
+      const r = await fetch('/api/whoop-refresh', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: t.refresh }),
+      });
+      const j = await r.json();
+      if (j.access_token) {
+        const next = { access: j.access_token, refresh: j.refresh_token || t.refresh, expires: Date.now() + (j.expires_in || 3500) * 1000 };
+        try { localStorage.setItem(WHOOP_KEY, JSON.stringify(next)); } catch (e) {}
+        clearWhoopRefreshCooldown();
+        return next;
+      }
+    } catch (e) {}
+    startWhoopRefreshCooldown();
+    return null;
+  }
+  async function whoopProxyFetch(path, t) {
+    const [p, qs] = path.split('?');
+    const params = new URLSearchParams(qs || ''); params.set('path', p);
+    const r = await fetch('/api/whoop-data?' + params.toString(), { headers: { Authorization: 'Bearer ' + t.access, Accept: 'application/json' } });
+    if (r.status === 401) { const n = await whoopRefreshToken(t); if (n) return whoopProxyFetch(path, n); throw new Error('unauthorized'); }
+    if (!r.ok) throw new Error('WHOOP ' + r.status);
+    return r.json();
+  }
+  async function fetchWhoopRangeAll(basePath, startIso, endIso, t) {
+    let records = [];
+    let nextToken = null;
+    let guard = 0;
+    while (guard++ < 20) {
+      let qs = basePath + '?start=' + encodeURIComponent(startIso) + '&end=' + encodeURIComponent(endIso) + '&limit=25';
+      if (nextToken) qs += '&nextToken=' + encodeURIComponent(nextToken);
+      const data = await whoopProxyFetch(qs, t);
+      const page = (data && data.records) || [];
+      records = records.concat(page);
+      nextToken = data && data.next_token;
+      if (!nextToken || !page.length) break;
+    }
+    return records;
+  }
+  async function loadWhoopTrend(dates, fromKey, toKey) {
+    let tokens = null;
+    try { tokens = JSON.parse(localStorage.getItem(WHOOP_KEY)); } catch (e) {}
+    if (!tokens || !tokens.access) {
+      renderLineChart('whoopTrendChart', dates.map(shortLabel), [
+        { label: 'Recovery %', data: dates.map(() => null), color: '#1D9E75' },
+        { label: 'Sleep %', data: dates.map(() => null), color: '#FFC93C' },
+      ]);
+      $('whoopTrendSub').textContent = 'WHOOP not connected';
+      return;
+    }
+    try {
+      let t = tokens;
+      if (t.expires && Date.now() > t.expires - 60000) { const n = await whoopRefreshToken(t); if (n) t = n; }
+      const startIso = DayLib.parseDateKey(fromKey).toISOString();
+      const endIso = DayLib.parseDateKey(addDaysKey(toKey, 1)).toISOString(); // end is exclusive — one day past toKey includes all of toKey
+      const [recRecords, sleepRecords] = await Promise.all([
+        fetchWhoopRangeAll('/recovery', startIso, endIso, t),
+        fetchWhoopRangeAll('/activity/sleep', startIso, endIso, t),
+      ]);
+      const recoveryByDate = {};
+      recRecords.forEach((r) => {
+        if (!r || !r.score || !r.created_at) return;
+        const dk = localDateKeyFromIso(r.created_at);
+        if (!(dk in recoveryByDate)) recoveryByDate[dk] = Math.round(r.score.recovery_score || 0); // records sort DESC — first seen per date is the most recent
+      });
+      const sleepByDate = {};
+      sleepRecords.forEach((s) => {
+        if (!s || !s.score || !s.created_at) return;
+        const dk = localDateKeyFromIso(s.created_at);
+        if (!(dk in sleepByDate)) sleepByDate[dk] = Math.round(s.score.sleep_performance_percentage || 0);
+      });
+      const recoveryData = dates.map((dk) => (dk in recoveryByDate ? recoveryByDate[dk] : null));
+      const sleepData = dates.map((dk) => (dk in sleepByDate ? sleepByDate[dk] : null));
+      renderLineChart('whoopTrendChart', dates.map(shortLabel), [
+        { label: 'Recovery %', data: recoveryData, color: '#1D9E75' },
+        { label: 'Sleep %', data: sleepData, color: '#FFC93C' },
+      ]);
+      const loggedCount = recoveryData.filter((v) => v != null).length;
+      $('whoopTrendSub').textContent = loggedCount ? (loggedCount + ' of ' + dates.length + ' days with recovery data') : 'No WHOOP data synced in this range';
+    } catch (e) {
+      renderLineChart('whoopTrendChart', dates.map(shortLabel), [
+        { label: 'Recovery %', data: dates.map(() => null), color: '#1D9E75' },
+        { label: 'Sleep %', data: dates.map(() => null), color: '#FFC93C' },
+      ]);
+      $('whoopTrendSub').textContent = 'Could not load WHOOP data';
+    }
+  }
+
+  // =============================================================
+  // Chart rendering — same Chart.js version/visual language as
+  // topbar.js's chat chart feature (see its renderChartCanvas()):
+  // line, tension 0.3, thin border, small ticks. Theme-aware (reads
+  // this page's own CSS variables at render time) since main.html
+  // supports a light theme and the chat's own chart never needed to.
+  // spanGaps:false on every dataset is the one non-negotiable option
+  // here — a `null` in the data array must render as a visible break
+  // in the line, never bridged, matching this app's "no data = null,
+  // not zero, not guessed" principle used everywhere else.
+  // =============================================================
+  const chartInstances = {};
+  function themeColor(varName, fallback) {
+    const v = getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
+    return v || fallback;
+  }
+  function renderLineChart(canvasId, labels, datasetsSpec) {
+    if (typeof window.Chart === 'undefined') return; // CDN failed to load — charts just don't render, no fake fallback data
+    const canvas = $(canvasId);
+    if (!canvas) return;
+    if (chartInstances[canvasId]) chartInstances[canvasId].destroy();
+    const tickColor = themeColor('--text-tertiary', '#76746E');
+    const gridColor = themeColor('--line-soft', 'rgba(255,255,255,0.06)');
+    const datasets = datasetsSpec.map((ds) => ({
+      label: ds.label,
+      data: ds.data,
+      borderColor: ds.color,
+      backgroundColor: ds.color + '26',
+      pointRadius: 2,
+      pointHoverRadius: 4,
+      pointBackgroundColor: ds.color,
+      borderWidth: 2,
+      tension: 0.3,
+      fill: datasetsSpec.length === 1,
+      spanGaps: false,
+    }));
+    chartInstances[canvasId] = new window.Chart(canvas.getContext('2d'), {
+      type: 'line',
+      data: { labels, datasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { display: datasets.length > 1, labels: { color: tickColor, font: { size: 10 }, boxWidth: 10 } },
+        },
+        scales: {
+          x: { ticks: { color: tickColor, font: { size: 10 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 8 }, grid: { color: gridColor } },
+          y: { ticks: { color: tickColor, font: { size: 10 } }, grid: { color: gridColor } },
+        },
+      },
+    });
+  }
+
+  // =============================================================
+  // Orchestration — range selector + one load pass per selection.
+  // =============================================================
+  let currentDays = 30;
+  async function loadAll() {
+    document.querySelectorAll('.trend-card-sub').forEach((el) => { el.textContent = 'Loading…'; });
+    const toKey = DayLib.effectiveDateKey();
+    const fromKey = addDaysKey(toKey, -(currentDays - 1));
+    const dates = datesFromTo(fromKey, toKey);
+    await Promise.all([
+      loadScoreTrend(dates, fromKey, toKey),
+      loadWeightTrend(dates),
+      loadNutritionTrend(dates),
+      loadWhoopTrend(dates, fromKey, toKey),
+    ]);
+  }
+
+  $('trendRangeTabs').querySelectorAll('.cal-tab').forEach((tab) => {
+    tab.addEventListener('click', () => {
+      $('trendRangeTabs').querySelectorAll('.cal-tab').forEach((t) => t.classList.remove('active'));
+      tab.classList.add('active');
+      currentDays = Number(tab.dataset.days) || 30;
+      loadAll();
+    });
+  });
+
+  loadAll();
+});
+</script>
+</body>
+</html>

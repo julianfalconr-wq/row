@@ -414,6 +414,9 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
   <a href="habits.html" class="bottombar-tab" data-page="habits">
     <i data-lucide="list-checks" class="bottombar-tab-icon"></i><span>Habits</span>
   </a>
+  <a href="trends.html" class="bottombar-tab" data-page="trends">
+    <i data-lucide="trending-up" class="bottombar-tab-icon"></i><span>Trends</span>
+  </a>
 </nav>`;
 
   const chatFabHtml = `
@@ -508,6 +511,7 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
     if (p.endsWith('health.html')) return 'health';
     if (p.endsWith('gym.html')) return 'training';
     if (p.endsWith('habits.html')) return 'habits';
+    if (p.endsWith('trends.html')) return 'trends';
     if (p.endsWith('main.html')) return 'main';
     return 'hub'; // index.html (the bento hub) — no bottombar tab represents it
   }
