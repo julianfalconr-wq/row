@@ -534,9 +534,25 @@ body::after {
   display: flex; gap: 12px; align-items: flex-start;
   padding: 10px 12px; background: var(--inset-bg); border: 1px solid var(--line); border-radius: 10px;
 }
+/* flex-shrink:0, not the default 1: this text is white-space:nowrap
+   (unbreakable) with no overflow:hidden, so if the flex row ever runs
+   short on space — e.g. a nested-event chip inflating .cal-event-body's
+   own preferred width — the previous default (shrinkable, floored only
+   at min-width:60px, well under this text's real ~110-150px content
+   width) let it get compressed below its own content size, and the
+   overflowing text visually spilled rightward past its box straight
+   into the title ("2:15 p.m. — 5:30 p" running into "Grandpas").
+   Pinning it to its natural width and letting .cal-event-body (already
+   min-width:0, and itself housing a title that already wraps via
+   word-break) absorb 100% of any real squeeze mirrors the same
+   treatment already given to .cal-event-nested-time below. min-width
+   stays as a floor for short times (e.g. a single "9 AM" with no
+   range) so the column still lines up consistently — harmless once
+   content exceeds it, since flex-shrink:0 already guarantees no
+   shrinking below content width regardless. */
 .cal-event-time {
   font-family: var(--font-mono); font-size: 11.5px; color: var(--text-tertiary);
-  white-space: nowrap; padding-top: 1px; min-width: 60px;
+  white-space: nowrap; padding-top: 1px; min-width: 60px; flex-shrink: 0;
 }
 .cal-event-body { min-width: 0; }
 .cal-event-title { font-size: 13px; color: var(--text-primary); font-weight: 600; word-break: break-word; }
