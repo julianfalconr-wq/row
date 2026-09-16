@@ -1,0 +1,709 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<!-- Not deferred, on purpose and first — see lock.js's own header
+     comment. Matches main.html/gym.html/trends.html's exact head
+     ordering. -->
+<script src="lock.js"></script>
+<script>
+(function () {
+  try {
+    var t = localStorage.getItem('dashboard:theme');
+    if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+  } catch (e) {}
+})();
+</script>
+<!-- Reached from main.html's new "Plan" card, not the bottom tab bar
+     (see that card's own comment for why) — so this needs the shared
+     topbar's back button. Must be set BEFORE topbar.js runs (see
+     topbar.js's injectBackButton() header comment). -->
+<script>window.ROW_BACK_TO = 'main.html';</script>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#050506">
+<title>Plan · Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="sync.js" defer></script>
+<script src="https://unpkg.com/lucide@1.43.0/dist/umd/lucide.js" defer></script>
+<script src="topbar.js" defer></script>
+<!-- Not deferred — matches main.html/gym.html/trends.html's daylib.js
+     tag exactly (see daylib.js's own header comment on why); this
+     page's own script is DOMContentLoaded-wrapped so defer would also
+     technically work here, but there's nothing to gain from diverging
+     from the established pattern. -->
+<script src="daylib.js"></script>
+<!-- Same exact version trends.html/topbar.js's chat feature already
+     load — see trends.html's own comment on why this stays in sync
+     deliberately. -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js" defer></script>
+<style>
+/* Design tokens copied verbatim from trends.html (itself copied from
+   main.html) — same scheme, so this page matches the rest of the app
+   rather than introducing a fourth. */
+:root {
+  --surface-1: #050506;
+  --surface-2: #121214;
+  --inset-bg: rgba(0,0,0,0.30);
+  --line: rgba(255,255,255,0.09);
+  --line-soft: rgba(255,255,255,0.06);
+  --text-primary: #FAFAFA;
+  --text-secondary: #A5A3A0;
+  --text-tertiary: #6E6C68;
+  --success: #17E88F;
+  --warning: #FFC93C;
+  --danger: #FF4D5E;
+  --shadow-card: 0 14px 34px rgba(0,0,0,0.45);
+  --title-grad-a: #FFFFFF;
+  --title-grad-b: #C7C4BC;
+  --btn-primary-a: #FFFFFF;
+  --btn-primary-b: #E8E5DD;
+  --btn-primary-text: #0A0A0B;
+  --glow-opacity: 1;
+  --font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+:root[data-theme="light"] {
+  --surface-1: #F3F3F1;
+  --surface-2: #FFFFFF;
+  --inset-bg: rgba(0,0,0,0.035);
+  --line: rgba(15,15,20,0.10);
+  --line-soft: rgba(15,15,20,0.07);
+  --text-primary: #141416;
+  --text-secondary: #55545C;
+  --text-tertiary: #8B8A90;
+  --shadow-card: 0 10px 26px rgba(20,20,26,0.08);
+  --title-grad-a: #141416;
+  --title-grad-b: #4A4952;
+  --btn-primary-a: #141416;
+  --btn-primary-b: #2B2A30;
+  --btn-primary-text: #FAFAFA;
+  --glow-opacity: 0.35;
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; padding: 0;
+  background: var(--surface-1);
+  color: var(--text-secondary);
+  font-family: var(--font);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-text-size-adjust: 100%;
+  transition: background 0.3s, color 0.3s;
+}
+body {
+  min-height: 100vh;
+  position: relative;
+  overflow-x: hidden;
+  padding: max(28px, env(safe-area-inset-top)) 20px 60px;
+}
+/* iOS Safari auto-zooms on focus for any input/textarea/select under
+   16px font-size, and never zooms back out on blur since this page's
+   viewport meta tag has no maximum-scale/user-scalable restriction —
+   see main.html/health.html/gym.html/habits.html/cronometer.html's own
+   identical fix earlier this project. This page has no text inputs of
+   its own today, but the rule costs nothing to include up front for
+   consistency/future-proofing rather than being missed later. */
+@media (max-width: 480px) {
+  input, textarea, select { font-size: 16px !important; }
+}
+body::before {
+  content: '';
+  position: fixed; inset: 0;
+  background:
+    radial-gradient(circle at 82% 14%, rgba(23, 232, 143, 0.14), transparent 45%),
+    radial-gradient(circle at 18% 90%, rgba(180, 180, 200, 0.06), transparent 50%);
+  filter: blur(40px);
+  opacity: var(--glow-opacity);
+  pointer-events: none;
+  z-index: -2;
+  animation: drift 36s ease-in-out infinite alternate;
+}
+body::after {
+  content: '';
+  position: fixed; inset: 0;
+  background-image: radial-gradient(rgba(255,255,255,0.014) 1px, transparent 1px);
+  background-size: 3px 3px;
+  opacity: var(--glow-opacity);
+  pointer-events: none;
+  z-index: -1;
+}
+@keyframes drift {
+  0%   { transform: translate3d(0,0,0); }
+  100% { transform: translate3d(-22px, 14px, 0); }
+}
+
+.page { max-width: 720px; margin: 0 auto; }
+
+.plan-head { margin-bottom: 4px; }
+.plan-title { font-size: 22px; font-weight: 800; color: var(--text-primary); letter-spacing: -0.02em; }
+.plan-subtitle { font-size: 13px; color: var(--text-tertiary); margin-top: 4px; line-height: 1.5; }
+
+.plan-card {
+  position: relative;
+  background: var(--surface-2);
+  border: 1px solid var(--line-soft);
+  border-radius: 18px;
+  padding: 22px;
+  margin-top: 18px;
+  box-shadow: var(--shadow-card);
+}
+
+/* Empty state — no active plan yet. */
+.plan-empty-icon {
+  width: 44px; height: 44px; border-radius: 12px;
+  background: var(--inset-bg); border: 1px solid var(--line);
+  display: flex; align-items: center; justify-content: center;
+  color: var(--text-tertiary); margin-bottom: 14px;
+}
+.plan-empty-title { font-size: 16px; font-weight: 700; color: var(--text-primary); margin-bottom: 6px; }
+.plan-empty-sub { font-size: 13px; color: var(--text-tertiary); line-height: 1.5; margin-bottom: 18px; }
+.plan-start-btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 11px 18px; border: none; border-radius: 12px;
+  background: linear-gradient(180deg, var(--btn-primary-a), var(--btn-primary-b));
+  color: var(--btn-primary-text);
+  font-family: inherit; font-size: 13.5px; font-weight: 700;
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+
+/* Active plan header. */
+.plan-goal-desc { font-size: 16px; font-weight: 700; color: var(--text-primary); line-height: 1.4; }
+.plan-goal-meta { font-size: 11.5px; color: var(--text-tertiary); margin-top: 6px; font-family: var(--font-mono); }
+.plan-progress-row { display: flex; align-items: baseline; gap: 8px; margin-top: 16px; }
+.plan-progress-num {
+  font-size: 38px; font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.04em; color: var(--text-primary); line-height: 1;
+}
+.plan-progress-target { font-family: var(--font-mono); font-size: 16px; color: var(--text-tertiary); }
+.plan-progress-bar-wrap {
+  height: 8px; border-radius: 999px; background: var(--inset-bg);
+  border: 1px solid var(--line); margin-top: 12px; overflow: hidden;
+}
+.plan-progress-bar { height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--success), #0FC77A); transition: width 0.4s; }
+.plan-progress-bar.is-loss-direction { background: linear-gradient(90deg, #4DA8FF, var(--success)); }
+
+.plan-chart-wrap { position: relative; height: 200px; margin-top: 20px; }
+@media (max-width: 480px) { .plan-chart-wrap { height: 175px; } }
+
+.plan-checkpoints { margin-top: 20px; }
+.plan-checkpoints-title {
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--text-tertiary); margin-bottom: 10px;
+}
+.plan-checkpoint-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 12px; border-radius: 10px;
+  background: var(--inset-bg); border: 1px solid var(--line);
+  margin-bottom: 6px;
+}
+.plan-checkpoint-row.is-current { border-color: var(--warning); background: rgba(255, 201, 60, 0.08); }
+.plan-checkpoint-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; background: var(--text-tertiary); }
+.plan-checkpoint-row.status-hit .plan-checkpoint-dot { background: var(--success); }
+.plan-checkpoint-row.status-missed .plan-checkpoint-dot { background: var(--danger); }
+.plan-checkpoint-row.status-current .plan-checkpoint-dot { background: var(--warning); }
+.plan-checkpoint-label { flex: 1; min-width: 0; font-size: 12.5px; color: var(--text-primary); font-weight: 600; }
+.plan-checkpoint-week { font-size: 10.5px; color: var(--text-tertiary); margin-top: 1px; }
+.plan-checkpoint-val { font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); flex-shrink: 0; white-space: nowrap; }
+
+.plan-actions { display: flex; gap: 8px; margin-top: 20px; flex-wrap: wrap; }
+.plan-action-btn {
+  padding: 9px 14px; border-radius: 10px; border: 1px solid var(--line);
+  background: var(--inset-bg); color: var(--text-secondary);
+  font-family: inherit; font-size: 12px; font-weight: 600;
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.plan-action-btn:hover { background: var(--line-soft); color: var(--text-primary); }
+.plan-action-btn.is-danger:hover { color: var(--danger); border-color: var(--danger); }
+
+.plan-past-section { margin-top: 22px; }
+.plan-past-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 10px 12px; border-radius: 10px;
+  background: var(--inset-bg); border: 1px solid var(--line);
+  margin-bottom: 6px; font-size: 12.5px;
+}
+.plan-past-desc { color: var(--text-secondary); }
+.plan-past-status { font-family: var(--font-mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; flex-shrink: 0; }
+.plan-past-status.completed { color: var(--success); }
+.plan-past-status.abandoned { color: var(--text-tertiary); }
+
+.plan-loading { text-align: center; font-size: 12px; color: var(--text-tertiary); padding: 30px 0; font-style: italic; }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="plan-head">
+    <div class="plan-title">Plan</div>
+    <div class="plan-subtitle">A multi-week goal tracked against your real logged data — body weight, strength, or activity distance. Created and adjusted through the chat, never edited directly here.</div>
+  </div>
+
+  <div id="planLoading" class="plan-loading">Loading…</div>
+
+  <div id="planEmpty" class="plan-card" style="display:none">
+    <div class="plan-empty-icon"><i data-lucide="target"></i></div>
+    <div class="plan-empty-title">No active plan yet</div>
+    <div class="plan-empty-sub">Tell the chat what you want to work toward — e.g. "I want to gain 3kg in 6 weeks" — and it'll propose a concrete plan with weekly checkpoints grounded in your actual current stats. Nothing is saved until you confirm.</div>
+    <button type="button" class="plan-start-btn" id="planStartBtn"><i data-lucide="message-circle" style="width:15px;height:15px"></i>Start a plan via chat</button>
+  </div>
+
+  <div id="planActive" class="plan-card" style="display:none">
+    <div class="plan-goal-desc" id="planGoalDesc"></div>
+    <div class="plan-goal-meta" id="planGoalMeta"></div>
+
+    <div class="plan-progress-row">
+      <div class="plan-progress-num" id="planProgressNum">—</div>
+      <div class="plan-progress-target" id="planProgressTarget"></div>
+    </div>
+    <div class="plan-progress-bar-wrap"><div class="plan-progress-bar" id="planProgressBar" style="width:0%"></div></div>
+
+    <div class="plan-chart-wrap"><canvas id="planChart"></canvas></div>
+
+    <div class="plan-checkpoints">
+      <div class="plan-checkpoints-title">Weekly checkpoints</div>
+      <div id="planCheckpointList"></div>
+    </div>
+
+    <div class="plan-actions">
+      <button type="button" class="plan-action-btn" id="planReviewBtn"><i data-lucide="message-circle" style="width:13px;height:13px"></i> Review with chat</button>
+      <button type="button" class="plan-action-btn" id="planCompleteBtn">Mark completed</button>
+      <button type="button" class="plan-action-btn is-danger" id="planAbandonBtn">Abandon</button>
+    </div>
+  </div>
+
+  <div id="planPastSection" class="plan-past-section" style="display:none">
+    <div class="plan-checkpoints-title">Past plans</div>
+    <div id="planPastList"></div>
+  </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+  function getSecret() { try { return localStorage.getItem('dashboard:secret') || ''; } catch (e) { return ''; } }
+
+  // =============================================================
+  // Date helpers — ported verbatim from trends.html's own copy (itself
+  // ported from main.html's score engine), per this project's
+  // established per-page small-duplication convention.
+  // =============================================================
+  function addDaysKey(dateKeyStr, n) {
+    const d = DayLib.parseDateKey(dateKeyStr);
+    d.setDate(d.getDate() + n);
+    return DayLib.plainDateKey(d);
+  }
+  function shortLabel(dateKeyStr) {
+    return DayLib.parseDateKey(dateKeyStr).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  }
+  function todayKey() { return DayLib.effectiveDateKey(); }
+
+  // =============================================================
+  // Real data readers — same localStorage keys/shapes Trends already
+  // reads directly (see trends.html's loadWeightTrend/loadStrengthTrend/
+  // loadActivitiesTrend header comments): pure client-side, zero
+  // network calls, same device-local assumption Trends already makes
+  // (gym.html's own cross-device Supabase mirror keeps this localStorage
+  // populated — see gym.html's pcSupa comment — Plan doesn't need its
+  // own copy of that sync logic, only to read what's already there).
+  // =============================================================
+  function readWeights() {
+    let arr = [];
+    try { arr = JSON.parse(localStorage.getItem('po_coach_weights')) || []; } catch (e) {}
+    return (Array.isArray(arr) ? arr : []).slice().sort((a, b) => (a.dateKey < b.dateKey ? -1 : a.dateKey > b.dateKey ? 1 : 0));
+  }
+  function readGymState() {
+    let pc = null;
+    try { pc = JSON.parse(localStorage.getItem('po_coach_v1')); } catch (e) {}
+    return pc || { exercises: [], logs: {}, units: 'kg' };
+  }
+  function readActivities() {
+    let arr = [];
+    try { arr = JSON.parse(localStorage.getItem('po_coach_activities')) || []; } catch (e) {}
+    return Array.isArray(arr) ? arr : [];
+  }
+  function estimate1RM(w, r) { if (r < 2) return w; return w * (1 + r / 30); }
+
+  // Latest known weight as of (on or before) asOfKey — weight isn't
+  // logged daily, so this carries the most recent prior entry forward
+  // rather than requiring an exact-date match. Returns null if nothing
+  // was logged on or before that date at all (a real gap, not a guess).
+  function weightAsOf(weights, asOfKey) {
+    let best = null;
+    for (const w of weights) {
+      if (w.dateKey > asOfKey) break;
+      if (w.weight != null) best = w.weight;
+    }
+    return best;
+  }
+
+  // Best estimated 1RM (or best reps, for a bodyweight exercise) for
+  // the matched exercise, using every log ON OR BEFORE asOfKey — a
+  // strength PR is monotonic (once hit, it counts from then on), same
+  // "best so far" semantics gym.html's own renderStats() already uses,
+  // just bounded to a point in time instead of unbounded.
+  function findExercise(gymState, name) {
+    if (!name) return null;
+    const target = name.trim().toLowerCase();
+    return (gymState.exercises || []).find((ex) => (ex.name || '').trim().toLowerCase() === target) || null;
+  }
+  function strengthBestAsOf(gymState, exercise, asOfKey) {
+    if (!exercise) return null;
+    const logs = (gymState.logs && gymState.logs[exercise.id]) || [];
+    let best = null;
+    logs.forEach((l) => {
+      if (l.date == null) return;
+      const dk = DayLib.effectiveDateKey(new Date(l.date));
+      if (dk > asOfKey) return;
+      const val = exercise.bw ? l.reps : estimate1RM(l.weight, l.reps);
+      if (val != null && (best == null || val > best)) best = val;
+    });
+    return best;
+  }
+
+  // Total distance logged for the matched activity type (or every
+  // distance-based activity, if the plan didn't pin one) within one
+  // 7-day checkpoint window — a WEEKLY volume goal (e.g. "20km/week by
+  // week 6"), not a cumulative-since-start total, matching how each
+  // checkpoint carries its own independent targetValue rather than a
+  // running total.
+  function findActivityType(activityTypes, id) {
+    if (!id) return null;
+    return (activityTypes || []).find((t) => t.id === id) || null;
+  }
+  function runningTotalForWeek(activities, activityTypeId, weekStartKey, weekEndKey) {
+    let total = 0;
+    let any = false;
+    activities.forEach((a) => {
+      if (!a || !a.dateKey || a.distanceKm == null) return;
+      if (a.dateKey < weekStartKey || a.dateKey > weekEndKey) return;
+      if (activityTypeId && a.activityTypeId !== activityTypeId) return;
+      total += a.distanceKm; any = true;
+    });
+    return any ? Math.round(total * 100) / 100 : null;
+  }
+
+  // =============================================================
+  // Progress engine — one actual-value-as-of-a-date function per
+  // goalType, used both for the chart's "Actual" series and for each
+  // checkpoint row's hit/missed/current status. "other" has no
+  // automatic series at all (no real-data source to attach it to) —
+  // the plan still displays its checkpoints/dates, just without a
+  // plotted actual line, and its progress number is left as "—" with
+  // a "manual — review with chat" note rather than a fabricated value.
+  // =============================================================
+  function actualAsOf(plan, dataSources, asOfKey) {
+    if (plan.goalType === 'weight_gain' || plan.goalType === 'weight_loss') {
+      return weightAsOf(dataSources.weights, asOfKey);
+    }
+    if (plan.goalType === 'strength_pr') {
+      return strengthBestAsOf(dataSources.gymState, dataSources.matchedExercise, asOfKey);
+    }
+    if (plan.goalType === 'running_distance') {
+      const weekStart = mostRecentCheckpointWeekStart(plan, asOfKey);
+      if (!weekStart) return null;
+      return runningTotalForWeek(dataSources.activities, plan.goalActivityTypeId, weekStart, addDaysKey(weekStart, 6));
+    }
+    return null; // "other" — no auto-tracked series
+  }
+  // For running_distance, "as of" a date means "that date's own
+  // checkpoint week's total" (a weekly goal resets each week), not a
+  // carried-forward value — find whichever checkpoint's window
+  // contains asOfKey, or the most recent one that's already ended.
+  function mostRecentCheckpointWeekStart(plan, asOfKey) {
+    let best = null;
+    (plan.weeklyCheckpoints || []).forEach((cp) => {
+      if (cp.weekStartDate <= asOfKey) {
+        if (!best || cp.weekStartDate > best) best = cp.weekStartDate;
+      }
+    });
+    return best;
+  }
+
+  function isIncreasingGoal(goalType) {
+    // running_distance/strength_pr/weight_gain all move UP toward the
+    // target; weight_loss is the one goal type that moves down.
+    return goalType !== 'weight_loss';
+  }
+
+  function progressFraction(plan, current) {
+    if (current == null) return null;
+    const span = plan.targetValue - plan.startValue;
+    if (span === 0) return current === plan.targetValue ? 1 : 0;
+    const frac = (current - plan.startValue) / span;
+    return Math.max(0, Math.min(1, frac));
+  }
+
+  function checkpointStatus(plan, cp, current, todayK) {
+    const weekEnd = addDaysKey(cp.weekStartDate, 6);
+    const isCurrentWeek = todayK >= cp.weekStartDate && todayK <= weekEnd;
+    if (isCurrentWeek) return 'current';
+    if (todayK < cp.weekStartDate) return 'upcoming';
+    // Week has fully elapsed — hit or missed based on direction.
+    if (current == null) return 'missed'; // elapsed with nothing logged at all — a real miss, not unknown
+    const hit = isIncreasingGoal(plan.goalType) ? current >= cp.targetValue : current <= cp.targetValue;
+    return hit ? 'hit' : 'missed';
+  }
+
+  // =============================================================
+  // Chart — same renderChart() shape/visual language as trends.html's
+  // own (line, tension 0.3, thin border, theme-aware, spanGaps:false
+  // so a real gap in logged data shows as a visible break, never
+  // bridged), reused directly for consistency rather than a new
+  // pattern for this one chart.
+  // =============================================================
+  let chartInstance = null;
+  function themeColor(varName, fallback) {
+    const v = getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
+    return v || fallback;
+  }
+  function renderPlanChart(labels, targetData, actualData) {
+    if (typeof window.Chart === 'undefined') return; // CDN failed to load — chart just doesn't render, no fake fallback
+    const canvas = $('planChart');
+    if (!canvas) return;
+    if (chartInstance) chartInstance.destroy();
+    const tickColor = themeColor('--text-tertiary', '#76746E');
+    const gridColor = themeColor('--line-soft', 'rgba(255,255,255,0.06)');
+    const successColor = themeColor('--success', '#17E88F');
+    chartInstance = new window.Chart(canvas.getContext('2d'), {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [
+          {
+            label: 'Target', data: targetData, borderColor: tickColor, backgroundColor: 'transparent',
+            borderDash: [4, 4], borderWidth: 1.5, pointRadius: 0, tension: 0.2, spanGaps: true,
+          },
+          {
+            label: 'Actual', data: actualData, borderColor: successColor, backgroundColor: successColor + '26',
+            borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, pointBackgroundColor: successColor,
+            tension: 0.3, fill: true, spanGaps: false,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        // Unlike Trends' charts (an exploratory, frequently-re-rendered
+        // surface where the animated draw-in is a nice touch), this
+        // chart renders once on a page whose only purpose IS the
+        // chart — a "grow in" animation just delays the user seeing
+        // real data for no benefit. Also sidesteps a real class of
+        // risk, not just a cosmetic one: Chart.js's default animation
+        // advances via requestAnimationFrame, which browsers can
+        // throttle or fully suspend for a backgrounded/non-visible tab
+        // — confirmed directly (chartInstance.getDatasetMeta().data[i].y
+        // stayed frozen at the animation's start position, never
+        // advancing to the real value, even after several real
+        // seconds) in this project's own headless-browser verification
+        // environment. A standalone PWA reopened from the home screen
+        // (this app's primary real-world usage, per the "freshness
+        // guard" work earlier this project) can plausibly hit the same
+        // browser behavior. animation:false draws the final, correct
+        // state in one paint, with no window for that to ever happen.
+        animation: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: { legend: { display: true, labels: { color: tickColor, font: { size: 10 }, boxWidth: 10 } } },
+        scales: {
+          x: { ticks: { color: tickColor, font: { size: 10 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 7 }, grid: { color: gridColor } },
+          y: { ticks: { color: tickColor, font: { size: 10 } }, grid: { color: gridColor } },
+        },
+      },
+    });
+  }
+
+  // =============================================================
+  // API
+  // =============================================================
+  async function fetchPlans() {
+    const secret = getSecret();
+    if (!secret) return [];
+    try {
+      const r = await fetch('/api/sync-state?resource=plans&secret=' + encodeURIComponent(secret));
+      const j = await r.json();
+      return (j && j.ok && Array.isArray(j.plans)) ? j.plans : [];
+    } catch (e) { return []; }
+  }
+  async function updatePlanStatus(id, status) {
+    const secret = getSecret();
+    if (!secret) return false;
+    try {
+      const r = await fetch('/api/sync-state?resource=plans&secret=' + encodeURIComponent(secret), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'update', id, patch: { status } }),
+      });
+      const j = await r.json();
+      return !!(j && j.ok);
+    } catch (e) { return false; }
+  }
+  async function fetchActivityTypes() {
+    const secret = getSecret();
+    const fallback = [{ id: 'running', name: 'Running', unit: 'km', unitKind: 'distance', recommendable: true }];
+    if (!secret) return fallback;
+    try {
+      const r = await fetch('/api/sync-state?resource=activity-types&secret=' + encodeURIComponent(secret));
+      const j = await r.json();
+      return (j && j.ok && Array.isArray(j.types) && j.types.length) ? j.types : fallback;
+    } catch (e) { return fallback; }
+  }
+
+  function unitLabel(plan, gymState) {
+    if (plan.targetUnit) return plan.targetUnit;
+    return gymState.units || 'kg';
+  }
+
+  function formatValue(v, unit) {
+    if (v == null) return '—';
+    const rounded = Math.round(v * 100) / 100;
+    return rounded + (unit ? ' ' + unit : '');
+  }
+
+  // =============================================================
+  // Render
+  // =============================================================
+  async function renderActivePlan(plan) {
+    $('planEmpty').style.display = 'none';
+    $('planActive').style.display = 'block';
+
+    const weights = readWeights();
+    const gymState = readGymState();
+    const activities = readActivities();
+    const activityTypes = await fetchActivityTypes();
+    const matchedExercise = plan.goalType === 'strength_pr' ? findExercise(gymState, plan.goalExerciseName) : null;
+    const matchedActivityType = plan.goalType === 'running_distance' ? findActivityType(activityTypes, plan.goalActivityTypeId) : null;
+    const dataSources = { weights, gymState, activities, matchedExercise, matchedActivityType };
+    const unit = unitLabel(plan, gymState);
+    const todayK = todayKey();
+
+    $('planGoalDesc').textContent = plan.goalDescription;
+    const startLabel = shortLabel(plan.startDate);
+    const endLabel = shortLabel(plan.endDate);
+    const extra = matchedExercise ? (' · ' + matchedExercise.name)
+      : matchedActivityType ? (' · ' + matchedActivityType.name)
+      : (plan.goalType === 'strength_pr' && plan.goalExerciseName) ? (' · "' + plan.goalExerciseName + '" (not matched to a configured exercise — showing checkpoints only)')
+      : '';
+    $('planGoalMeta').textContent = startLabel + ' → ' + endLabel + extra;
+
+    // Progress number + bar — the most recent actual value available
+    // (weight/strength: as of today; running: this week's total so
+    // far), vs the final target. "other" has no real-data source at
+    // all, so it's shown as a manual check-in instead of a fabricated
+    // number.
+    const current = actualAsOf(plan, dataSources, todayK);
+    if (plan.goalType === 'other') {
+      $('planProgressNum').textContent = 'Manual';
+      $('planProgressTarget').textContent = 'review progress with the chat';
+      $('planProgressBar').style.width = '0%';
+    } else {
+      $('planProgressNum').textContent = formatValue(current, unit);
+      $('planProgressTarget').textContent = 'of ' + formatValue(plan.targetValue, unit) + ' goal';
+      const frac = progressFraction(plan, current);
+      $('planProgressBar').style.width = (frac == null ? 0 : Math.round(frac * 100)) + '%';
+      $('planProgressBar').classList.toggle('is-loss-direction', plan.goalType === 'weight_loss');
+    }
+
+    // Chart — one point per checkpoint week (plus the plan's own start
+    // point), target line vs actual line.
+    const labels = ['Start'].concat(plan.weeklyCheckpoints.map((cp) => 'Wk ' + cp.weekNumber));
+    const targetData = [plan.startValue].concat(plan.weeklyCheckpoints.map((cp) => cp.targetValue));
+    const actualData = [actualAsOf(plan, dataSources, plan.startDate)].concat(
+      plan.weeklyCheckpoints.map((cp) => {
+        const weekEnd = addDaysKey(cp.weekStartDate, 6);
+        // Only plot a week's actual once it has actually started —
+        // otherwise a "0"/carried-forward value for a future week
+        // would misleadingly look like already-measured progress.
+        if (cp.weekStartDate > todayK) return null;
+        const asOf = weekEnd < todayK ? weekEnd : todayK;
+        return actualAsOf(plan, dataSources, asOf);
+      })
+    );
+    if (plan.goalType !== 'other') renderPlanChart(labels, targetData, actualData);
+    else { $('planChart').closest('.plan-chart-wrap').style.display = 'none'; }
+
+    // Checkpoint list.
+    const listEl = $('planCheckpointList');
+    listEl.innerHTML = plan.weeklyCheckpoints.map((cp) => {
+      const weekEnd = addDaysKey(cp.weekStartDate, 6);
+      const asOf = weekEnd < todayK ? weekEnd : todayK;
+      const cpCurrent = plan.goalType === 'other' ? null : actualAsOf(plan, dataSources, asOf);
+      const status = plan.goalType === 'other' ? 'upcoming' : checkpointStatus(plan, cp, cpCurrent, todayK);
+      const statusLabel = { hit: 'Hit', missed: 'Missed', current: 'This week', upcoming: 'Upcoming' }[status];
+      return (
+        '<div class="plan-checkpoint-row status-' + status + (status === 'current' ? ' is-current' : '') + '">' +
+          '<div class="plan-checkpoint-dot"></div>' +
+          '<div class="plan-checkpoint-label">Week ' + cp.weekNumber + '<div class="plan-checkpoint-week">' + shortLabel(cp.weekStartDate) + ' – ' + shortLabel(weekEnd) + ' · ' + statusLabel + '</div></div>' +
+          '<div class="plan-checkpoint-val">' + formatValue(cp.targetValue, unit) + '</div>' +
+        '</div>'
+      );
+    }).join('');
+  }
+
+  function renderPastPlans(plans) {
+    const past = plans.filter((p) => p.status !== 'active');
+    if (!past.length) { $('planPastSection').style.display = 'none'; return; }
+    $('planPastSection').style.display = 'block';
+    $('planPastList').innerHTML = past.map((p) => (
+      '<div class="plan-past-row">' +
+        '<span class="plan-past-desc">' + escapeHtml(p.goalDescription) + '</span>' +
+        '<span class="plan-past-status ' + p.status + '">' + p.status + '</span>' +
+      '</div>'
+    )).join('');
+  }
+  function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  function openChatWithPrompt(prefill) {
+    const fab = document.getElementById('chatFab');
+    if (!fab) { alert('Chat isn\'t available on this device/page right now.'); return; }
+    fab.click();
+    setTimeout(() => {
+      const input = document.getElementById('chatInput');
+      if (input && !input.value) input.value = prefill;
+    }, 150);
+  }
+
+  async function boot() {
+    const secret = getSecret();
+    if (!secret) {
+      $('planLoading').textContent = 'Set your dashboard secret first (on the Cronometer page) to use Plan.';
+      return;
+    }
+    const plans = await fetchPlans();
+    $('planLoading').style.display = 'none';
+    const active = plans.find((p) => p.status === 'active') || null;
+    if (active) {
+      await renderActivePlan(active);
+    } else {
+      $('planEmpty').style.display = 'block';
+    }
+    renderPastPlans(plans);
+
+    $('planStartBtn').addEventListener('click', () => {
+      openChatWithPrompt('I want to start a plan: ');
+    });
+    $('planReviewBtn').addEventListener('click', () => {
+      openChatWithPrompt('Can we review how my plan is going so far?');
+    });
+    $('planCompleteBtn').addEventListener('click', async () => {
+      if (!active) return;
+      if (!confirm('Mark this plan as completed?')) return;
+      if (await updatePlanStatus(active.id, 'completed')) location.reload();
+    });
+    $('planAbandonBtn').addEventListener('click', async () => {
+      if (!active) return;
+      if (!confirm('Abandon this plan? You can always start a new one.')) return;
+      if (await updatePlanStatus(active.id, 'abandoned')) location.reload();
+    });
+
+    if (window.lucide) window.lucide.createIcons();
+  }
+
+  boot();
+});
+</script>
+</body>
+</html>

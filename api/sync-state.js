@@ -140,6 +140,73 @@
 //   -> { ok:true }  deletes the row (ending early — no separate
 //      "ended" state to track, and nothing in this feature reads
 //      restriction history, so a delete is simpler than an update)
+//
+// -------------------------------------------------------------
+// plans — the long-term "Plan" feature (plan.html): a multi-week goal
+// (e.g. "gain 3kg in 6 weeks") with weekly checkpoints, tracked
+// against REAL logged data (po_coach_weights/po_coach_v1/
+// po_coach_activities — see plan.html's own header comment), created/
+// adjusted via chat negotiation (propose_long_term_plan, api/chat.js —
+// same confirm-before-save pattern as propose_training_objectives).
+// A brand new table, id/data/updated_at generic-row shape (like
+// habit_config), NOT folded into habit_config itself: unlike
+// habit-config/general-settings/activity-types (each exactly one row
+// per user), there can be several plans over time (one active, plus
+// past completed/abandoned ones), so this needs one row PER PLAN, not
+// one fixed id — a shape habit_config's single-row-per-name model
+// doesn't fit, same reasoning active_restrictions already established
+// for its own new table.
+//
+// Requires this NEW table in Supabase (SQL editor) — same as
+// habit_config/daily_habits/active_restrictions above, no fallback if
+// it doesn't exist:
+//   create table plans (
+//     id text primary key,
+//     data jsonb not null,
+//     updated_at timestamptz not null default now()
+//   );
+//
+// Plan shape (the full object lives in `data`; `id` is duplicated as
+// the row's own primary key for direct lookup):
+//   {
+//     id, goalDescription, goalType: "weight_gain"|"weight_loss"|
+//       "strength_pr"|"running_distance"|"other",
+//     targetValue, targetUnit,
+//     // startValue: the baseline value at startDate — not in the
+//     // original spec, but required to compute progress % and to
+//     // draw the chart's own starting point; without it there's no
+//     // way to tell "3kg gained so far" from just a target number.
+//     startValue,
+//     // goalExerciseName (strength_pr only) / goalActivityTypeId
+//     // (running_distance only) — which specific exercise/activity
+//     // type this plan tracks against, resolved the same
+//     // name-matched-against-real-configured-types way
+//     // propose_training_objectives already resolves activityName;
+//     // null for goal types that don't need one (weight_gain/loss
+//     // track body weight directly; "other" has no auto-tracked
+//     // series at all).
+//     goalExerciseName, goalActivityTypeId,
+//     startDate, endDate,   // YYYY-MM-DD
+//     weeklyCheckpoints: [{ weekNumber, weekStartDate, targetValue }],
+//     status: "active"|"completed"|"abandoned",
+//     createdAt,   // ISO timestamp, set server-side on create
+//   }
+//
+// GET  /api/sync-state?secret=...&resource=plans
+//   -> { ok:true, plans: [...] }  ALL plans (active + past), most
+//      recently updated first — the client filters for status==="active"
+//      itself (see plan.html) rather than this endpoint special-casing
+//      "the" active plan, since there could be zero, and a page showing
+//      plan history benefits from the same list.
+// POST /api/sync-state?secret=...  { resource: "plans", action: "create", plan: {...} }
+//   -> { ok:true, plan: {...} }  (id + createdAt generated server-side,
+//      status forced to "active" — a plan is always created active;
+//      status only ever changes via the "update" action below)
+// POST /api/sync-state?secret=...  { resource: "plans", action: "update", id: "...", patch: {...} }
+//   -> { ok:true, plan: {...} }  shallow-merges patch fields (e.g.
+//      { status: "completed" }, or { weeklyCheckpoints: [...] } for a
+//      chat-negotiated adjustment) into the existing plan and returns
+//      the merged result; 404 if id doesn't exist
 // =============================================================
 
 const ALLOWED_KEYS = ['gym', 'finance', 'dailystack'];
@@ -267,6 +334,48 @@ async function endRestriction(id) {
   if (!r.ok) throw new Error('Supabase delete failed: ' + (await r.text()).slice(0, 300));
 }
 
+// ---------- plans ----------
+function makePlanId() {
+  return 'plan_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+}
+async function listPlans() {
+  const r = await fetch(supabaseUrl('plans?select=data&order=updated_at.desc'), { headers: supabaseHeaders() });
+  if (!r.ok) throw new Error('Supabase read failed: ' + (await r.text()).slice(0, 300));
+  const rows = await r.json();
+  return (Array.isArray(rows) ? rows : []).map((row) => row.data).filter((d) => d && typeof d === 'object');
+}
+async function createPlan(fields) {
+  const plan = Object.assign({}, fields, {
+    id: makePlanId(),
+    status: 'active', // a plan is always created active — status only ever changes via the "update" action
+    createdAt: new Date().toISOString(),
+  });
+  await saveConfigRowGeneric('plans', plan.id, plan);
+  return plan;
+}
+async function updatePlan(id, patch) {
+  const r = await fetch(supabaseUrl('plans?id=eq.' + encodeURIComponent(id) + '&select=data'), { headers: supabaseHeaders() });
+  if (!r.ok) throw new Error('Supabase read failed: ' + (await r.text()).slice(0, 300));
+  const rows = await r.json();
+  const existing = Array.isArray(rows) && rows[0] ? rows[0].data : null;
+  if (!existing) return null;
+  const merged = Object.assign({}, existing, patch, { id: existing.id }); // id is never patchable
+  await saveConfigRowGeneric('plans', id, merged);
+  return merged;
+}
+// Same id/data/updated_at upsert shape as saveConfigRow (habit_config)
+// above, generalized to take a table name — plans is its own table,
+// not a row within habit_config (see this section's header comment),
+// so the existing saveConfigRow can't be reused as-is.
+async function saveConfigRowGeneric(table, id, data) {
+  const r = await fetch(supabaseUrl(table + '?on_conflict=id'), {
+    method: 'POST',
+    headers: { ...supabaseHeaders(), Prefer: 'resolution=merge-duplicates' },
+    body: JSON.stringify([{ id, data, updated_at: new Date().toISOString() }]),
+  });
+  if (!r.ok) throw new Error('Supabase write failed: ' + (await r.text()).slice(0, 300));
+}
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -275,7 +384,7 @@ export default async function handler(req, res) {
 
   const resource = req.query && req.query.resource;
 
-  if (resource === 'habit-config' || resource === 'daily-habits' || resource === 'general-settings' || resource === 'restrictions' || resource === 'activity-types') {
+  if (resource === 'habit-config' || resource === 'daily-habits' || resource === 'general-settings' || resource === 'restrictions' || resource === 'activity-types' || resource === 'plans') {
     if (!checkAuth(req, res)) return;
     if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_KEY) {
       return res.status(500).json({ error: 'missing SUPABASE_URL / SUPABASE_SERVICE_KEY' });
@@ -367,6 +476,62 @@ export default async function handler(req, res) {
             return res.status(200).json({ ok: true });
           }
           return res.status(400).json({ error: 'action must be "create" or "end"' });
+        }
+        return res.status(405).json({ error: 'method not allowed' });
+      }
+
+      if (resource === 'plans') {
+        if (req.method === 'GET') {
+          const plans = await listPlans();
+          return res.status(200).json({ ok: true, plans });
+        }
+        if (req.method === 'POST') {
+          let body = req.body;
+          if (typeof body === 'string') { try { body = JSON.parse(body); } catch (e) { body = {}; } }
+          const action = body && body.action;
+          if (action === 'create') {
+            const p = body.plan || {};
+            const GOAL_TYPES = ['weight_gain', 'weight_loss', 'strength_pr', 'running_distance', 'other'];
+            if (!p.goalDescription || typeof p.goalDescription !== 'string') return res.status(400).json({ error: 'plan.goalDescription is required' });
+            if (!GOAL_TYPES.includes(p.goalType)) return res.status(400).json({ error: 'plan.goalType must be one of: ' + GOAL_TYPES.join(', ') });
+            if (typeof p.targetValue !== 'number' || !isFinite(p.targetValue)) return res.status(400).json({ error: 'plan.targetValue must be a number' });
+            if (typeof p.startValue !== 'number' || !isFinite(p.startValue)) return res.status(400).json({ error: 'plan.startValue must be a number' });
+            if (!p.targetUnit || typeof p.targetUnit !== 'string') return res.status(400).json({ error: 'plan.targetUnit is required' });
+            if (!DATE_RE.test(p.startDate) || !DATE_RE.test(p.endDate)) return res.status(400).json({ error: 'plan.startDate/endDate must be YYYY-MM-DD' });
+            if (p.endDate <= p.startDate) return res.status(400).json({ error: 'plan.endDate must be after plan.startDate' });
+            if (!Array.isArray(p.weeklyCheckpoints) || !p.weeklyCheckpoints.length) return res.status(400).json({ error: 'plan.weeklyCheckpoints must be a non-empty array' });
+            for (const cp of p.weeklyCheckpoints) {
+              if (typeof cp.weekNumber !== 'number' || !DATE_RE.test(cp.weekStartDate) || typeof cp.targetValue !== 'number') {
+                return res.status(400).json({ error: 'each weeklyCheckpoints entry needs weekNumber (number), weekStartDate (YYYY-MM-DD), targetValue (number)' });
+              }
+            }
+            const created = await createPlan({
+              goalDescription: p.goalDescription.slice(0, 300),
+              goalType: p.goalType,
+              targetValue: p.targetValue,
+              startValue: p.startValue,
+              targetUnit: p.targetUnit.slice(0, 20),
+              goalExerciseName: typeof p.goalExerciseName === 'string' ? p.goalExerciseName.slice(0, 100) : null,
+              goalActivityTypeId: typeof p.goalActivityTypeId === 'string' ? p.goalActivityTypeId.slice(0, 100) : null,
+              startDate: p.startDate,
+              endDate: p.endDate,
+              weeklyCheckpoints: p.weeklyCheckpoints.map((cp) => ({ weekNumber: cp.weekNumber, weekStartDate: cp.weekStartDate, targetValue: cp.targetValue })),
+            });
+            return res.status(200).json({ ok: true, plan: created });
+          }
+          if (action === 'update') {
+            const id = body.id;
+            const patch = body.patch;
+            if (!id || typeof id !== 'string') return res.status(400).json({ error: 'id is required' });
+            if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return res.status(400).json({ error: 'patch must be a plain object' });
+            if (patch.status !== undefined && !['active', 'completed', 'abandoned'].includes(patch.status)) {
+              return res.status(400).json({ error: 'patch.status must be one of: active, completed, abandoned' });
+            }
+            const updated = await updatePlan(id, patch);
+            if (!updated) return res.status(404).json({ error: 'plan not found' });
+            return res.status(200).json({ ok: true, plan: updated });
+          }
+          return res.status(400).json({ error: 'action must be "create" or "update"' });
         }
         return res.status(405).json({ error: 'method not allowed' });
       }

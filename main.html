@@ -625,6 +625,16 @@ body::after {
   .cal-add-row { grid-template-columns: 1fr; }
 }
 
+/* Plan teaser card — see planSection's own HTML comment for why this
+   is deliberately compact (the real feature lives on plan.html). */
+.plan-mini-card { display: block; text-decoration: none; transition: background 0.15s; }
+.plan-mini-card:hover { background: rgba(255, 255, 255, 0.06); }
+.plan-mini-row { display: flex; align-items: center; gap: 12px; }
+.plan-mini-text { flex: 1; min-width: 0; }
+.plan-mini-title { font-size: 14px; font-weight: 700; color: var(--text-primary); }
+.plan-mini-sub { font-size: 11.5px; color: var(--text-tertiary); margin-top: 3px; }
+.plan-mini-arrow { color: var(--text-tertiary); font-size: 16px; flex-shrink: 0; }
+
 /* ----- Plan My Day ----- */
 .plan-day-intro { font-size: 12.5px; color: var(--text-tertiary); line-height: 1.5; margin-bottom: 12px; }
 .plan-day-status { font-size: 12.5px; color: var(--text-tertiary); margin-top: 10px; min-height: 14px; }
@@ -1409,6 +1419,30 @@ body::after {
         <div id="calAddStatus" class="cal-add-status"></div>
       </div>
     </div>
+  </div>
+
+  <!-- Plan — the long-term multi-week goal feature (plan.html). Only a
+       compact teaser card here, not the full feature: the real
+       progress-vs-checkpoint computation (against po_coach_weights/
+       po_coach_v1/po_coach_activities) and its chart live entirely on
+       plan.html, same "sub-page, not a 6th bottom tab" placement as
+       health.html -> cronometer.html (see topbar.js's injectBackButton
+       comment) — Plan is a weekly check-in surface, not a daily one,
+       so it doesn't earn a spot in the tab bar next to Main/Health/
+       Training/Habits/Trends. Placed right before Plan My Day since
+       both are "planning" sections and read naturally as zoom-out
+       (the multi-week goal) then zoom-in (today's actual schedule). -->
+  <div class="section" id="planSection">
+    <div class="section-title">Plan</div>
+    <a href="plan.html" class="gm-card plan-mini-card" id="planMiniCard">
+      <div class="plan-mini-row">
+        <div class="plan-mini-text">
+          <div class="plan-mini-title" id="planMiniTitle">Loading…</div>
+          <div class="plan-mini-sub" id="planMiniSub"></div>
+        </div>
+        <div class="plan-mini-arrow">→</div>
+      </div>
+    </a>
   </div>
 
   <!-- Plan My Day — proposes a full schedule (training, meals, work
@@ -3113,6 +3147,55 @@ document.addEventListener('DOMContentLoaded', function () {
     }
   }
   render();
+});
+</script>
+
+<!-- =============================================================
+     Plan teaser card — see planSection's own HTML comment. Deliberately
+     minimal: just enough to show whether a plan exists and roughly
+     where it stands, not a duplicate of plan.html's own real-data
+     progress engine (weight/strength/activity lookups, the chart) —
+     that stays entirely on plan.html, this only needs the plan's own
+     stored fields (goalDescription, dates, weeklyCheckpoints) to figure
+     out which week is "current", no localStorage reads of its own.
+     ============================================================= -->
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  'use strict';
+  function getSecret() { try { return localStorage.getItem('dashboard:secret') || ''; } catch (e) { return ''; } }
+  const titleEl = document.getElementById('planMiniTitle');
+  const subEl = document.getElementById('planMiniSub');
+  if (!titleEl) return;
+
+  async function load() {
+    const secret = getSecret();
+    if (!secret) { titleEl.textContent = 'Plan'; subEl.textContent = 'Set your dashboard secret to use this'; return; }
+    let plans = [];
+    try {
+      const r = await fetch('/api/sync-state?resource=plans&secret=' + encodeURIComponent(secret));
+      const j = await r.json();
+      if (j && j.ok && Array.isArray(j.plans)) plans = j.plans;
+    } catch (e) {}
+    const active = plans.find((p) => p.status === 'active');
+    if (!active) {
+      titleEl.textContent = 'No active plan';
+      subEl.textContent = 'Tap to start one via chat →';
+      return;
+    }
+    titleEl.textContent = active.goalDescription;
+    const todayK = (typeof DayLib !== 'undefined') ? DayLib.effectiveDateKey() : new Date().toISOString().slice(0, 10);
+    const total = (active.weeklyCheckpoints || []).length;
+    const currentCp = (active.weeklyCheckpoints || []).find((cp) => {
+      const start = cp.weekStartDate;
+      const d = new Date(start); d.setDate(d.getDate() + 6);
+      const end = d.toISOString().slice(0, 10);
+      return todayK >= start && todayK <= end;
+    });
+    if (currentCp) subEl.textContent = 'Week ' + currentCp.weekNumber + ' of ' + total;
+    else if (todayK > active.endDate) subEl.textContent = 'Plan period ended — review with chat';
+    else subEl.textContent = 'Starts ' + active.startDate;
+  }
+  load();
 });
 </script>
 
