@@ -322,6 +322,78 @@ const PROPOSE_TODAY_SESSION_TOOL = {
     },
     required: ['recommendation'],
   },
+};
+
+// ---------- propose_long_term_plan tool ----------
+// The Plan feature (plan.html, Phase 1) — lets the user negotiate a
+// multi-week goal the way they used to with an AI coach (e.g. "quiero
+// subir 3kg en 6 semanas") instead of only ever creating one by hand.
+// DIFFERENT from propose_training_objectives above: that sets THIS
+// week's specific sessions; this sets a goal that spans several weeks
+// and is tracked against real logged data over time (plan.html's own
+// progress engine — po_coach_weights/po_coach_v1/po_coach_activities),
+// same distinction propose_today_session already has to draw against
+// propose_training_objectives for the same reason (multiple training-
+// adjacent tools that are easy to conflate).
+//
+// startDate/weeklyCheckpoints[].weekStartDate are NOT in this schema
+// at all — deliberately, same reasoning api/training.js's mode=day-plan
+// already established for wakeUpTime (see that file's own comment):
+// exact date arithmetic is a poor fit for an LLM to get reliably
+// right and a real, previously-hit bug class in this project (a
+// "Wake up" event landing at 1:30pm from bad date math), whereas
+// picking a sensible NUMBER of weeks and a realistic per-week
+// progression is exactly the kind of judgment call worth a model
+// call. The model only produces durationWeeks (an integer) and
+// weeklyTargets (its own chosen progression, not necessarily linear);
+// normalizeProposedLongTermPlan() below computes every real
+// weekStartDate/endDate from those with plain deterministic date math,
+// anchored at TODAY'S DATA's own "date" — never guessed, never asked
+// of the model.
+//
+// exerciseName/activityName mirror PROPOSE_OBJECTIVES_TOOL's own
+// activityName field exactly (free text resolved against the user's
+// REAL configured exercises/activity types client-side on save, by
+// topbar.js's renderLongTermPlanCard — see that function's own
+// comment) — this endpoint has no access to either configured list at
+// tool-definition time, same reasoning as PROPOSE_OBJECTIVES_TOOL's
+// own header comment.
+const PROPOSE_LONG_TERM_PLAN_TOOL = {
+  name: 'propose_long_term_plan',
+  description:
+    'Propose a multi-week goal (Plan feature) for the user to review — e.g. "quiero subir 3kg en 6 semanas" ' +
+    '(gain 3kg in 6 weeks), "get my bench to 80kg by next month", "build up to running 20km a week". This is ' +
+    'DIFFERENT from propose_training_objectives (which sets only THIS week\'s specific sessions) — use this ' +
+    'one for a goal spanning several weeks that should be tracked against real logged data over time, not a ' +
+    'single week\'s plan. This does NOT save anything by itself — the user sees the proposal in the chat and ' +
+    'explicitly chooses to save it or not. Ask clarifying questions first if the goal, target number, or ' +
+    'timeframe aren\'t clear enough to give concrete numbers — never guess a target value or duration. ' +
+    'Ground startValue in TODAY\'S DATA where possible: for weight_gain/weight_loss use gym.latestBodyWeight ' +
+    '(its own "weight"/"unit" fields); for running_distance check activities.byType for the matching ' +
+    'activity\'s totalDistanceKm/recent entries; for strength_pr, TODAY\'S DATA has no historical best-lift ' +
+    'data at all, so ask the user directly for their current number on that exercise unless they already ' +
+    'stated it in the conversation. weeklyTargets is YOUR judgment call on a realistic progression toward ' +
+    'targetValue — a straight linear ramp is a fine default, but a smarter curve is fine too where more ' +
+    'realistic (e.g. weight change rarely happens in perfectly equal weekly increments).',
+  input_schema: {
+    type: 'object',
+    properties: {
+      goalDescription: { type: 'string', description: 'Short human-readable summary, e.g. "Gain 3kg in 6 weeks"' },
+      goalType: { type: 'string', enum: ['weight_gain', 'weight_loss', 'strength_pr', 'running_distance', 'other'] },
+      targetValue: { type: 'number', description: 'The final target value to reach by the end of the plan' },
+      startValue: { type: 'number', description: 'Current/baseline value right now — see this tool\'s own description on where to ground this per goalType' },
+      targetUnit: { type: 'string', description: 'e.g. "kg", "lb", "km", "mi", or "reps" for a bodyweight strength exercise' },
+      exerciseName: { type: 'string', description: 'strength_pr ONLY: the exercise name as the user said it, e.g. "Bench Press" — omit for every other goalType' },
+      activityName: { type: 'string', description: 'running_distance ONLY: the activity name, e.g. "Running", "Cycling" — omit for every other goalType' },
+      durationWeeks: { type: 'integer', description: 'How many weeks the plan spans' },
+      weeklyTargets: {
+        type: 'array', items: { type: 'number' },
+        description: 'Exactly durationWeeks numbers, one per week in order (week 1 first) — the target value to have reached by the END of each week',
+      },
+      rationale: { type: 'string', description: '1-3 sentences explaining the plan given what the user told you and their real current stats' },
+    },
+    required: ['goalDescription', 'goalType', 'targetValue', 'startValue', 'targetUnit', 'durationWeeks', 'weeklyTargets', 'rationale'],
+  },
   // Last tool in the tools array -> caches every tool definition up to
   // and including this one (see the prompt-caching note in the handler
   // below). Tool definitions never change between requests, so this is
@@ -460,6 +532,78 @@ function normalizeProposedTodaySession(raw) {
   return {
     recommendation: typeof r.recommendation === 'string' ? r.recommendation.slice(0, 200) : '',
     sub: typeof r.sub === 'string' ? r.sub.slice(0, 200) : '',
+  };
+}
+
+const LONG_TERM_PLAN_GOAL_TYPES = ['weight_gain', 'weight_loss', 'strength_pr', 'running_distance', 'other'];
+// Plain deterministic date-key arithmetic, UTC-anchored so a day never
+// silently shifts from a local-timezone DST edge (this endpoint has no
+// concept of the user's timezone anyway — todayDateKey below is
+// already a plain YYYY-MM-DD the client computed correctly once).
+// Small local copy rather than importing a shared helper — this
+// project's established per-file convention (see e.g. api/training.js's
+// own subtractMinutesFromTime), and this is the only file in api/ that
+// needs date-key, not time-of-day, arithmetic.
+function addDaysToDateKey(dateKeyStr, n) {
+  const [y, m, d] = dateKeyStr.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + n);
+  return dt.toISOString().slice(0, 10);
+}
+// Defensive normalization for propose_long_term_plan (Plan feature,
+// plan.html Phase 1) — guarantees the frontend always gets EXACTLY the
+// shape api/sync-state.js's resource=plans action="create" expects
+// (see that file's own header comment), computed here rather than
+// trusting the model with real date arithmetic (see
+// PROPOSE_LONG_TERM_PLAN_TOOL's own header comment on why). Reuses
+// Phase 1's schema field-for-field — startValue and
+// exerciseName/activityName (the latter two resolved into
+// goalExerciseName/goalActivityTypeId client-side by topbar.js's
+// renderLongTermPlanCard, same free-text-then-resolve pattern
+// normalizeCardioSlot's activityName already established) — so a plan
+// saved from here renders on plan.html with zero changes needed there.
+function normalizeProposedLongTermPlan(raw, todayDateKey) {
+  const r = raw || {};
+  const goalType = LONG_TERM_PLAN_GOAL_TYPES.includes(r.goalType) ? r.goalType : 'other';
+  const startDate = (typeof todayDateKey === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(todayDateKey))
+    ? todayDateKey
+    : new Date().toISOString().slice(0, 10); // only if todayContext.date was somehow missing — see this fn's own comment
+  const durationWeeks = Math.max(1, Math.min(52, Math.round(numOr(r.durationWeeks, 6))));
+  const targetValue = numOr(r.targetValue, 0);
+  const startValue = numOr(r.startValue, 0);
+  const rawTargets = Array.isArray(r.weeklyTargets) ? r.weeklyTargets : [];
+  // Guarantee exactly durationWeeks checkpoints even if the model's
+  // array came back a different length or with a gap — pad any
+  // missing entry with a linear interpolation toward targetValue
+  // rather than dropping the whole proposal, matching this file's
+  // established "always hand the frontend a renderable shape"
+  // convention (see normalizeCardioSlot's own defaults).
+  const weeklyCheckpoints = [];
+  for (let i = 0; i < durationWeeks; i++) {
+    const linearFallback = startValue + (targetValue - startValue) * ((i + 1) / durationWeeks);
+    const val = numOr(rawTargets[i], linearFallback);
+    weeklyCheckpoints.push({
+      weekNumber: i + 1,
+      weekStartDate: addDaysToDateKey(startDate, i * 7),
+      targetValue: Math.round(val * 100) / 100,
+    });
+  }
+  return {
+    goalDescription: typeof r.goalDescription === 'string' ? r.goalDescription.slice(0, 300) : '',
+    goalType,
+    targetValue,
+    startValue,
+    targetUnit: typeof r.targetUnit === 'string' && r.targetUnit.trim() ? r.targetUnit.trim().slice(0, 20) : 'kg',
+    // Free text, NOT yet resolved to a real id/name — see this
+    // function's own header comment. '' (not null) when absent so the
+    // client can treat "no exercise/activity mentioned" uniformly with
+    // every other optional string field in this file.
+    exerciseName: typeof r.exerciseName === 'string' ? r.exerciseName.trim().slice(0, 100) : '',
+    activityName: typeof r.activityName === 'string' ? r.activityName.trim().slice(0, 100) : '',
+    startDate,
+    endDate: addDaysToDateKey(startDate, durationWeeks * 7 - 1),
+    weeklyCheckpoints,
+    rationale: typeof r.rationale === 'string' ? r.rationale.slice(0, 600) : '',
   };
 }
 
@@ -690,7 +834,9 @@ function buildStaticSystemPrompt() {
     'doubt, skip the tool entirely; most messages need zero memory calls.\n\n' +
     'WEEKLY TRAINING OBJECTIVES: the user can also set up this week\'s training plan by talking it through ' +
     'with you, the way they used to negotiate a weekly plan back-and-forth with a coach — mentioning things ' +
-    'like padel days, how recovery has been, or how much time they actually have this week. When the user ' +
+    'like padel days, how recovery has been, or how much time they actually have this week. This is for THIS ' +
+    'WEEK\'s specific sessions ONLY — for a multi-week goal like "gain 3kg" or "run 20km/week by next month", ' +
+    'use LONG-TERM PLAN below instead, not this. When the user ' +
     'brings up setting up or discussing this week\'s training, do NOT immediately propose a plan on the ' +
     'first message. Ask clarifying questions first if you don\'t already have enough to be specific — in ' +
     'particular: any padel or other commitments this week, how recovery/energy has felt lately, and any ' +
@@ -702,6 +848,24 @@ function buildStaticSystemPrompt() {
     'When you do call it, also say a short summary sentence of the plan in your normal reply text (the ' +
     'proposal itself is shown to the user as a card with its own Save button, so don\'t repeat every number ' +
     'in prose — just enough that the message reads fine on its own).\n\n' +
+    'LONG-TERM PLAN: the user can also set up a multi-week goal (the Plan feature) the way they used to ' +
+    'negotiate one with an AI coach — e.g. "quiero subir 3kg en 6 semanas" (gain 3kg in 6 weeks), "get my ' +
+    'bench to 80kg by next month", "build up to running 20km a week". DIFFERENT from WEEKLY TRAINING ' +
+    'OBJECTIVES above — that sets only this week\'s sessions; this sets a goal spanning several weeks, ' +
+    'tracked against real logged data over time on its own page. Do not confuse the two just because both ' +
+    'mention training/fitness. Ask clarifying questions first if the goal, target number, or timeframe ' +
+    'aren\'t clear enough to give concrete numbers — never guess a target value or duration. Ground ' +
+    'startValue in TODAY\'S DATA where possible: for weight_gain/weight_loss use gym.latestBodyWeight (its ' +
+    'own "weight"/"unit" fields — state that same unit back as targetUnit); for running_distance check ' +
+    'activities.byType for the matching activity\'s totalDistanceKm/recent entries. For strength_pr, ' +
+    'TODAY\'S DATA has no historical best-lift/1RM data at all — ask the user directly for their current ' +
+    'number on that exercise unless they already stated it in the conversation; never guess or estimate one. ' +
+    'weeklyTargets is your own judgment call on a realistic progression toward targetValue (a straight linear ' +
+    'ramp is a fine default, a smarter curve is fine too where more realistic — e.g. weight change rarely ' +
+    'happens in perfectly equal weekly increments). Only call propose_long_term_plan once you have enough for ' +
+    'concrete numbers — never call it speculatively. When you do call it, also say a short summary sentence ' +
+    'in your normal reply text (the proposal is shown as its own card with a Save button, so don\'t repeat ' +
+    'every number in prose).\n\n' +
     'CALENDAR: the user can also ask you to schedule, move, or cancel something on their Google Calendar — ' +
     'they\'ll describe what they want (e.g. "put a gym session on my calendar tomorrow evening", "move my ' +
     'walk to 4pm", "I have an errand at 3, adjust my plan", "cancel my 5pm call") and may mention ' +
@@ -872,7 +1036,7 @@ export default async function handler(req, res) {
           output_config: { effort: 'medium' },
           system: systemBlocks,
           messages,
-          tools: [{ type: 'memory_20250818', name: 'memory' }, PROPOSE_OBJECTIVES_TOOL, PROPOSE_CALENDAR_EVENT_TOOL, PROPOSE_CALENDAR_EVENT_UPDATE_TOOL, PROPOSE_CALENDAR_EVENT_DELETE_TOOL, PROPOSE_RESTRICTION_TOOL, PROPOSE_TODAY_SESSION_TOOL],
+          tools: [{ type: 'memory_20250818', name: 'memory' }, PROPOSE_OBJECTIVES_TOOL, PROPOSE_CALENDAR_EVENT_TOOL, PROPOSE_CALENDAR_EVENT_UPDATE_TOOL, PROPOSE_CALENDAR_EVENT_DELETE_TOOL, PROPOSE_RESTRICTION_TOOL, PROPOSE_TODAY_SESSION_TOOL, PROPOSE_LONG_TERM_PLAN_TOOL],
         }),
       });
 
@@ -917,6 +1081,7 @@ export default async function handler(req, res) {
       const proposedCalendarEventDeletes = [];
       let proposedRestriction = null;
       let proposedTodaySession = null;
+      let proposedLongTermPlan = null;
       const toolResults = [];
       for (const toolUse of toolUses) {
         if (toolUse.name === 'propose_training_objectives') {
@@ -997,6 +1162,15 @@ export default async function handler(req, res) {
           });
           continue;
         }
+        if (toolUse.name === 'propose_long_term_plan') {
+          proposedLongTermPlan = normalizeProposedLongTermPlan(toolUse.input, todayContext && todayContext.date);
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: toolUse.id,
+            content: 'Proposal shown to the user in the chat UI for review. Not saved automatically — only the user can save it.',
+          });
+          continue;
+        }
         const result = await handleMemoryCommand(toolUse.input);
         toolResults.push({
           type: 'tool_result',
@@ -1007,7 +1181,7 @@ export default async function handler(req, res) {
       }
       messages.push({ role: 'user', content: toolResults });
 
-      if (proposedObjectives || proposedCalendarEvents.length || proposedCalendarEventUpdates.length || proposedCalendarEventDeletes.length || proposedRestriction || proposedTodaySession) {
+      if (proposedObjectives || proposedCalendarEvents.length || proposedCalendarEventUpdates.length || proposedCalendarEventDeletes.length || proposedRestriction || proposedTodaySession || proposedLongTermPlan) {
         const textBlock = (data.content || []).find((b) => b.type === 'text');
         const responseBody = { reply: textBlock ? textBlock.text : '', history: messages };
         if (proposedObjectives) responseBody.proposedObjectives = proposedObjectives;
@@ -1016,6 +1190,7 @@ export default async function handler(req, res) {
         if (proposedCalendarEventDeletes.length) responseBody.proposedCalendarEventDeletes = proposedCalendarEventDeletes;
         if (proposedRestriction) responseBody.proposedRestriction = proposedRestriction;
         if (proposedTodaySession) responseBody.proposedTodaySession = proposedTodaySession;
+        if (proposedLongTermPlan) responseBody.proposedLongTermPlan = proposedLongTermPlan;
         return res.status(200).json(responseBody);
       }
     }

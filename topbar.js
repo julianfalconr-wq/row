@@ -1903,6 +1903,101 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
       container.appendChild(card);
     }
 
+    // ---------- long-term plan proposal (see api/chat.js's
+    // propose_long_term_plan tool / plan.html Phase 1) ----------
+    // Same explicit-confirmation, API-backed-save pattern as
+    // renderRestrictionCard above (POST to api/sync-state.js's
+    // resource=plans, not a localStorage write) — a Plan is multi-
+    // device state the same way a restriction is, not a per-device
+    // cache like renderTodaySessionCard's.
+    function renderLongTermPlanCard(container, plan) {
+      const card = document.createElement('div');
+      card.className = 'chat-plan-card';
+
+      const trackedAs = plan.exerciseName ? (' — ' + plan.exerciseName) : (plan.activityName ? (' — ' + plan.activityName) : '');
+      card.appendChild(planRow('Goal', plan.goalDescription + trackedAs, ''));
+      card.appendChild(planRow('Target', plan.targetValue + ' ' + plan.targetUnit, 'from ' + plan.startValue + ' ' + plan.targetUnit + ' now'));
+      card.appendChild(planRow('Timeframe', plan.startDate + ' → ' + plan.endDate, plan.weeklyCheckpoints.length + ' weekly checkpoint' + (plan.weeklyCheckpoints.length === 1 ? '' : 's')));
+      if (plan.rationale) {
+        const rationale = document.createElement('div');
+        rationale.className = 'chat-plan-rationale';
+        rationale.textContent = plan.rationale;
+        card.appendChild(rationale);
+      }
+
+      const actions = document.createElement('div');
+      actions.className = 'chat-plan-actions';
+      const saveBtn = document.createElement('button');
+      saveBtn.type = 'button'; saveBtn.className = 'chat-plan-save-btn';
+      saveBtn.textContent = 'Save plan';
+      const dismissBtn = document.createElement('button');
+      dismissBtn.type = 'button'; dismissBtn.className = 'chat-plan-dismiss-btn';
+      dismissBtn.textContent = 'Not now';
+      actions.appendChild(saveBtn);
+      actions.appendChild(dismissBtn);
+      card.appendChild(actions);
+
+      function showStatus(text, isSaved) {
+        actions.remove();
+        const status = document.createElement('div');
+        status.className = 'chat-plan-status ' + (isSaved ? 'is-saved' : 'is-dismissed');
+        status.textContent = text;
+        card.appendChild(status);
+      }
+
+      saveBtn.addEventListener('click', async () => {
+        const secret = getSecret();
+        if (!secret) { showStatus('Set your dashboard secret first (on the Cronometer page).', false); return; }
+        saveBtn.disabled = true;
+        try {
+          // Resolve the model's free-text activityName against the
+          // user's REAL configured activity types (exact same
+          // case-insensitive match renderPlanCard's cardio slots
+          // already use) so a running_distance plan ties into
+          // plan.html's real weekly-distance tracking — that page
+          // filters logged activities by activityTypeId, a real
+          // configured id, not a name string. goalExerciseName needs
+          // no such resolution: plan.html's own strength_pr tracking
+          // matches by NAME directly (findExercise() in plan.html),
+          // exactly like Phase 1's schema already expects.
+          let goalActivityTypeId = null;
+          if (plan.goalType === 'running_distance' && plan.activityName) {
+            try {
+              const r = await fetch('/api/sync-state?secret=' + encodeURIComponent(secret) + '&resource=activity-types');
+              const j = await r.json();
+              const types = (j && j.ok && Array.isArray(j.types)) ? j.types : [];
+              const match = types.find((t) => t && typeof t.name === 'string' && t.name.trim().toLowerCase() === plan.activityName.trim().toLowerCase());
+              if (match) goalActivityTypeId = match.id;
+            } catch (e) {}
+          }
+          const payload = {
+            goalDescription: plan.goalDescription,
+            goalType: plan.goalType,
+            targetValue: plan.targetValue,
+            startValue: plan.startValue,
+            targetUnit: plan.targetUnit,
+            goalExerciseName: (plan.goalType === 'strength_pr' && plan.exerciseName) ? plan.exerciseName : null,
+            goalActivityTypeId,
+            startDate: plan.startDate,
+            endDate: plan.endDate,
+            weeklyCheckpoints: plan.weeklyCheckpoints,
+          };
+          const r = await fetch('/api/sync-state?secret=' + encodeURIComponent(secret) + '&resource=plans', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ resource: 'plans', action: 'create', plan: payload }),
+          });
+          const j = await r.json();
+          if (!r.ok || !j.ok) throw new Error((j && j.error) || ('HTTP ' + r.status));
+          showStatus('Saved ✓ — check the Plan page', true);
+        } catch (e) {
+          showStatus('Could not save: ' + (e.message || String(e)), false);
+        }
+      });
+      dismissBtn.addEventListener('click', () => showStatus('Not saved', false));
+
+      container.appendChild(card);
+    }
+
     // proposedCalendarEvents/Updates/Deletes are ARRAYS — a complex
     // request (e.g. "fit my run in before dinner, move whatever you
     // need to") can produce several proposals of the same type in one
@@ -1910,7 +2005,7 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
     // merged into one), so the user sees and approves every real-
     // calendar change individually. See api/chat.js's handler comment
     // on why this can't just be a single object per type.
-    function addBubble(role, text, proposedObjectives, proposedCalendarEvents, proposedRestriction, proposedTodaySession, proposedCalendarEventUpdates, proposedCalendarEventDeletes) {
+    function addBubble(role, text, proposedObjectives, proposedCalendarEvents, proposedRestriction, proposedTodaySession, proposedCalendarEventUpdates, proposedCalendarEventDeletes, proposedLongTermPlan) {
       emptyEl.style.display = 'none';
       const el = document.createElement('div');
       el.className = 'chat-bubble ' + role;
@@ -1921,6 +2016,7 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
       if (proposedTodaySession) renderTodaySessionCard(el, proposedTodaySession);
       (proposedCalendarEventUpdates || []).forEach((u) => renderCalendarEventUpdateCard(el, u));
       (proposedCalendarEventDeletes || []).forEach((d) => renderCalendarEventDeleteCard(el, d));
+      if (proposedLongTermPlan) renderLongTermPlanCard(el, proposedLongTermPlan);
       messagesEl.appendChild(el);
       messagesEl.scrollTop = messagesEl.scrollHeight;
       return el;
@@ -2249,10 +2345,11 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
           : (events.length ? (events.length > 1 ? "Here are the events I'm proposing:" : "Here's the event I'm proposing:")
           : (json.proposedRestriction ? "Here's the restriction I'm proposing:"
           : (json.proposedTodaySession ? "Here's the replacement I'm proposing for today's session:"
+          : (json.proposedLongTermPlan ? "Here's the plan I'm proposing:"
           : (updates.length ? (updates.length > 1 ? "Here are the changes I'm proposing:" : "Here's the change I'm proposing:")
           : (deletes.length ? (deletes.length > 1 ? "Here are the events I'm proposing to delete:" : "Here's what I'm proposing to delete:")
-          : '(no reply)')))));
-        addBubble('assistant', json.reply || fallbackText, json.proposedObjectives || null, events, json.proposedRestriction || null, json.proposedTodaySession || null, updates, deletes);
+          : '(no reply)'))))));
+        addBubble('assistant', json.reply || fallbackText, json.proposedObjectives || null, events, json.proposedRestriction || null, json.proposedTodaySession || null, updates, deletes, json.proposedLongTermPlan || null);
         archiveToServer(chatTodayKey(), chatHistory); // best-effort, doesn't block the UI
       } catch (e) {
         typingEl.remove();
