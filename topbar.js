@@ -1040,7 +1040,125 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
       } catch (e) { /* leave whoop.connected true but readings null — token exists but fetch failed */ }
     }
 
-    // ---------- 6. Finance ----------
+    // ---------- 6. Plan (long-term goal feature, plan.html Phase 3) ----------
+    // Progress-engine formulas ported verbatim from plan.html's own
+    // (weightAsOf/strengthBestAsOf/runningTotalForWeek/checkpointStatus
+    // — see that file's own comments) — duplicated per this file's
+    // established per-scope convention (see e.g. WHOOP fetch/refresh
+    // logic already independently duplicated in health.html/gym.html/
+    // index.html/main.html) rather than computed server-side, which
+    // has no access to localStorage at all. Pre-computed here, not
+    // left for the model to reason about from raw numbers, for the
+    // same reason this project never asks an LLM to do exact
+    // arithmetic (see api/training.js's wakeUpTime comment) — a
+    // "how's my plan going" review needs real hit/missed/current
+    // status per checkpoint, not the model's own guess at the math.
+    function planWeightAsOf(weights, asOfKey) {
+      let best = null;
+      for (const w of weights) { if (w.dateKey > asOfKey) break; if (w.weight != null) best = w.weight; }
+      return best;
+    }
+    function planEstimate1RM(w, r) { if (r < 2) return w; return w * (1 + r / 30); }
+    function planFindExercise(gymState, name) {
+      if (!name) return null;
+      const target = name.trim().toLowerCase();
+      return (gymState.exercises || []).find((ex) => (ex.name || '').trim().toLowerCase() === target) || null;
+    }
+    function planStrengthBestAsOf(gymState, exercise, asOfKey) {
+      if (!exercise) return null;
+      const logs = (gymState.logs && gymState.logs[exercise.id]) || [];
+      let best = null;
+      logs.forEach((l) => {
+        if (l.date == null) return;
+        const dk = String(l.date).slice(0, 10);
+        if (dk > asOfKey) return;
+        const val = exercise.bw ? l.reps : planEstimate1RM(l.weight, l.reps);
+        if (val != null && (best == null || val > best)) best = val;
+      });
+      return best;
+    }
+    function planAddDaysKey(dateKeyStr, n) {
+      const [y, m, d] = dateKeyStr.split('-').map(Number);
+      const dt = new Date(y, m - 1, d);
+      dt.setDate(dt.getDate() + n);
+      return dt.getFullYear() + '-' + String(dt.getMonth() + 1).padStart(2, '0') + '-' + String(dt.getDate()).padStart(2, '0');
+    }
+    function planMostRecentCheckpointWeekStart(checkpoints, asOfKey) {
+      let best = null;
+      (checkpoints || []).forEach((cp) => { if (cp.weekStartDate <= asOfKey) { if (!best || cp.weekStartDate > best) best = cp.weekStartDate; } });
+      return best;
+    }
+    function planRunningTotalForWeek(activitiesArr, activityTypeId, weekStartKey, weekEndKey) {
+      let total = 0, any = false;
+      activitiesArr.forEach((a) => {
+        if (!a || !a.dateKey || a.distanceKm == null) return;
+        if (a.dateKey < weekStartKey || a.dateKey > weekEndKey) return;
+        if (activityTypeId && a.activityTypeId !== activityTypeId) return;
+        total += a.distanceKm; any = true;
+      });
+      return any ? Math.round(total * 100) / 100 : null;
+    }
+    function planActualAsOf(planObj, sources, asOfKey) {
+      if (planObj.goalType === 'weight_gain' || planObj.goalType === 'weight_loss') return planWeightAsOf(sources.weights, asOfKey);
+      if (planObj.goalType === 'strength_pr') return planStrengthBestAsOf(sources.gymState, sources.matchedExercise, asOfKey);
+      if (planObj.goalType === 'running_distance') {
+        const weekStart = planMostRecentCheckpointWeekStart(planObj.weeklyCheckpoints, asOfKey);
+        if (!weekStart) return null;
+        return planRunningTotalForWeek(sources.activitiesArr, planObj.goalActivityTypeId, weekStart, planAddDaysKey(weekStart, 6));
+      }
+      return null; // "other" — no auto-tracked series, same as plan.html
+    }
+    function planIsIncreasingGoal(goalType) { return goalType !== 'weight_loss'; }
+    function planCheckpointStatus(planObj, cp, current, todayK) {
+      const weekEnd = planAddDaysKey(cp.weekStartDate, 6);
+      if (todayK >= cp.weekStartDate && todayK <= weekEnd) return 'current';
+      if (todayK < cp.weekStartDate) return 'upcoming';
+      if (current == null) return 'missed';
+      const hit = planIsIncreasingGoal(planObj.goalType) ? current >= cp.targetValue : current <= cp.targetValue;
+      return hit ? 'hit' : 'missed';
+    }
+
+    // Uses DayLib.effectiveDateKey() when available (matches plan.html's
+    // own "today" exactly — the Day Ring's configured day-end, not the
+    // 6am rollover activeDateKey() above uses for nutrition/foodScans),
+    // falling back to activeDateKey() on the pages that don't load
+    // daylib.js at all (finance.html, cronometer.html) — see this
+    // section's own fallback precedent elsewhere in this file.
+    const planTodayKey = (typeof window.DayLib !== 'undefined') ? window.DayLib.effectiveDateKey() : todayKey;
+    let plan = { active: null, pastPlanCount: 0 };
+    if (activitiesSecret) {
+      try {
+        const r = await fetch('/api/sync-state?secret=' + encodeURIComponent(activitiesSecret) + '&resource=plans');
+        const j = await r.json();
+        const allPlans = (j && j.ok && Array.isArray(j.plans)) ? j.plans : [];
+        const activePlan = allPlans.find((p) => p.status === 'active') || null;
+        plan.pastPlanCount = allPlans.filter((p) => p.status !== 'active').length;
+        if (activePlan) {
+          const matchedExercise = activePlan.goalType === 'strength_pr' ? planFindExercise(pcState || {}, activePlan.goalExerciseName) : null;
+          const sources = { weights: bodyWeights, gymState: pcState || { exercises: [], logs: {} }, activitiesArr: allActivities, matchedExercise };
+          const currentValue = planActualAsOf(activePlan, sources, planTodayKey);
+          const checkpoints = (activePlan.weeklyCheckpoints || []).map((cp) => {
+            const weekEnd = planAddDaysKey(cp.weekStartDate, 6);
+            const asOf = weekEnd < planTodayKey ? weekEnd : planTodayKey;
+            const actualAtWeekEnd = planActualAsOf(activePlan, sources, asOf);
+            return {
+              weekNumber: cp.weekNumber, weekStartDate: cp.weekStartDate, targetValue: cp.targetValue,
+              status: planCheckpointStatus(activePlan, cp, actualAtWeekEnd, planTodayKey),
+              actualAtWeekEnd,
+            };
+          });
+          plan.active = {
+            id: activePlan.id, goalDescription: activePlan.goalDescription, goalType: activePlan.goalType,
+            targetValue: activePlan.targetValue, startValue: activePlan.startValue, targetUnit: activePlan.targetUnit,
+            goalExerciseName: activePlan.goalExerciseName || null, goalActivityTypeId: activePlan.goalActivityTypeId || null,
+            startDate: activePlan.startDate, endDate: activePlan.endDate,
+            currentValue, checkpoints,
+          };
+        }
+      } catch (e) { /* leave plan at its default — secret unset, offline, or the plans table not created yet */ }
+    }
+
+    // ---------- 7. Finance ----------
     // nw:bank / nw:stocks / nw:crypto / nw:other = [{ name, amount }], amount
     // stored in CHF (finance.html's base currency) regardless of display
     // currency. subs = [{ name, amount, period }], amount also CHF-based.
@@ -1071,7 +1189,7 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
       subscriptions: { count: Array.isArray(subs) ? subs.length : 0, monthlyTotalCHF: round1(subsMonthlyTotal) },
     };
 
-    // ---------- 7. Daily Stack (supplements) ----------
+    // ---------- 8. Daily Stack (supplements) ----------
     // Exact same keys the Daily Stack section itself reads: stack:items
     // (the configured list) + stack:taken:<dateKey> (today's checked-off map).
     const stackItems = safeParse('stack:items', []);
@@ -1084,7 +1202,7 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
       completionPct: stackTotal ? Math.round((stackDone / stackTotal) * 100) : null,
     };
 
-    // ---------- 8. Calendar ----------
+    // ---------- 9. Calendar ----------
     // google_tokens_v1 = { access, refresh, expires } — same shape/spirit
     // as whoop_tokens_v1 above. Live-fetches today + the next few days
     // (via api/google-callback.js's ?action=list proxy) so the chat can
@@ -1159,7 +1277,7 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
       } catch (e) { /* leave calendar.connected true but upcoming empty — token exists but fetch failed */ }
     }
 
-    return { date: todayKey, nutrition, goals, foodScans, gym, activities, whoop, finance, dailyStack, calendar };
+    return { date: todayKey, nutrition, goals, foodScans, gym, activities, whoop, plan, finance, dailyStack, calendar };
   };
 
   // =============================================================
@@ -1911,13 +2029,14 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
     // device state the same way a restriction is, not a per-device
     // cache like renderTodaySessionCard's.
     function renderLongTermPlanCard(container, plan) {
+      const isAdjustment = !!plan.adjustsPlanId;
       const card = document.createElement('div');
       card.className = 'chat-plan-card';
 
       const trackedAs = plan.exerciseName ? (' — ' + plan.exerciseName) : (plan.activityName ? (' — ' + plan.activityName) : '');
-      card.appendChild(planRow('Goal', plan.goalDescription + trackedAs, ''));
+      card.appendChild(planRow(isAdjustment ? 'Adjusted goal' : 'Goal', plan.goalDescription + trackedAs, ''));
       card.appendChild(planRow('Target', plan.targetValue + ' ' + plan.targetUnit, 'from ' + plan.startValue + ' ' + plan.targetUnit + ' now'));
-      card.appendChild(planRow('Timeframe', plan.startDate + ' → ' + plan.endDate, plan.weeklyCheckpoints.length + ' weekly checkpoint' + (plan.weeklyCheckpoints.length === 1 ? '' : 's')));
+      card.appendChild(planRow(isAdjustment ? 'From this week' : 'Timeframe', plan.startDate + ' → ' + plan.endDate, plan.weeklyCheckpoints.length + (isAdjustment ? ' adjusted' : ' weekly') + ' checkpoint' + (plan.weeklyCheckpoints.length === 1 ? '' : 's')));
       if (plan.rationale) {
         const rationale = document.createElement('div');
         rationale.className = 'chat-plan-rationale';
@@ -1929,7 +2048,7 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
       actions.className = 'chat-plan-actions';
       const saveBtn = document.createElement('button');
       saveBtn.type = 'button'; saveBtn.className = 'chat-plan-save-btn';
-      saveBtn.textContent = 'Save plan';
+      saveBtn.textContent = isAdjustment ? 'Save adjustment' : 'Save plan';
       const dismissBtn = document.createElement('button');
       dismissBtn.type = 'button'; dismissBtn.className = 'chat-plan-dismiss-btn';
       dismissBtn.textContent = 'Not now';
@@ -1970,30 +2089,132 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
               if (match) goalActivityTypeId = match.id;
             } catch (e) {}
           }
-          const payload = {
-            goalDescription: plan.goalDescription,
-            goalType: plan.goalType,
+
+          if (!isAdjustment) {
+            const payload = {
+              goalDescription: plan.goalDescription,
+              goalType: plan.goalType,
+              targetValue: plan.targetValue,
+              startValue: plan.startValue,
+              targetUnit: plan.targetUnit,
+              goalExerciseName: (plan.goalType === 'strength_pr' && plan.exerciseName) ? plan.exerciseName : null,
+              goalActivityTypeId,
+              startDate: plan.startDate,
+              endDate: plan.endDate,
+              weeklyCheckpoints: plan.weeklyCheckpoints,
+            };
+            const r = await fetch('/api/sync-state?secret=' + encodeURIComponent(secret) + '&resource=plans', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ resource: 'plans', action: 'create', plan: payload }),
+            });
+            const j = await r.json();
+            if (!r.ok || !j.ok) throw new Error((j && j.error) || ('HTTP ' + r.status));
+            showStatus('Saved ✓ — check the Plan page', true);
+            return;
+          }
+
+          // Adjustment (adjustsPlanId set): re-fetch the plan fresh
+          // (never trust a copy from earlier in the conversation —
+          // it may have been ended/adjusted again since) so past
+          // checkpoints reflect real current state. Every checkpoint
+          // whose weekStartDate is BEFORE this proposal's own
+          // startDate (always "today", computed server-side — see
+          // normalizeProposedLongTermPlan's own comment) is a real,
+          // already-elapsed hit/missed record and is kept byte-for-
+          // byte unchanged; the new proposal's checkpoints (already
+          // dated correctly from today) replace everything from the
+          // current week onward, renumbered to continue the SAME
+          // weekNumber sequence rather than restarting at 1 — so
+          // "week 5" stays week 5 whether or not it came from the
+          // original proposal or an adjustment.
+          const listRes = await fetch('/api/sync-state?secret=' + encodeURIComponent(secret) + '&resource=plans');
+          const listJson = await listRes.json();
+          const existing = (listJson && listJson.ok && Array.isArray(listJson.plans)) ? listJson.plans.find((p) => p.id === plan.adjustsPlanId) : null;
+          if (!existing) { showStatus('Could not find that plan — it may have already been ended.', false); return; }
+          const pastCheckpoints = (existing.weeklyCheckpoints || []).filter((cp) => cp.weekStartDate < plan.startDate);
+          const newCheckpoints = plan.weeklyCheckpoints.map((cp, i) => ({
+            weekNumber: pastCheckpoints.length + i + 1,
+            weekStartDate: cp.weekStartDate,
+            targetValue: cp.targetValue,
+          }));
+          const mergedCheckpoints = pastCheckpoints.concat(newCheckpoints);
+          const lastCp = newCheckpoints.length ? newCheckpoints[newCheckpoints.length - 1] : null;
+          const patch = {
             targetValue: plan.targetValue,
-            startValue: plan.startValue,
-            targetUnit: plan.targetUnit,
-            goalExerciseName: (plan.goalType === 'strength_pr' && plan.exerciseName) ? plan.exerciseName : null,
-            goalActivityTypeId,
-            startDate: plan.startDate,
-            endDate: plan.endDate,
-            weeklyCheckpoints: plan.weeklyCheckpoints,
+            weeklyCheckpoints: mergedCheckpoints,
           };
+          if (plan.goalDescription) patch.goalDescription = plan.goalDescription;
+          if (lastCp) {
+            const [y, m, d] = lastCp.weekStartDate.split('-').map(Number);
+            const endDt = new Date(y, m - 1, d); endDt.setDate(endDt.getDate() + 6);
+            patch.endDate = endDt.getFullYear() + '-' + String(endDt.getMonth() + 1).padStart(2, '0') + '-' + String(endDt.getDate()).padStart(2, '0');
+          }
           const r = await fetch('/api/sync-state?secret=' + encodeURIComponent(secret) + '&resource=plans', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ resource: 'plans', action: 'create', plan: payload }),
+            body: JSON.stringify({ resource: 'plans', action: 'update', id: plan.adjustsPlanId, patch }),
           });
           const j = await r.json();
           if (!r.ok || !j.ok) throw new Error((j && j.error) || ('HTTP ' + r.status));
-          showStatus('Saved ✓ — check the Plan page', true);
+          showStatus('Adjustment saved ✓ — check the Plan page', true);
         } catch (e) {
           showStatus('Could not save: ' + (e.message || String(e)), false);
         }
       });
       dismissBtn.addEventListener('click', () => showStatus('Not saved', false));
+
+      container.appendChild(card);
+    }
+
+    // ---------- plan status change proposal (see api/chat.js's
+    // propose_plan_status_change tool) ----------
+    // Same explicit-confirmation, API-backed-save pattern as
+    // renderRestrictionCard — posts action="update" to the SAME
+    // api/sync-state.js resource=plans endpoint Phase 1 already built
+    // (no server changes needed for this at all).
+    function renderPlanStatusChangeCard(container, change) {
+      const card = document.createElement('div');
+      card.className = 'chat-plan-card';
+
+      card.appendChild(planRow('Plan', change.goalDescription, ''));
+      card.appendChild(planRow('Mark as', change.status === 'completed' ? 'Completed ✓' : 'Abandoned', ''));
+
+      const actions = document.createElement('div');
+      actions.className = 'chat-plan-actions';
+      const confirmBtn = document.createElement('button');
+      confirmBtn.type = 'button'; confirmBtn.className = 'chat-plan-save-btn';
+      confirmBtn.textContent = change.status === 'completed' ? 'Mark completed' : 'Abandon plan';
+      const dismissBtn = document.createElement('button');
+      dismissBtn.type = 'button'; dismissBtn.className = 'chat-plan-dismiss-btn';
+      dismissBtn.textContent = 'Not now';
+      actions.appendChild(confirmBtn);
+      actions.appendChild(dismissBtn);
+      card.appendChild(actions);
+
+      function showStatus(text, isSaved) {
+        actions.remove();
+        const status = document.createElement('div');
+        status.className = 'chat-plan-status ' + (isSaved ? 'is-saved' : 'is-dismissed');
+        status.textContent = text;
+        card.appendChild(status);
+      }
+
+      confirmBtn.addEventListener('click', async () => {
+        const secret = getSecret();
+        if (!secret) { showStatus('Set your dashboard secret first (on the Cronometer page).', false); return; }
+        confirmBtn.disabled = true;
+        try {
+          const r = await fetch('/api/sync-state?secret=' + encodeURIComponent(secret) + '&resource=plans', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ resource: 'plans', action: 'update', id: change.id, patch: { status: change.status } }),
+          });
+          const j = await r.json();
+          if (!r.ok || !j.ok) throw new Error((j && j.error) || ('HTTP ' + r.status));
+          showStatus((change.status === 'completed' ? 'Marked completed ✓' : 'Abandoned ✓') + ' — check the Plan page', true);
+        } catch (e) {
+          showStatus('Could not save: ' + (e.message || String(e)), false);
+        }
+      });
+      dismissBtn.addEventListener('click', () => showStatus('Not changed', false));
 
       container.appendChild(card);
     }
@@ -2005,7 +2226,7 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
     // merged into one), so the user sees and approves every real-
     // calendar change individually. See api/chat.js's handler comment
     // on why this can't just be a single object per type.
-    function addBubble(role, text, proposedObjectives, proposedCalendarEvents, proposedRestriction, proposedTodaySession, proposedCalendarEventUpdates, proposedCalendarEventDeletes, proposedLongTermPlan) {
+    function addBubble(role, text, proposedObjectives, proposedCalendarEvents, proposedRestriction, proposedTodaySession, proposedCalendarEventUpdates, proposedCalendarEventDeletes, proposedLongTermPlan, proposedPlanStatusChange) {
       emptyEl.style.display = 'none';
       const el = document.createElement('div');
       el.className = 'chat-bubble ' + role;
@@ -2017,6 +2238,7 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
       (proposedCalendarEventUpdates || []).forEach((u) => renderCalendarEventUpdateCard(el, u));
       (proposedCalendarEventDeletes || []).forEach((d) => renderCalendarEventDeleteCard(el, d));
       if (proposedLongTermPlan) renderLongTermPlanCard(el, proposedLongTermPlan);
+      if (proposedPlanStatusChange) renderPlanStatusChangeCard(el, proposedPlanStatusChange);
       messagesEl.appendChild(el);
       messagesEl.scrollTop = messagesEl.scrollHeight;
       return el;
@@ -2346,10 +2568,11 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
           : (json.proposedRestriction ? "Here's the restriction I'm proposing:"
           : (json.proposedTodaySession ? "Here's the replacement I'm proposing for today's session:"
           : (json.proposedLongTermPlan ? "Here's the plan I'm proposing:"
+          : (json.proposedPlanStatusChange ? "Here's what I'm proposing:"
           : (updates.length ? (updates.length > 1 ? "Here are the changes I'm proposing:" : "Here's the change I'm proposing:")
           : (deletes.length ? (deletes.length > 1 ? "Here are the events I'm proposing to delete:" : "Here's what I'm proposing to delete:")
-          : '(no reply)'))))));
-        addBubble('assistant', json.reply || fallbackText, json.proposedObjectives || null, events, json.proposedRestriction || null, json.proposedTodaySession || null, updates, deletes, json.proposedLongTermPlan || null);
+          : '(no reply)')))))));
+        addBubble('assistant', json.reply || fallbackText, json.proposedObjectives || null, events, json.proposedRestriction || null, json.proposedTodaySession || null, updates, deletes, json.proposedLongTermPlan || null, json.proposedPlanStatusChange || null);
         archiveToServer(chatTodayKey(), chatHistory); // best-effort, doesn't block the UI
       } catch (e) {
         typingEl.remove();

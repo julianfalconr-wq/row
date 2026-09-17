@@ -219,6 +219,35 @@ body::after {
 .plan-action-btn:hover { background: var(--line-soft); color: var(--text-primary); }
 .plan-action-btn.is-danger:hover { color: var(--danger); border-color: var(--danger); }
 
+/* Multiple-active-plans warning (Phase 3) — a defensive page-level
+   backstop, not the primary fix: the chat is now instructed to check
+   for an existing plan.active before proposing a new one (see
+   api/chat.js's LONG-TERM PLAN system-prompt section) and offers to
+   end it first via propose_plan_status_change, but sync-state.js
+   itself still has no hard uniqueness constraint (direct API use, a
+   race, or a plan created before this phase could all still produce
+   more than one). Only the single most-recently-updated one renders
+   as THE active plan above (same .find() as before — unchanged
+   behavior for the common case); this surfaces every OTHER one so
+   they're never just silently invisible. */
+.plan-multi-warning { margin-top: 18px; }
+.plan-multi-warning-title { font-size: 13px; font-weight: 700; color: var(--warning); margin-bottom: 8px; }
+.plan-multi-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px; border-radius: 10px;
+  background: rgba(255, 201, 60, 0.08); border: 1px solid rgba(255, 201, 60, 0.3);
+  margin-bottom: 6px; font-size: 12.5px;
+}
+.plan-multi-desc { flex: 1; min-width: 0; color: var(--text-primary); }
+.plan-multi-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.plan-multi-btn {
+  padding: 6px 10px; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--inset-bg); color: var(--text-secondary);
+  font-family: inherit; font-size: 11px; font-weight: 600;
+  cursor: pointer; -webkit-tap-highlight-color: transparent; white-space: nowrap;
+}
+.plan-multi-btn:hover { background: var(--line-soft); color: var(--text-primary); }
+
 .plan-past-section { margin-top: 22px; }
 .plan-past-row {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
@@ -232,6 +261,36 @@ body::after {
 .plan-past-status.abandoned { color: var(--text-tertiary); }
 
 .plan-loading { text-align: center; font-size: 12px; color: var(--text-tertiary); padding: 30px 0; font-style: italic; }
+
+/* Weekly review nudge — deliberately a plain, calm inline banner (not
+   a modal, not an OS push notification) matching this task's own
+   "gentle, non-blocking... at their own pace" requirement most
+   directly of the two options offered: it only ever appears when the
+   user has already chosen to open this page, never interrupts
+   anything unprompted. */
+.plan-nudge {
+  display: flex; align-items: center; gap: 12px;
+  margin-top: 18px; padding: 14px 16px; border-radius: 14px;
+  background: rgba(255, 201, 60, 0.08); border: 1px solid rgba(255, 201, 60, 0.3);
+}
+.plan-nudge-text { flex: 1; min-width: 0; font-size: 13px; color: var(--text-primary); line-height: 1.4; }
+.plan-nudge-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.plan-nudge-review-btn {
+  padding: 8px 12px; border-radius: 10px; border: none;
+  background: var(--warning); color: #1A1400;
+  font-family: inherit; font-size: 12px; font-weight: 700;
+  cursor: pointer; -webkit-tap-highlight-color: transparent; white-space: nowrap;
+}
+.plan-nudge-dismiss-btn {
+  border: 0; background: transparent; color: var(--text-tertiary);
+  font-size: 18px; line-height: 1; padding: 4px 6px; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.plan-nudge-dismiss-btn:hover { color: var(--text-primary); }
+@media (max-width: 480px) {
+  .plan-nudge { flex-wrap: wrap; }
+  .plan-nudge-actions { width: 100%; justify-content: flex-end; }
+}
 </style>
 </head>
 <body>
@@ -242,6 +301,19 @@ body::after {
   </div>
 
   <div id="planLoading" class="plan-loading">Loading…</div>
+
+  <!-- Weekly review nudge — see renderWeeklyNudge()'s own comment.
+       Purely a client-side prompt: never triggers any AI call or
+       adjustment on its own, just invites the user to check in on
+       their own terms (dismissible, and won't reappear until the
+       NEXT week transition). -->
+  <div id="planNudge" class="plan-nudge" style="display:none">
+    <div class="plan-nudge-text" id="planNudgeText"></div>
+    <div class="plan-nudge-actions">
+      <button type="button" class="plan-nudge-review-btn" id="planNudgeReviewBtn">Review with chat</button>
+      <button type="button" class="plan-nudge-dismiss-btn" id="planNudgeDismissBtn" aria-label="Dismiss">×</button>
+    </div>
+  </div>
 
   <div id="planEmpty" class="plan-card" style="display:none">
     <div class="plan-empty-icon"><i data-lucide="target"></i></div>
@@ -272,6 +344,11 @@ body::after {
       <button type="button" class="plan-action-btn" id="planCompleteBtn">Mark completed</button>
       <button type="button" class="plan-action-btn is-danger" id="planAbandonBtn">Abandon</button>
     </div>
+  </div>
+
+  <div id="planMultiWarning" class="plan-multi-warning" style="display:none">
+    <div class="plan-multi-warning-title">You have more than one active plan — only one shows above</div>
+    <div id="planMultiList"></div>
   </div>
 
   <div id="planPastSection" class="plan-past-section" style="display:none">
@@ -641,6 +718,32 @@ document.addEventListener('DOMContentLoaded', function () {
     }).join('');
   }
 
+  // See .plan-multi-warning's own CSS comment — a defensive backstop
+  // for a state the chat now actively tries to prevent, not the
+  // primary fix. `others` excludes whichever plan is already showing
+  // as THE active one above.
+  function renderMultiActiveWarning(others) {
+    if (!others.length) { $('planMultiWarning').style.display = 'none'; return; }
+    $('planMultiWarning').style.display = 'block';
+    $('planMultiList').innerHTML = others.map((p) => (
+      '<div class="plan-multi-row">' +
+        '<span class="plan-multi-desc">' + escapeHtml(p.goalDescription) + '</span>' +
+        '<div class="plan-multi-actions">' +
+          '<button type="button" class="plan-multi-btn" data-id="' + escapeHtml(p.id) + '" data-status="completed">Mark completed</button>' +
+          '<button type="button" class="plan-multi-btn" data-id="' + escapeHtml(p.id) + '" data-status="abandoned">Abandon</button>' +
+        '</div>' +
+      '</div>'
+    )).join('');
+    $('planMultiList').querySelectorAll('.plan-multi-btn').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const id = btn.getAttribute('data-id');
+        const status = btn.getAttribute('data-status');
+        if (!confirm((status === 'completed' ? 'Mark' : 'Abandon') + ' this plan?')) return;
+        if (await updatePlanStatus(id, status)) location.reload();
+      });
+    });
+  }
+
   function renderPastPlans(plans) {
     const past = plans.filter((p) => p.status !== 'active');
     if (!past.length) { $('planPastSection').style.display = 'none'; return; }
@@ -666,6 +769,47 @@ document.addEventListener('DOMContentLoaded', function () {
     }, 150);
   }
 
+  // =============================================================
+  // Weekly review nudge (Phase 3) — a plain in-app banner, not a push
+  // notification: of the two options this task allowed, this is the
+  // less intrusive one (see this file's own .plan-nudge CSS comment)
+  // and needs no new server/cron plumbing at all — it only ever
+  // appears when the user has already opened this page, purely
+  // inviting them to check in at their own pace, never auto-triggering
+  // any AI call or auto-adjusting anything itself.
+  //
+  // "A new week's checkpoint begins" = today falls inside a checkpoint
+  // window whose weekNumber is > 1 (week 1 starting coincides with the
+  // plan's own creation — nudging "review your brand new plan" the
+  // moment it's set up would be a false transition, not a real one).
+  // Dismissed-or-engaged state is per plan+week, in localStorage (a
+  // per-device UI preference, not plan data — doesn't belong in the
+  // synced plan record itself) — so it reappears exactly once per real
+  // week transition and never again for that same week once handled.
+  // =============================================================
+  const PLAN_NUDGE_DISMISS_KEY_PREFIX = 'plan:dismissedWeek:';
+  function currentCheckpointFor(plan, todayK) {
+    return (plan.weeklyCheckpoints || []).find((cp) => {
+      const weekEnd = addDaysKey(cp.weekStartDate, 6);
+      return todayK >= cp.weekStartDate && todayK <= weekEnd;
+    }) || null;
+  }
+  function renderWeeklyNudge(plan) {
+    const current = currentCheckpointFor(plan, todayKey());
+    if (!current || current.weekNumber <= 1) { $('planNudge').style.display = 'none'; return; }
+    let dismissedWeek = null;
+    try { dismissedWeek = localStorage.getItem(PLAN_NUDGE_DISMISS_KEY_PREFIX + plan.id); } catch (e) {}
+    if (String(dismissedWeek) === String(current.weekNumber)) { $('planNudge').style.display = 'none'; return; }
+    $('planNudgeText').textContent = 'Week ' + current.weekNumber + ' of your plan just started — want to check in?';
+    $('planNudge').style.display = 'flex';
+    function dismiss() {
+      try { localStorage.setItem(PLAN_NUDGE_DISMISS_KEY_PREFIX + plan.id, String(current.weekNumber)); } catch (e) {}
+      $('planNudge').style.display = 'none';
+    }
+    $('planNudgeReviewBtn').onclick = () => { dismiss(); openChatWithPrompt('Can we review how my plan is going so far?'); };
+    $('planNudgeDismissBtn').onclick = dismiss;
+  }
+
   async function boot() {
     const secret = getSecret();
     if (!secret) {
@@ -674,12 +818,15 @@ document.addEventListener('DOMContentLoaded', function () {
     }
     const plans = await fetchPlans();
     $('planLoading').style.display = 'none';
-    const active = plans.find((p) => p.status === 'active') || null;
+    const activePlans = plans.filter((p) => p.status === 'active');
+    const active = activePlans[0] || null;
     if (active) {
       await renderActivePlan(active);
+      renderWeeklyNudge(active);
     } else {
       $('planEmpty').style.display = 'block';
     }
+    renderMultiActiveWarning(activePlans.slice(1));
     renderPastPlans(plans);
 
     $('planStartBtn').addEventListener('click', () => {

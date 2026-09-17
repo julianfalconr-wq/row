@@ -358,41 +358,92 @@ const PROPOSE_TODAY_SESSION_TOOL = {
 // comment) — this endpoint has no access to either configured list at
 // tool-definition time, same reasoning as PROPOSE_OBJECTIVES_TOOL's
 // own header comment.
+//
+// adjustsPlanId (Phase 3): also reused for a WEEKLY REVIEW's proposed
+// adjustment to the user's EXISTING active plan (TODAY'S DATA's own
+// plan.active), not just for a brand new goal — set this to
+// plan.active.id, copied verbatim, when the user wants to adjust
+// future checkpoints rather than start something new. durationWeeks/
+// weeklyTargets in that case describe ONLY the remaining weeks from
+// today forward (not the whole plan from its original start) —
+// topbar.js's save handler keeps every already-elapsed checkpoint
+// untouched (a real historical hit/miss record, never rewritten) and
+// splices these new ones in after it, renumbered to continue that
+// same sequence. Omit entirely for a brand new plan.
 const PROPOSE_LONG_TERM_PLAN_TOOL = {
   name: 'propose_long_term_plan',
   description:
     'Propose a multi-week goal (Plan feature) for the user to review — e.g. "quiero subir 3kg en 6 semanas" ' +
-    '(gain 3kg in 6 weeks), "get my bench to 80kg by next month", "build up to running 20km a week". This is ' +
-    'DIFFERENT from propose_training_objectives (which sets only THIS week\'s specific sessions) — use this ' +
-    'one for a goal spanning several weeks that should be tracked against real logged data over time, not a ' +
-    'single week\'s plan. This does NOT save anything by itself — the user sees the proposal in the chat and ' +
-    'explicitly chooses to save it or not. Ask clarifying questions first if the goal, target number, or ' +
-    'timeframe aren\'t clear enough to give concrete numbers — never guess a target value or duration. ' +
-    'Ground startValue in TODAY\'S DATA where possible: for weight_gain/weight_loss use gym.latestBodyWeight ' +
-    '(its own "weight"/"unit" fields); for running_distance check activities.byType for the matching ' +
-    'activity\'s totalDistanceKm/recent entries; for strength_pr, TODAY\'S DATA has no historical best-lift ' +
-    'data at all, so ask the user directly for their current number on that exercise unless they already ' +
-    'stated it in the conversation. weeklyTargets is YOUR judgment call on a realistic progression toward ' +
-    'targetValue — a straight linear ramp is a fine default, but a smarter curve is fine too where more ' +
-    'realistic (e.g. weight change rarely happens in perfectly equal weekly increments).',
+    '(gain 3kg in 6 weeks), "get my bench to 80kg by next month", "build up to running 20km a week" — OR, ' +
+    'with adjustsPlanId set, propose adjusted future checkpoints for the user\'s EXISTING active plan during a ' +
+    'weekly review (see LONG-TERM PLAN REVIEW in your instructions). This is DIFFERENT from ' +
+    'propose_training_objectives (which sets only THIS week\'s specific sessions) — use this one for a goal ' +
+    'spanning several weeks that should be tracked against real logged data over time, not a single week\'s ' +
+    'plan. This does NOT save anything by itself — the user sees the proposal in the chat and explicitly ' +
+    'chooses to save it or not. For a NEW plan (adjustsPlanId omitted): ask clarifying questions first if the ' +
+    'goal, target number, or timeframe aren\'t clear enough to give concrete numbers — never guess a target ' +
+    'value or duration. Ground startValue in TODAY\'S DATA where possible: for weight_gain/weight_loss use ' +
+    'gym.latestBodyWeight (its own "weight"/"unit" fields); for running_distance check activities.byType for ' +
+    'the matching activity\'s totalDistanceKm/recent entries; for strength_pr, TODAY\'S DATA has no historical ' +
+    'best-lift data at all, so ask the user directly for their current number on that exercise unless they ' +
+    'already stated it in the conversation. weeklyTargets is YOUR judgment call on a realistic progression ' +
+    'toward targetValue — a straight linear ramp is a fine default, but a smarter curve is fine too where more ' +
+    'realistic (e.g. weight change rarely happens in perfectly equal weekly increments). IMPORTANT: before ' +
+    'proposing a brand new plan, check TODAY\'S DATA\'s plan.active first — if one already exists, do not ' +
+    'silently create a second one (only one shows on the Plan page); see LONG-TERM PLAN in your instructions ' +
+    'for what to do instead.',
   input_schema: {
     type: 'object',
     properties: {
+      adjustsPlanId: { type: 'string', description: 'Set ONLY when adjusting the existing active plan during a review — copy plan.active.id verbatim from TODAY\'S DATA. Omit for a brand new plan.' },
       goalDescription: { type: 'string', description: 'Short human-readable summary, e.g. "Gain 3kg in 6 weeks"' },
       goalType: { type: 'string', enum: ['weight_gain', 'weight_loss', 'strength_pr', 'running_distance', 'other'] },
       targetValue: { type: 'number', description: 'The final target value to reach by the end of the plan' },
-      startValue: { type: 'number', description: 'Current/baseline value right now — see this tool\'s own description on where to ground this per goalType' },
+      startValue: { type: 'number', description: 'Current/baseline value right now — see this tool\'s own description on where to ground this per goalType. When adjustsPlanId is set, copy the existing plan.active.startValue unchanged (the original baseline never moves).' },
       targetUnit: { type: 'string', description: 'e.g. "kg", "lb", "km", "mi", or "reps" for a bodyweight strength exercise' },
       exerciseName: { type: 'string', description: 'strength_pr ONLY: the exercise name as the user said it, e.g. "Bench Press" — omit for every other goalType' },
       activityName: { type: 'string', description: 'running_distance ONLY: the activity name, e.g. "Running", "Cycling" — omit for every other goalType' },
-      durationWeeks: { type: 'integer', description: 'How many weeks the plan spans' },
+      durationWeeks: { type: 'integer', description: 'How many weeks from TODAY this covers. For a new plan, the whole plan\'s length. For an adjustment (adjustsPlanId set), only the REMAINING weeks from today forward — never the original plan\'s full length.' },
       weeklyTargets: {
         type: 'array', items: { type: 'number' },
-        description: 'Exactly durationWeeks numbers, one per week in order (week 1 first) — the target value to have reached by the END of each week',
+        description: 'Exactly durationWeeks numbers, one per week in order starting from THIS week — the target value to have reached by the END of each week',
       },
-      rationale: { type: 'string', description: '1-3 sentences explaining the plan given what the user told you and their real current stats' },
+      rationale: { type: 'string', description: '1-3 sentences explaining the plan (or, for an adjustment, explaining the change) given what the user told you and their real current stats/progress' },
     },
     required: ['goalDescription', 'goalType', 'targetValue', 'startValue', 'targetUnit', 'durationWeeks', 'weeklyTargets', 'rationale'],
+  },
+};
+
+// ---------- propose_plan_status_change tool ----------
+// Lets the chat end the user's EXISTING active plan (Plan feature) —
+// e.g. they want to abandon it, they've finished it early, or they
+// want to start a genuinely different goal and first need to retire
+// the current one (see LONG-TERM PLAN's own instructions below on
+// when to reach for this before proposing a brand new plan.html
+// entry). id must be copied verbatim from TODAY'S DATA's own
+// plan.active.id — never invented, and never used on any plan not
+// currently active (there's nothing else to safely target: past
+// plans are already ended, and this endpoint has no way to look one
+// up by any other identifier). Posts straight to api/sync-state.js's
+// EXISTING resource=plans action="update" (Phase 1) — no server
+// changes needed there at all, same reasoning propose_restriction
+// already established for reusing that action dispatch as-is.
+const PROPOSE_PLAN_STATUS_CHANGE_TOOL = {
+  name: 'propose_plan_status_change',
+  description:
+    'Propose ending the user\'s EXISTING active long-term plan (Plan feature) — marking it completed or ' +
+    'abandoned. This does NOT change anything by itself — the user sees the proposal in the chat and ' +
+    'explicitly chooses to confirm it or not. id MUST be copied verbatim from TODAY\'S DATA\'s plan.active.id ' +
+    '— never invent one, and never call this when TODAY\'S DATA has no plan.active at all (there is nothing ' +
+    'to end).',
+  input_schema: {
+    type: 'object',
+    properties: {
+      id: { type: 'string', description: 'plan.active.id from TODAY\'S DATA, copied verbatim' },
+      status: { type: 'string', enum: ['completed', 'abandoned'], description: '"completed" if the goal was actually reached/finished, "abandoned" if the user is just stopping it' },
+      goalDescription: { type: 'string', description: 'plan.active.goalDescription from TODAY\'S DATA, copied verbatim — shown on the confirmation card so the user can see exactly which plan this affects' },
+    },
+    required: ['id', 'status', 'goalDescription'],
   },
   // Last tool in the tools array -> caches every tool definition up to
   // and including this one (see the prompt-caching note in the handler
@@ -589,6 +640,10 @@ function normalizeProposedLongTermPlan(raw, todayDateKey) {
     });
   }
   return {
+    // '' (not null) when absent, same as exerciseName/activityName
+    // below — topbar.js's renderLongTermPlanCard treats a falsy
+    // adjustsPlanId as "this is a brand new plan".
+    adjustsPlanId: typeof r.adjustsPlanId === 'string' ? r.adjustsPlanId.trim().slice(0, 100) : '',
     goalDescription: typeof r.goalDescription === 'string' ? r.goalDescription.slice(0, 300) : '',
     goalType,
     targetValue,
@@ -604,6 +659,20 @@ function normalizeProposedLongTermPlan(raw, todayDateKey) {
     endDate: addDaysToDateKey(startDate, durationWeeks * 7 - 1),
     weeklyCheckpoints,
     rationale: typeof r.rationale === 'string' ? r.rationale.slice(0, 600) : '',
+  };
+}
+
+// Defensive normalization for propose_plan_status_change — id has NO
+// fallback (same treatment as propose_calendar_event_update/delete's
+// own eventId above): an update with no real target id is meaningless
+// and must never reach the client looking like a valid proposal.
+function normalizeProposedPlanStatusChange(raw) {
+  const r = raw || {};
+  const status = (r.status === 'completed' || r.status === 'abandoned') ? r.status : '';
+  return {
+    id: typeof r.id === 'string' ? r.id.trim().slice(0, 100) : '',
+    status,
+    goalDescription: typeof r.goalDescription === 'string' ? r.goalDescription.slice(0, 300) : '',
   };
 }
 
@@ -853,19 +922,47 @@ function buildStaticSystemPrompt() {
     'bench to 80kg by next month", "build up to running 20km a week". DIFFERENT from WEEKLY TRAINING ' +
     'OBJECTIVES above — that sets only this week\'s sessions; this sets a goal spanning several weeks, ' +
     'tracked against real logged data over time on its own page. Do not confuse the two just because both ' +
-    'mention training/fitness. Ask clarifying questions first if the goal, target number, or timeframe ' +
-    'aren\'t clear enough to give concrete numbers — never guess a target value or duration. Ground ' +
-    'startValue in TODAY\'S DATA where possible: for weight_gain/weight_loss use gym.latestBodyWeight (its ' +
-    'own "weight"/"unit" fields — state that same unit back as targetUnit); for running_distance check ' +
-    'activities.byType for the matching activity\'s totalDistanceKm/recent entries. For strength_pr, ' +
-    'TODAY\'S DATA has no historical best-lift/1RM data at all — ask the user directly for their current ' +
-    'number on that exercise unless they already stated it in the conversation; never guess or estimate one. ' +
-    'weeklyTargets is your own judgment call on a realistic progression toward targetValue (a straight linear ' +
-    'ramp is a fine default, a smarter curve is fine too where more realistic — e.g. weight change rarely ' +
-    'happens in perfectly equal weekly increments). Only call propose_long_term_plan once you have enough for ' +
-    'concrete numbers — never call it speculatively. When you do call it, also say a short summary sentence ' +
-    'in your normal reply text (the proposal is shown as its own card with a Save button, so don\'t repeat ' +
-    'every number in prose).\n\n' +
+    'mention training/fitness. TODAY\'S DATA\'s plan.active (null if none) already carries the user\'s ' +
+    'current plan WITH its progress pre-computed — currentValue, and each checkpoint\'s status ' +
+    '(hit/missed/current/upcoming) and actualAtWeekEnd — exact numbers, already correct; never recompute or ' +
+    'guess this math yourself, and never contradict what it says.\n' +
+    '- BEFORE proposing a brand-new plan, check plan.active first. If it\'s already set, do NOT silently ' +
+    'create a second one — only one plan shows on the Plan page at a time, so a second would just be ' +
+    'invisible. Tell the user about the existing plan (its goal and current status, from plan.active) and ' +
+    'ask what they want to do: keep it as-is (don\'t propose anything new), end it first (call ' +
+    'propose_plan_status_change with plan.active.id, then propose the new one once they confirm that), or — ' +
+    'if what they actually want is a change to THIS SAME goal rather than a genuinely different one — treat ' +
+    'it as an adjustment instead (see the REVIEW paragraph below) rather than a new plan.\n' +
+    '- Ask clarifying questions first if the goal, target number, or timeframe aren\'t clear enough to give ' +
+    'concrete numbers — never guess a target value or duration. Ground startValue in TODAY\'S DATA where ' +
+    'possible: for weight_gain/weight_loss use gym.latestBodyWeight (its own "weight"/"unit" fields — state ' +
+    'that same unit back as targetUnit); for running_distance check activities.byType for the matching ' +
+    'activity\'s totalDistanceKm/recent entries. For strength_pr, TODAY\'S DATA has no historical best-lift/ ' +
+    '1RM data at all — ask the user directly for their current number on that exercise unless they already ' +
+    'stated it in the conversation; never guess or estimate one. weeklyTargets is your own judgment call on a ' +
+    'realistic progression toward targetValue (a straight linear ramp is a fine default, a smarter curve is ' +
+    'fine too where more realistic — e.g. weight change rarely happens in perfectly equal weekly increments). ' +
+    'Only call propose_long_term_plan once you have enough for concrete numbers — never call it speculatively. ' +
+    'When you do call it, also say a short summary sentence in your normal reply text (the proposal is shown ' +
+    'as its own card with a Save button, so don\'t repeat every number in prose).\n\n' +
+    'LONG-TERM PLAN REVIEW: when the user asks something like "how\'s my plan going", "am I on track", or ' +
+    'wants to check in on their existing plan, this is a REVIEW, not a new proposal. If plan.active is null, ' +
+    'tell them they don\'t have an active plan and offer to set one up (LONG-TERM PLAN above) — do not invent ' +
+    'progress for a plan that doesn\'t exist. If it\'s set, answer directly in your normal reply text using ' +
+    'its pre-computed currentValue/checkpoints — no tool call needed for a pure status report (e.g. "You\'re ' +
+    'in week 3, at 79.6kg against this week\'s 79.5kg target — right on track!" or "Week 2 came in at 79.6kg ' +
+    'against an 80kg target, so you\'re a bit behind, but week 3 is still very reachable."). Only call ' +
+    'propose_long_term_plan (with adjustsPlanId set to plan.active.id) if the user explicitly wants to CHANGE ' +
+    'the plan going forward (a harder/easier pace, a pushed-back deadline, etc.) — never propose an adjustment ' +
+    'just because progress is behind; being behind is information for the user to act on, not something you ' +
+    'decide to fix unprompted. When adjusting: durationWeeks/weeklyTargets describe ONLY the weeks from today ' +
+    'forward (never the plan\'s original full length — already-elapsed weeks keep their real hit/missed ' +
+    'record and are never rewritten); keep goalType/startValue/targetUnit/exerciseName/activityName the same ' +
+    'as the original unless the user explicitly asked to change what\'s being tracked, not just the numbers.\n\n' +
+    'PLAN STATUS CHANGE: call propose_plan_status_change when the user wants to end their EXISTING active ' +
+    'plan — they finished it early ("completed"), or they\'re just stopping ("abandoned") — or as part of ' +
+    'retiring one before starting a genuinely different one (see LONG-TERM PLAN above). id must be copied ' +
+    'verbatim from plan.active.id; never call this with no plan.active in TODAY\'S DATA.\n\n' +
     'CALENDAR: the user can also ask you to schedule, move, or cancel something on their Google Calendar — ' +
     'they\'ll describe what they want (e.g. "put a gym session on my calendar tomorrow evening", "move my ' +
     'walk to 4pm", "I have an errand at 3, adjust my plan", "cancel my 5pm call") and may mention ' +
@@ -1036,7 +1133,7 @@ export default async function handler(req, res) {
           output_config: { effort: 'medium' },
           system: systemBlocks,
           messages,
-          tools: [{ type: 'memory_20250818', name: 'memory' }, PROPOSE_OBJECTIVES_TOOL, PROPOSE_CALENDAR_EVENT_TOOL, PROPOSE_CALENDAR_EVENT_UPDATE_TOOL, PROPOSE_CALENDAR_EVENT_DELETE_TOOL, PROPOSE_RESTRICTION_TOOL, PROPOSE_TODAY_SESSION_TOOL, PROPOSE_LONG_TERM_PLAN_TOOL],
+          tools: [{ type: 'memory_20250818', name: 'memory' }, PROPOSE_OBJECTIVES_TOOL, PROPOSE_CALENDAR_EVENT_TOOL, PROPOSE_CALENDAR_EVENT_UPDATE_TOOL, PROPOSE_CALENDAR_EVENT_DELETE_TOOL, PROPOSE_RESTRICTION_TOOL, PROPOSE_TODAY_SESSION_TOOL, PROPOSE_LONG_TERM_PLAN_TOOL, PROPOSE_PLAN_STATUS_CHANGE_TOOL],
         }),
       });
 
@@ -1082,6 +1179,7 @@ export default async function handler(req, res) {
       let proposedRestriction = null;
       let proposedTodaySession = null;
       let proposedLongTermPlan = null;
+      let proposedPlanStatusChange = null;
       const toolResults = [];
       for (const toolUse of toolUses) {
         if (toolUse.name === 'propose_training_objectives') {
@@ -1171,6 +1269,25 @@ export default async function handler(req, res) {
           });
           continue;
         }
+        if (toolUse.name === 'propose_plan_status_change') {
+          const normalized = normalizeProposedPlanStatusChange(toolUse.input);
+          if (!normalized.id || !normalized.status) {
+            toolResults.push({
+              type: 'tool_result',
+              tool_use_id: toolUse.id,
+              content: 'No valid id/status was given — id must be copied verbatim from TODAY\'S DATA\'s plan.active.id, and status must be "completed" or "abandoned". Only call this when TODAY\'S DATA actually has a plan.active.',
+              is_error: true,
+            });
+            continue;
+          }
+          proposedPlanStatusChange = normalized;
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: toolUse.id,
+            content: 'Proposal shown to the user in the chat UI for review. The real plan is NOT changed automatically — only the user can confirm it.',
+          });
+          continue;
+        }
         const result = await handleMemoryCommand(toolUse.input);
         toolResults.push({
           type: 'tool_result',
@@ -1181,7 +1298,7 @@ export default async function handler(req, res) {
       }
       messages.push({ role: 'user', content: toolResults });
 
-      if (proposedObjectives || proposedCalendarEvents.length || proposedCalendarEventUpdates.length || proposedCalendarEventDeletes.length || proposedRestriction || proposedTodaySession || proposedLongTermPlan) {
+      if (proposedObjectives || proposedCalendarEvents.length || proposedCalendarEventUpdates.length || proposedCalendarEventDeletes.length || proposedRestriction || proposedTodaySession || proposedLongTermPlan || proposedPlanStatusChange) {
         const textBlock = (data.content || []).find((b) => b.type === 'text');
         const responseBody = { reply: textBlock ? textBlock.text : '', history: messages };
         if (proposedObjectives) responseBody.proposedObjectives = proposedObjectives;
@@ -1191,6 +1308,7 @@ export default async function handler(req, res) {
         if (proposedRestriction) responseBody.proposedRestriction = proposedRestriction;
         if (proposedTodaySession) responseBody.proposedTodaySession = proposedTodaySession;
         if (proposedLongTermPlan) responseBody.proposedLongTermPlan = proposedLongTermPlan;
+        if (proposedPlanStatusChange) responseBody.proposedPlanStatusChange = proposedPlanStatusChange;
         return res.status(200).json(responseBody);
       }
     }
