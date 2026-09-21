@@ -170,6 +170,35 @@ body::after {
   .trend-chart-wrap { height: 190px; }
   .trend-card { padding: 16px; }
 }
+
+/* Find Patterns — cross-domain analysis, on-demand only. Reuses
+   .trend-card/.trend-card-head for visual consistency with the 7
+   charts above rather than a new card style. */
+.patterns-intro { font-size: 12.5px; color: var(--text-tertiary); line-height: 1.5; margin-bottom: 14px; }
+.patterns-btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 11px 18px; border: none; border-radius: 12px;
+  background: linear-gradient(180deg, var(--btn-primary-a), var(--btn-primary-b));
+  color: var(--btn-primary-text);
+  font-family: inherit; font-size: 13.5px; font-weight: 700;
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.patterns-btn:disabled { opacity: 0.6; cursor: default; }
+.patterns-loading { margin-top: 14px; font-size: 12.5px; color: var(--text-tertiary); font-style: italic; }
+.patterns-error {
+  margin-top: 14px; padding: 10px 12px; border-radius: 10px;
+  background: rgba(255, 77, 94, 0.08); border: 1px solid rgba(255, 77, 94, 0.25);
+  color: var(--danger); font-size: 12.5px;
+}
+.patterns-results { margin-top: 14px; }
+.patterns-finding {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 12px 14px; border-radius: 12px;
+  background: var(--inset-bg); border: 1px solid var(--line);
+  margin-bottom: 8px; font-size: 13px; color: var(--text-primary); line-height: 1.5;
+}
+.patterns-finding-icon { flex-shrink: 0; font-size: 15px; line-height: 1.5; }
+.patterns-meta { margin-top: 10px; font-size: 11px; color: var(--text-tertiary); font-family: var(--font-mono); }
 </style>
 </head>
 <body>
@@ -249,6 +278,20 @@ body::after {
       <span class="trend-card-sub" id="whoopTrendSub">Loading…</span>
     </div>
     <div class="trend-chart-wrap"><canvas id="whoopTrendChart"></canvas></div>
+  </div>
+
+  <!-- Find Patterns — on-demand cross-domain analysis over the 7
+       charts above. Never runs automatically; only on tapping the
+       button (see findPatternsBtn's own click handler). -->
+  <div class="trend-card">
+    <div class="trend-card-head">
+      <h3>Find Patterns</h3>
+    </div>
+    <div class="patterns-intro">Looks for real correlations across everything above — score, habits, weight, nutrition, WHOOP, strength, and activities — grounded in your own logged data for the range selected above. Something no single app (Cronometer, WHOOP) could see on its own.</div>
+    <button type="button" class="patterns-btn" id="findPatternsBtn">Find Patterns</button>
+    <div class="patterns-loading" id="patternsLoading" style="display:none">Analyzing your data across all domains… this can take a few seconds.</div>
+    <div class="patterns-error" id="patternsError" style="display:none"></div>
+    <div class="patterns-results" id="patternsResults"></div>
   </div>
 </div>
 
@@ -600,6 +643,13 @@ document.addEventListener('DOMContentLoaded', function () {
     renderChart('habitsTrendChart', dates.map(shortLabel), [{ label: 'Habits %', data: habitData, color: '#1D9E75' }]);
     const habitLoggedCount = habitData.filter((v) => v != null).length;
     $('habitsTrendSub').textContent = habitLoggedCount ? (habitLoggedCount + ' of ' + dates.length + ' days logged') : 'No habits logged in this range';
+
+    // Returned (in addition to the existing renderChart/sub-label side
+    // effects above, both unchanged) so "Find Patterns" can reuse this
+    // exact computation instead of re-deriving it — see that feature's
+    // own comment near loadAll(). dates/data/habitData are already
+    // aligned 1:1, exactly as rendered.
+    return { dates, scoreData: data, habitData };
   }
 
   // =============================================================
@@ -618,6 +668,9 @@ document.addEventListener('DOMContentLoaded', function () {
     renderChart('weightTrendChart', dates.map(shortLabel), [{ label: 'Weight (' + units + ')', data, color: '#1D9E75' }]);
     const loggedCount = data.filter((v) => v != null).length;
     $('weightTrendSub').textContent = loggedCount ? (loggedCount + ' logged ' + (loggedCount === 1 ? 'entry' : 'entries')) : 'No weight logged in this range';
+
+    // See loadScoreTrend's own comment on why this is returned.
+    return { dates, data, units };
   }
 
   // =============================================================
@@ -636,7 +689,7 @@ document.addEventListener('DOMContentLoaded', function () {
         { label: 'Calories %', data: dates.map(() => null), color: '#FFC93C' },
       ]);
       $('nutritionTrendSub').textContent = 'Cronometer not connected';
-      return;
+      return { dates, proteinData: dates.map(() => null), caloriesData: dates.map(() => null) };
     }
     let result = null;
     try { result = await window.CronoLib.fetchCronometerData(); } catch (e) {}
@@ -661,6 +714,9 @@ document.addEventListener('DOMContentLoaded', function () {
     $('nutritionTrendSub').textContent = loggedCount
       ? (loggedCount + ' of ' + dates.length + ' days synced' + (loggedCount < dates.length ? ' — sync a longer window on the Cronometer page for more history' : ''))
       : 'No Cronometer data synced in this range';
+
+    // See loadScoreTrend's own comment on why this is returned.
+    return { dates, proteinData, caloriesData };
   }
 
   // =============================================================
@@ -731,7 +787,7 @@ document.addEventListener('DOMContentLoaded', function () {
         { label: 'Sleep %', data: dates.map(() => null), color: '#FFC93C' },
       ]);
       $('whoopTrendSub').textContent = 'WHOOP not connected';
-      return;
+      return { dates, recoveryData: dates.map(() => null), sleepData: dates.map(() => null) };
     }
     try {
       let t = tokens;
@@ -762,12 +818,15 @@ document.addEventListener('DOMContentLoaded', function () {
       ]);
       const loggedCount = recoveryData.filter((v) => v != null).length;
       $('whoopTrendSub').textContent = loggedCount ? (loggedCount + ' of ' + dates.length + ' days with recovery data') : 'No WHOOP data synced in this range';
+      // See loadScoreTrend's own comment on why this is returned.
+      return { dates, recoveryData, sleepData };
     } catch (e) {
       renderChart('whoopTrendChart', dates.map(shortLabel), [
         { label: 'Recovery %', data: dates.map(() => null), color: '#1D9E75' },
         { label: 'Sleep %', data: dates.map(() => null), color: '#FFC93C' },
       ]);
       $('whoopTrendSub').textContent = 'Could not load WHOOP data';
+      return { dates, recoveryData: dates.map(() => null), sleepData: dates.map(() => null) };
     }
   }
 
@@ -806,6 +865,9 @@ document.addEventListener('DOMContentLoaded', function () {
     $('strengthTrendSub').textContent = totalSessions
       ? (totalSessions + ' session' + (totalSessions === 1 ? '' : 's') + ' across ' + weekOrder.length + ' week' + (weekOrder.length === 1 ? '' : 's'))
       : 'No strength sessions logged in this range';
+
+    // See loadScoreTrend's own comment on why this is returned.
+    return { weekOrder, weekCounts: data };
   }
 
   // =============================================================
@@ -847,6 +909,12 @@ document.addEventListener('DOMContentLoaded', function () {
     $('activitiesPaceSub').textContent = paceEntries.length
       ? (paceEntries.length + ' session' + (paceEntries.length === 1 ? '' : 's') + ' with pace data')
       : 'No sessions with both distance and duration in this range';
+
+    // See loadScoreTrend's own comment on why this is returned.
+    return {
+      distance: distanceEntries.map((a, i) => ({ date: a.dateKey, km: distanceData[i] })),
+      pace: paceEntries.map((a, i) => ({ date: a.dateKey, minPerKm: paceData[i] })),
+    };
   }
 
   // =============================================================
@@ -915,12 +983,22 @@ document.addEventListener('DOMContentLoaded', function () {
   // Orchestration — range selector + one load pass per selection.
   // =============================================================
   let currentDays = 30;
+  // Returns every chart's own computed series alongside its existing
+  // render-to-canvas side effect (unchanged) — "Find Patterns" calls
+  // this SAME function (not a parallel copy) to both refresh the 7
+  // charts to the current range AND get real data back, so there's
+  // exactly one place that ever re-derives this data from
+  // localStorage/Cronometer/WHOOP, matching this project's "reuse,
+  // don't rebuild" convention. Callers that only want the charts
+  // refreshed (the range-tab click handler below, the initial page
+  // load) simply don't use the return value — an unused return is
+  // free in JS, so this changes nothing for them.
   async function loadAll() {
     document.querySelectorAll('.trend-card-sub').forEach((el) => { el.textContent = 'Loading…'; });
     const toKey = DayLib.effectiveDateKey();
     const fromKey = addDaysKey(toKey, -(currentDays - 1));
     const dates = datesFromTo(fromKey, toKey);
-    await Promise.all([
+    const [score, weight, nutrition, whoop, strength, activities] = await Promise.all([
       loadScoreTrend(dates, fromKey, toKey),
       loadWeightTrend(dates),
       loadNutritionTrend(dates),
@@ -928,6 +1006,7 @@ document.addEventListener('DOMContentLoaded', function () {
       loadStrengthTrend(dates),
       loadActivitiesTrend(fromKey, toKey),
     ]);
+    return { fromKey, toKey, dates, score, weight, nutrition, whoop, strength, activities };
   }
 
   $('trendRangeTabs').querySelectorAll('.cal-tab').forEach((tab) => {
@@ -937,6 +1016,81 @@ document.addEventListener('DOMContentLoaded', function () {
       currentDays = Number(tab.dataset.days) || 30;
       loadAll();
     });
+  });
+
+  // =============================================================
+  // Find Patterns — on-demand only (see this feature's own HTML
+  // comment; never triggered automatically, no cron, no auto-refresh).
+  // Reuses loadAll() itself — not a second data-fetching pass — to get
+  // the exact same series the 7 charts above just (re-)rendered, for
+  // whichever range is CURRENTLY selected. Each series is trimmed down
+  // to {date, value} pairs for REAL logged points only (nulls dropped
+  // entirely, not sent as null) before it goes to the server — compact,
+  // and the model never has to reason about what a null means (see
+  // api/training.js's mode=find-patterns comment on this exact shape).
+  // =============================================================
+  function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+  function toDateValuePairs(dates, data) {
+    const out = [];
+    dates.forEach((dk, i) => { if (data[i] != null) out.push({ date: dk, value: data[i] }); });
+    return out;
+  }
+  function toStrengthPairs(weekOrder, weekCounts) {
+    return weekOrder.map((wk, i) => ({ weekStart: wk, sessions: weekCounts[i] }));
+  }
+
+  $('findPatternsBtn').addEventListener('click', async () => {
+    const secret = getSecret();
+    if (!secret) {
+      $('patternsError').textContent = 'Set your dashboard secret first (on the Cronometer page).';
+      $('patternsError').style.display = 'block';
+      return;
+    }
+    const btn = $('findPatternsBtn');
+    btn.disabled = true;
+    $('patternsError').style.display = 'none';
+    $('patternsResults').innerHTML = '';
+    $('patternsLoading').style.display = 'block';
+    try {
+      const { fromKey, toKey, dates, score, weight, nutrition, whoop, strength, activities } = await loadAll();
+      const payload = {
+        fromKey, toKey, days: currentDays,
+        score: toDateValuePairs(dates, score.scoreData),
+        habits: toDateValuePairs(dates, score.habitData),
+        weight: toDateValuePairs(dates, weight.data),
+        weightUnit: weight.units,
+        nutrition: {
+          protein: toDateValuePairs(dates, nutrition.proteinData),
+          calories: toDateValuePairs(dates, nutrition.caloriesData),
+        },
+        whoop: {
+          recovery: toDateValuePairs(dates, whoop.recoveryData),
+          sleep: toDateValuePairs(dates, whoop.sleepData),
+        },
+        strength: toStrengthPairs(strength.weekOrder, strength.weekCounts),
+        activities: {
+          distance: activities.distance,
+          pace: activities.pace,
+        },
+      };
+      const r = await fetch('/api/training?mode=find-patterns&secret=' + encodeURIComponent(secret), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const j = await r.json();
+      if (!r.ok || !j.ok) throw new Error((j && j.error) || ('HTTP ' + r.status));
+      $('patternsResults').innerHTML = j.findings.map((f) => (
+        '<div class="patterns-finding"><span class="patterns-finding-icon">📈</span><span>' + escapeHtml(f) + '</span></div>'
+      )).join('');
+    } catch (e) {
+      $('patternsError').textContent = 'Could not analyze: ' + (e.message || String(e));
+      $('patternsError').style.display = 'block';
+    } finally {
+      $('patternsLoading').style.display = 'none';
+      btn.disabled = false;
+    }
   });
 
   loadAll();

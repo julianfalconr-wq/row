@@ -1,7 +1,8 @@
 // =============================================================
 // Combined endpoint for gym.html's Training page AI features, plus
-// main.html's "Plan my day" feature (mode=day-plan, added later —
-// same file for the same reason). Three modes, one file — same
+// main.html's "Plan my day" feature (mode=day-plan) and trends.html's
+// "Find Patterns" feature (mode=find-patterns, added later — same
+// file for the same reason). Four modes, one file — same
 // dual-mode-in-one-endpoint pattern api/cronometer-data.js already
 // uses (there: presence/absence of a "type" param; here: an explicit
 // "mode" param), kept as ONE file deliberately: Vercel's Hobby plan
@@ -137,6 +138,39 @@
 //     // nothing else read sleepTargetHours or that inferred bedtime once Wind-down uses todayBedtime.)
 //   }
 //   -> { ok: true, blocks: [{ date, start, end, title, category }] }
+//
+// MODE 4 — POST /api/training?mode=find-patterns&secret=...
+//   trends.html's "Find Patterns" feature — on-demand only, never
+//   triggered automatically. Looks for genuine cross-domain
+//   correlations across the SAME historical data trends.html's own 7
+//   charts already compute (Today's Score, habits %, body weight,
+//   Cronometer protein/calories %, WHOOP recovery/sleep %, strength
+//   sessions/week, activity distance/pace) — something no single
+//   source app (Cronometer, WHOOP) could ever see on its own, since it
+//   needs all of these in one place. Every series here is exactly what
+//   trends.html's own loadScoreTrend/loadWeightTrend/etc. already
+//   computed for their charts (see that file's own comment on why
+//   those functions now also RETURN their computed series, not just
+//   render them) — this endpoint does none of that computation itself,
+//   only sends it to Claude and validates the response shape.
+//   Body: {
+//     fromKey, toKey: 'YYYY-MM-DD',   // the exact range currently selected on trends.html
+//     days: Number,                    // informational — same currentDays trends.html already tracks
+//     score: [{ date, value }],        // Today's Score, 0-100
+//     habits: [{ date, value }],       // manual-habit completion %, 0-100
+//     weight: [{ date, value }], weightUnit: String,
+//     nutrition: { protein: [{ date, value }], calories: [{ date, value }] },   // % of target, 0-100+
+//     whoop: { recovery: [{ date, value }], sleep: [{ date, value }] },          // %, 0-100
+//     strength: [{ weekStart, sessions }],           // sessions completed that week
+//     activities: { distance: [{ date, km }], pace: [{ date, minPerKm }] },     // per real logged session
+//   }
+//   Every series is pre-filtered to REAL logged values only (no nulls/
+//   gaps sent at all — see trends.html's own comment) — compact, and
+//   the model never has to guess what a null means.
+//   -> { ok: true, findings: [String, ...] }   // 1-6 short, specific, data-grounded sentences;
+//      may be a single honest "not enough data yet" sentence if the range is too sparse/short to
+//      say anything reliable — see buildFindPatternsSystemPrompt's own instructions on why this is
+//      required rather than optional.
 // =============================================================
 
 const MAX_BODY_CHARS = 30000;
@@ -738,6 +772,143 @@ async function handleDayPlan(req, res, apiKey, body) {
 }
 
 // ------------------------------------------------------------
+// MODE: find-patterns
+// ------------------------------------------------------------
+
+// Generic sanitizer for the [{date, value}]-shaped series (score,
+// habits, weight, nutrition.protein/calories, whoop.recovery/sleep) —
+// same shape, same validation, reused across all of them rather than
+// six near-identical copies. Caps at 200 entries (well above any
+// realistic range trends.html's own 7/30/90-day tabs would ever send)
+// as a defensive ceiling, not a real limit in practice. date must
+// match YYYY-MM-DD (same DATE_RE convention api/sync-state.js already
+// uses) — typeof 'string' alone would let a garbage date string
+// through to the model as if it were a real one.
+const FIND_PATTERNS_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+function sanitizeDateValueSeries(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw.slice(0, 200)
+    .filter((e) => e && typeof e.date === 'string' && FIND_PATTERNS_DATE_RE.test(e.date) && typeof e.value === 'number' && isFinite(e.value))
+    .map((e) => ({ date: e.date, value: Math.round(e.value * 100) / 100 }));
+}
+function sanitizeStrengthSeries(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw.slice(0, 60)
+    .filter((e) => e && typeof e.weekStart === 'string' && FIND_PATTERNS_DATE_RE.test(e.weekStart) && typeof e.sessions === 'number' && isFinite(e.sessions))
+    .map((e) => ({ weekStart: e.weekStart, sessions: Math.max(0, Math.round(e.sessions)) }));
+}
+function sanitizeActivitySeries(raw, valueKey) {
+  if (!Array.isArray(raw)) return [];
+  return raw.slice(0, 200)
+    .filter((e) => e && typeof e.date === 'string' && FIND_PATTERNS_DATE_RE.test(e.date) && typeof e[valueKey] === 'number' && isFinite(e[valueKey]))
+    .map((e) => ({ date: e.date, [valueKey]: Math.round(e[valueKey] * 100) / 100 }));
+}
+
+// totalPoints across every domain — the honesty instructions below
+// are calibrated against this, not just the date range, since a wide
+// range with almost nothing actually logged is just as unreliable a
+// basis for a "pattern" as a short one.
+function buildFindPatternsSystemPrompt(days, totalPoints) {
+  return (
+    'You are analyzing one user\'s own historical health/fitness data from their personal dashboard (Row), ' +
+    'covering the last ' + days + ' days, looking for GENUINE cross-domain correlations — patterns that ' +
+    'span multiple different data sources (e.g. recovery vs. a habit, nutrition vs. training, weight vs. ' +
+    'sleep) that no single source app (Cronometer, WHOOP) could ever see on its own, since each only has ' +
+    'its own slice of this. This is exploratory analysis of the user\'s OWN real logged numbers, not general ' +
+    'health advice — never suggest what they should do, only report what the data itself actually shows.\n\n' +
+    'You will receive several series, each as a list of {date, value} (or {weekStart, sessions} for ' +
+    'strength, {date, km}/{date, minPerKm} for activities) — ONLY real logged points are included (no ' +
+    'nulls/gaps), so a short list for a given domain means that domain simply doesn\'t have much real data ' +
+    'in this range, not that you should fill in the blanks.\n\n' +
+    'CRITICAL — DO NOT FABRICATE: only report a correlation you can point to SPECIFIC real numbers and ' +
+    'dates for, from the data actually given to you. Every finding must cite at least one real number/date ' +
+    'from the input (e.g. "your 3 highest-recovery days this range (82%, 79%, 77%) were all days you also ' +
+    'hit your reading habit" — not "recovery tends to correlate with good habits"). If you cannot find a ' +
+    'real correlation with enough supporting points to say something specific, DO NOT invent one to seem ' +
+    'useful — say so plainly instead (e.g. "No clear cross-domain pattern stood out in this range" or ' +
+    'naming which domains simply don\'t have enough logged data yet). A short, honest "nothing notable yet" ' +
+    'response is the CORRECT output when that\'s what the data shows, not a failure.\n\n' +
+    'SAMPLE SIZE HONESTY: this range has ' + totalPoints + ' total logged data points across every domain ' +
+    'combined. Treat anything under roughly 10-14 points (under ~2 weeks of daily logging) as too little to ' +
+    'draw a real conclusion from — say so explicitly rather than reporting a "pattern" built from 3-4 ' +
+    'coincidental days. Even with more data, if a correlation is only weakly suggestive (a handful of ' +
+    'overlapping days, not a clear repeated pattern), say that plainly (e.g. "a possible but weak link, only ' +
+    '3 overlapping days") rather than presenting it with the same confidence as a strong one — never round a ' +
+    'weak pattern up to sound more useful than it is.\n\n' +
+    'Respond with ONLY this JSON shape, no markdown fences, no other text: ' +
+    '{"findings": ["...", "..."]}. 1 to 6 findings. Each is a single plain-text sentence or two (no ' +
+    'markdown, no emoji — the app adds its own icon), specific and grounded in the real data as described ' +
+    'above. If the data genuinely shows nothing reliable, return exactly ONE finding saying so honestly — ' +
+    'never pad with generic filler to reach a higher count.'
+  );
+}
+
+function normalizeFindPatterns(raw) {
+  if (!raw || !Array.isArray(raw.findings)) return [];
+  return raw.findings
+    .filter((f) => typeof f === 'string' && f.trim())
+    .slice(0, 6)
+    .map((f) => f.trim().slice(0, 500));
+}
+
+async function handleFindPatterns(req, res, apiKey, body) {
+  const fromKey = typeof body.fromKey === 'string' ? body.fromKey.slice(0, 10) : '';
+  const toKey = typeof body.toKey === 'string' ? body.toKey.slice(0, 10) : '';
+  const days = Math.max(1, Math.min(3650, Math.round(numOrNull(body.days) || 30)));
+  if (!fromKey || !toKey) return res.status(400).json({ ok: false, error: 'fromKey and toKey (YYYY-MM-DD) are required' });
+
+  const nutrition = body.nutrition && typeof body.nutrition === 'object' ? body.nutrition : {};
+  const whoop = body.whoop && typeof body.whoop === 'object' ? body.whoop : {};
+  const activities = body.activities && typeof body.activities === 'object' ? body.activities : {};
+
+  const context = {
+    fromKey, toKey, days,
+    score: sanitizeDateValueSeries(body.score),
+    habits: sanitizeDateValueSeries(body.habits),
+    weight: sanitizeDateValueSeries(body.weight),
+    weightUnit: typeof body.weightUnit === 'string' ? body.weightUnit.slice(0, 10) : 'kg',
+    nutrition: {
+      protein: sanitizeDateValueSeries(nutrition.protein),
+      calories: sanitizeDateValueSeries(nutrition.calories),
+    },
+    whoop: {
+      recovery: sanitizeDateValueSeries(whoop.recovery),
+      sleep: sanitizeDateValueSeries(whoop.sleep),
+    },
+    strength: sanitizeStrengthSeries(body.strength),
+    activities: {
+      distance: sanitizeActivitySeries(activities.distance, 'km'),
+      pace: sanitizeActivitySeries(activities.pace, 'minPerKm'),
+    },
+  };
+
+  const totalPoints = context.score.length + context.habits.length + context.weight.length
+    + context.nutrition.protein.length + context.nutrition.calories.length
+    + context.whoop.recovery.length + context.whoop.sleep.length
+    + context.strength.reduce((s, w) => s + (w.sessions > 0 ? 1 : 0), 0)
+    + context.activities.distance.length + context.activities.pace.length;
+
+  // This is genuinely open-ended cross-domain reasoning over up to ~10
+  // series at once (not a single-field lookup like handleToday's), so
+  // effort stays at the API default (omitted — see callClaude's own
+  // comment on when that's the right call) rather than 'low', paired
+  // with generous max_tokens for the same reason handleDayPlan uses
+  // 'medium'+4000: real reasoning headroom, output that's still just a
+  // few short strings.
+  const text = await callClaude(apiKey, {
+    system: buildFindPatternsSystemPrompt(days, totalPoints),
+    userContent: 'Data:\n' + JSON.stringify(context, null, 2),
+    maxTokens: 2000,
+    effort: 'medium',
+  });
+  const parsed = extractJson(text);
+  const findings = normalizeFindPatterns(parsed);
+  if (!findings.length) return res.status(502).json({ ok: false, error: 'Model did not return any findings.' });
+
+  return res.status(200).json({ ok: true, findings });
+}
+
+// ------------------------------------------------------------
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ ok: false, error: 'method not allowed' });
@@ -747,8 +918,8 @@ export default async function handler(req, res) {
   if (!apiKey) return res.status(500).json({ ok: false, error: 'Server not configured (missing ANTHROPIC_API_KEY env var).' });
 
   const mode = req.query && req.query.mode;
-  if (mode !== 'plan' && mode !== 'today' && mode !== 'day-plan') {
-    return res.status(400).json({ ok: false, error: 'mode must be "plan", "today", or "day-plan"' });
+  if (mode !== 'plan' && mode !== 'today' && mode !== 'day-plan' && mode !== 'find-patterns') {
+    return res.status(400).json({ ok: false, error: 'mode must be "plan", "today", "day-plan", or "find-patterns"' });
   }
 
   let body = req.body;
@@ -761,6 +932,7 @@ export default async function handler(req, res) {
   try {
     if (mode === 'plan') return await handlePlan(req, res, apiKey, body);
     if (mode === 'day-plan') return await handleDayPlan(req, res, apiKey, body);
+    if (mode === 'find-patterns') return await handleFindPatterns(req, res, apiKey, body);
     return await handleToday(req, res, apiKey, body);
   } catch (e) {
     return res.status(500).json({ ok: false, error: 'Unexpected error: ' + (e && e.message) });
