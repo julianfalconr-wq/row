@@ -199,6 +199,15 @@ body::after {
 }
 .patterns-finding-icon { flex-shrink: 0; font-size: 15px; line-height: 1.5; }
 .patterns-meta { margin-top: 10px; font-size: 11px; color: var(--text-tertiary); font-family: var(--font-mono); }
+
+/* Weekly Review ("Ver mi semana") — holistic recap, on-demand only.
+   Reuses .patterns-btn/.patterns-loading/.patterns-error verbatim (same
+   button/loading/error visual language, no reason to diverge) — only
+   the results area gets its own classes, since a dated summary
+   paragraph + a short highlights list is a different shape from
+   Find Patterns' plain findings list. */
+.review-date { font-size: 11px; color: var(--text-tertiary); font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 10px; }
+.review-summary { font-size: 13.5px; color: var(--text-primary); line-height: 1.55; margin-bottom: 12px; }
 </style>
 </head>
 <body>
@@ -292,6 +301,23 @@ body::after {
     <div class="patterns-loading" id="patternsLoading" style="display:none">Analyzing your data across all domains… this can take a few seconds.</div>
     <div class="patterns-error" id="patternsError" style="display:none"></div>
     <div class="patterns-results" id="patternsResults"></div>
+  </div>
+
+  <!-- Ver mi semana (Weekly Review) — on-demand holistic recap of the
+       most recent 7 days across everything above, PLUS finance if
+       available. Different from Find Patterns (correlations, not a
+       recap) and from Plan's own per-goal weekly nudge (one specific
+       goal, not everything). Never runs automatically (see
+       weeklyReviewBtn's own click handler). -->
+  <div class="trend-card">
+    <div class="trend-card-head">
+      <h3>Ver mi semana</h3>
+    </div>
+    <div class="patterns-intro">A holistic recap of your last 7 days across everything — score, habits, weight, nutrition, WHOOP, strength, activities, and finance if synced. What went well, what didn't, grounded in your real numbers for the week.</div>
+    <button type="button" class="patterns-btn" id="weeklyReviewBtn">Ver mi semana</button>
+    <div class="patterns-loading" id="weeklyReviewLoading" style="display:none">Reviewing your last 7 days… this can take a few seconds.</div>
+    <div class="patterns-error" id="weeklyReviewError" style="display:none"></div>
+    <div class="patterns-results" id="weeklyReviewResult"></div>
   </div>
 </div>
 
@@ -1089,6 +1115,114 @@ document.addEventListener('DOMContentLoaded', function () {
       $('patternsError').style.display = 'block';
     } finally {
       $('patternsLoading').style.display = 'none';
+      btn.disabled = false;
+    }
+  });
+
+  // =============================================================
+  // Ver mi semana (Weekly Review) — on-demand, fixed to the most
+  // recent 7 days regardless of whichever range tab is currently
+  // selected (unlike Find Patterns, which reuses the CURRENTLY
+  // selected range). Switches the range tabs to 7D and calls loadAll()
+  // itself first — the exact same thing clicking the 7D tab would do
+  // — so the charts above and this recap always agree, rather than
+  // silently reviewing a window different from whatever's on screen.
+  // =============================================================
+  // Same public URL/publishable key sync.js and topbar.js's own
+  // pushWaterMergedToSupabase() already use for a direct browser-side
+  // read of app_state — small per-file duplication, this project's
+  // established convention (see e.g. WHOOP fetch/refresh logic
+  // independently duplicated across health.html/gym.html/index.html).
+  const REVIEW_SUPABASE_URL = 'https://dfxjlneohhgfdussomou.supabase.co';
+  const REVIEW_SUPABASE_KEY = 'sb_publishable_9a1GD4OaqszZSnXW80PFTA_JvHi533e';
+  // finance.html's own buildFinanceSummary() — confirmed against that
+  // file's actual current source rather than assumed — is a SNAPSHOT
+  // (currency, netWorthByCategoryCHF, netWorthTotalCHF, subscriptions:
+  // {count, monthlyTotalCHF}), already synced to app_state key=
+  // 'finance' -> data.dailyCheckinSummary (api/sync-state.js's legacy
+  // POST endpoint, the same summary api/daily-checkin.js already
+  // reads — see that file's own header comment) — a MERGE upsert, so
+  // this read never collides with sync.js's own separate raw-
+  // localStorage mirror living in the SAME row's other top-level
+  // fields. No daily/weekly finance history exists anywhere in this
+  // app; this is read-only and never written here.
+  async function fetchFinanceSummaryForReview() {
+    try {
+      if (typeof window.supabase === 'undefined') return { available: false };
+      const supa = window.supabase.createClient(REVIEW_SUPABASE_URL, REVIEW_SUPABASE_KEY);
+      const { data, error } = await supa.from('app_state').select('data').eq('key', 'finance').maybeSingle();
+      if (error || !data || !data.data || !data.data.dailyCheckinSummary) return { available: false };
+      const s = data.data.dailyCheckinSummary;
+      const updatedAt = data.data.dailyCheckinSummaryUpdatedAt;
+      const daysStale = updatedAt ? Math.round((Date.now() - new Date(updatedAt).getTime()) / 86400000) : null;
+      return {
+        available: true,
+        currency: s.currency || null,
+        netWorthTotal: typeof s.netWorthTotalCHF === 'number' ? s.netWorthTotalCHF : null,
+        subscriptionsCount: s.subscriptions ? s.subscriptions.count : null,
+        subscriptionsMonthlyTotal: s.subscriptions ? s.subscriptions.monthlyTotalCHF : null,
+        daysStale,
+      };
+    } catch (e) { return { available: false }; }
+  }
+
+  $('weeklyReviewBtn').addEventListener('click', async () => {
+    const secret = getSecret();
+    if (!secret) {
+      $('weeklyReviewError').textContent = 'Set your dashboard secret first (on the Cronometer page).';
+      $('weeklyReviewError').style.display = 'block';
+      return;
+    }
+    const btn = $('weeklyReviewBtn');
+    btn.disabled = true;
+    $('weeklyReviewError').style.display = 'none';
+    $('weeklyReviewResult').innerHTML = '';
+    $('weeklyReviewLoading').style.display = 'block';
+    try {
+      currentDays = 7;
+      $('trendRangeTabs').querySelectorAll('.cal-tab').forEach((t) => t.classList.toggle('active', t.dataset.days === '7'));
+      const [{ fromKey, toKey, dates, score, weight, nutrition, whoop, strength, activities }, finance] = await Promise.all([
+        loadAll(),
+        fetchFinanceSummaryForReview(),
+      ]);
+      const payload = {
+        fromKey, toKey,
+        score: toDateValuePairs(dates, score.scoreData),
+        habits: toDateValuePairs(dates, score.habitData),
+        weight: toDateValuePairs(dates, weight.data),
+        weightUnit: weight.units,
+        nutrition: {
+          protein: toDateValuePairs(dates, nutrition.proteinData),
+          calories: toDateValuePairs(dates, nutrition.caloriesData),
+        },
+        whoop: {
+          recovery: toDateValuePairs(dates, whoop.recoveryData),
+          sleep: toDateValuePairs(dates, whoop.sleepData),
+        },
+        strength: toStrengthPairs(strength.weekOrder, strength.weekCounts),
+        activities: {
+          distance: activities.distance,
+          pace: activities.pace,
+        },
+        finance,
+      };
+      const r = await fetch('/api/training?mode=weekly-review&secret=' + encodeURIComponent(secret), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const j = await r.json();
+      if (!r.ok || !j.ok) throw new Error((j && j.error) || ('HTTP ' + r.status));
+      $('weeklyReviewResult').innerHTML =
+        '<div class="review-date">Week of ' + escapeHtml(shortLabel(j.fromKey)) + ' – ' + escapeHtml(shortLabel(j.toKey)) + '</div>' +
+        '<div class="review-summary">' + escapeHtml(j.summary) + '</div>' +
+        j.highlights.map((h) => (
+          '<div class="patterns-finding"><span class="patterns-finding-icon">📅</span><span>' + escapeHtml(h) + '</span></div>'
+        )).join('');
+    } catch (e) {
+      $('weeklyReviewError').textContent = 'Could not generate review: ' + (e.message || String(e));
+      $('weeklyReviewError').style.display = 'block';
+    } finally {
+      $('weeklyReviewLoading').style.display = 'none';
       btn.disabled = false;
     }
   });

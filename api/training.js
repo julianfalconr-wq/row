@@ -1,8 +1,9 @@
 // =============================================================
 // Combined endpoint for gym.html's Training page AI features, plus
 // main.html's "Plan my day" feature (mode=day-plan) and trends.html's
-// "Find Patterns" feature (mode=find-patterns, added later — same
-// file for the same reason). Four modes, one file — same
+// "Find Patterns" (mode=find-patterns) and "Ver mi semana" weekly
+// review (mode=weekly-review) features, added later — same file for
+// the same reason. Five modes, one file — same
 // dual-mode-in-one-endpoint pattern api/cronometer-data.js already
 // uses (there: presence/absence of a "type" param; here: an explicit
 // "mode" param), kept as ONE file deliberately: Vercel's Hobby plan
@@ -171,6 +172,32 @@
 //      may be a single honest "not enough data yet" sentence if the range is too sparse/short to
 //      say anything reliable — see buildFindPatternsSystemPrompt's own instructions on why this is
 //      required rather than optional.
+//
+// MODE 5 — POST /api/training?mode=weekly-review&secret=...
+//   trends.html's "Ver mi semana" (Weekly Review) feature — on-demand
+//   only, same as find-patterns. A holistic "how was my week" recap
+//   across every domain at once, fixed to the most recent 7 days
+//   (trends.html switches its own range tabs to 7D before gathering
+//   this, so the charts above always agree with what's being
+//   reviewed) — DIFFERENT from find-patterns (which hunts for cross-
+//   domain correlations over a longer, user-selected window) and from
+//   Plan's own weekly nudge (which only reviews progress toward one
+//   specific active goal). Same series shapes as find-patterns' body
+//   (see that mode's own doc above) PLUS:
+//     finance: { available: Boolean, currency, netWorthTotal, subscriptionsCount,
+//                subscriptionsMonthlyTotal, daysStale } | { available: false }
+//   — a CURRENT SNAPSHOT (finance.html's own buildFinanceSummary(),
+//   already synced to api/sync-state.js/app_state for
+//   api/daily-checkin.js — trends.html reads that same row directly
+//   via Supabase, see this mode's own handler comment), not a
+//   week-over-week series; there is no daily/weekly finance history
+//   anywhere in this app to send instead.
+//   -> { ok: true, fromKey, toKey, summary: String, highlights: [String, ...] }
+//      summary: 2-3 sentences, the week's overall shape (honestly mixed if it was).
+//      highlights: 2-4 short, specific, number-grounded observations — never
+//      generic encouragement, and explicit when a domain had too little logged
+//      this week to say anything about — see buildWeeklyReviewSystemPrompt's
+//      own instructions.
 // =============================================================
 
 const MAX_BODY_CHARS = 30000;
@@ -944,6 +971,135 @@ async function handleFindPatterns(req, res, apiKey, body) {
 }
 
 // ------------------------------------------------------------
+// MODE: weekly-review
+// ------------------------------------------------------------
+
+// finance is a SNAPSHOT (net worth totals + subscription cost RIGHT
+// NOW), not a week-over-week series — confirmed against finance.html's
+// own buildFinanceSummary(), the exact compact shape it already syncs
+// to api/sync-state.js for api/daily-checkin.js to read (no separate
+// endpoint needed — trends.html reads the SAME app_state row directly
+// via Supabase, same pattern topbar.js's own pushWaterMergedToSupabase
+// already uses). No daily/weekly history exists for it anywhere in
+// this app, so it's never treated as part of "this week" the way
+// every other domain is — see buildWeeklyReviewSystemPrompt's own
+// instructions on why.
+function sanitizeFinanceSummary(raw) {
+  const r = raw && typeof raw === 'object' ? raw : {};
+  if (!r.available) return { available: false };
+  return {
+    available: true,
+    currency: typeof r.currency === 'string' ? r.currency.slice(0, 10) : null,
+    netWorthTotal: typeof r.netWorthTotal === 'number' && isFinite(r.netWorthTotal) ? r.netWorthTotal : null,
+    subscriptionsCount: typeof r.subscriptionsCount === 'number' && isFinite(r.subscriptionsCount) ? Math.round(r.subscriptionsCount) : null,
+    subscriptionsMonthlyTotal: typeof r.subscriptionsMonthlyTotal === 'number' && isFinite(r.subscriptionsMonthlyTotal) ? r.subscriptionsMonthlyTotal : null,
+    // Freshness matters more here than for the daily series above —
+    // a snapshot synced weeks ago presented as "your finances" without
+    // any caveat would be misleading in a way a missing daily point
+    // isn't (that just shows as absent from a series; a stale
+    // snapshot looks exactly like a current one unless labeled).
+    daysStale: typeof r.daysStale === 'number' && isFinite(r.daysStale) ? Math.round(r.daysStale) : null,
+  };
+}
+
+function buildWeeklyReviewSystemPrompt(fromKey, toKey, totalPoints) {
+  return (
+    'You are writing a holistic WEEKLY REVIEW for one user\'s personal dashboard (Row), covering ' + fromKey +
+    ' through ' + toKey + ' (the most recent 7 days) — a general "how was my week" recap across EVERY domain ' +
+    'at once (score, habits, weight, nutrition, WHOOP, strength, activities, and finance if available), not a ' +
+    'search for cross-domain correlations (that\'s a separate feature) and not a check-in on one specific ' +
+    'goal (that\'s a separate feature too) — just an honest, specific recap of this one week.\n\n' +
+    'You will receive the same {date, value}-shaped series described for a cross-domain analysis (only real ' +
+    'logged points, no nulls/gaps) — a short or empty list for a domain means that domain simply has little ' +
+    'or no real data this week, not that you should invent some. finance, if present, is a CURRENT SNAPSHOT ' +
+    '(net worth / subscriptions RIGHT NOW, not this week\'s change) — mention it as background context at ' +
+    'most (e.g. current net worth, subscription cost), NEVER as if it were something that happened or ' +
+    'changed "this week", and skip it entirely if finance.available is false or daysStale suggests it\'s old.\n\n' +
+    'CRITICAL — GROUNDED, NOT GENERIC: every observation must cite a specific real number from the data given ' +
+    '(e.g. "you hit 3 of 3 planned strength sessions and your recovery held above 65% all week" — not "great ' +
+    'job staying consistent!"). This is one week of data (' + totalPoints + ' total logged points across every ' +
+    'domain combined) — far too little to call anything an established trend or pattern; describe THIS WEEK ' +
+    'specifically ("this week your protein averaged X%") rather than implying it repeats. Report what actually ' +
+    'went well AND what didn\'t, honestly — do not manufacture positivity for a rough week, and do not ' +
+    'manufacture criticism for a good one; say plainly when a domain has too little data this week to say ' +
+    'anything about it at all, rather than filling space.\n\n' +
+    'Respond with ONLY this JSON shape, no markdown fences, no other text: {"summary": "...", "highlights": ' +
+    '["...", "..."]}. summary is 2-3 plain-text sentences giving the overall shape of the week (the honest ' +
+    'mix of good/bad, or an honest "not much was logged this week" if that\'s the reality). highlights is 2 to ' +
+    '3 short, specific, number-grounded observations (one sentence each, no markdown, no emoji — the app adds ' +
+    'its own icon). If there is genuinely almost nothing logged this week, it is fine (and required) for ' +
+    'summary to say so plainly and for highlights to be shorter or note that directly, rather than padding ' +
+    'with generic filler.'
+  );
+}
+
+function normalizeWeeklyReview(raw) {
+  if (!raw || typeof raw.summary !== 'string' || !raw.summary.trim()) return null;
+  const highlights = Array.isArray(raw.highlights)
+    ? raw.highlights.filter((h) => typeof h === 'string' && h.trim()).slice(0, 4).map((h) => h.trim().slice(0, 400))
+    : [];
+  return { summary: raw.summary.trim().slice(0, 800), highlights };
+}
+
+async function handleWeeklyReview(req, res, apiKey, body) {
+  const fromKey = typeof body.fromKey === 'string' ? body.fromKey.slice(0, 10) : '';
+  const toKey = typeof body.toKey === 'string' ? body.toKey.slice(0, 10) : '';
+  if (!fromKey || !toKey) return res.status(400).json({ ok: false, error: 'fromKey and toKey (YYYY-MM-DD) are required' });
+
+  const nutrition = body.nutrition && typeof body.nutrition === 'object' ? body.nutrition : {};
+  const whoop = body.whoop && typeof body.whoop === 'object' ? body.whoop : {};
+  const activities = body.activities && typeof body.activities === 'object' ? body.activities : {};
+
+  const context = {
+    fromKey, toKey,
+    score: sanitizeDateValueSeries(body.score),
+    habits: sanitizeDateValueSeries(body.habits),
+    weight: sanitizeDateValueSeries(body.weight),
+    weightUnit: typeof body.weightUnit === 'string' ? body.weightUnit.slice(0, 10) : 'kg',
+    nutrition: {
+      protein: sanitizeDateValueSeries(nutrition.protein),
+      calories: sanitizeDateValueSeries(nutrition.calories),
+    },
+    whoop: {
+      recovery: sanitizeDateValueSeries(whoop.recovery),
+      sleep: sanitizeDateValueSeries(whoop.sleep),
+    },
+    strength: sanitizeStrengthSeries(body.strength),
+    activities: {
+      distance: sanitizeActivitySeries(activities.distance, 'km'),
+      pace: sanitizeActivitySeries(activities.pace, 'minPerKm'),
+    },
+    finance: sanitizeFinanceSummary(body.finance),
+  };
+
+  const totalPoints = context.score.length + context.habits.length + context.weight.length
+    + context.nutrition.protein.length + context.nutrition.calories.length
+    + context.whoop.recovery.length + context.whoop.sleep.length
+    + context.strength.reduce((s, w) => s + (w.sessions > 0 ? 1 : 0), 0)
+    + context.activities.distance.length + context.activities.pace.length;
+
+  // Same reasoning as find-patterns' own comment: real cross-domain
+  // synthesis over up to ~9 series, not a single-field lookup, so
+  // effort stays at the API default rather than 'low'. maxTokens
+  // smaller than find-patterns' 2000 — this output is one short
+  // paragraph plus 2-4 one-line highlights, a genuinely smaller shape
+  // — but still with real margin above that, not sized to the bare
+  // minimum (see the mode=plan truncation bug this file already hit
+  // from doing exactly that).
+  const text = await callClaude(apiKey, {
+    system: buildWeeklyReviewSystemPrompt(fromKey, toKey, totalPoints),
+    userContent: 'Data:\n' + JSON.stringify(context, null, 2),
+    maxTokens: 1200,
+    effort: 'medium',
+  });
+  const parsed = extractJson(text);
+  const review = normalizeWeeklyReview(parsed);
+  if (!review) return res.status(502).json({ ok: false, error: 'Model did not return a valid review.' });
+
+  return res.status(200).json({ ok: true, fromKey, toKey, summary: review.summary, highlights: review.highlights });
+}
+
+// ------------------------------------------------------------
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ ok: false, error: 'method not allowed' });
@@ -953,8 +1109,8 @@ export default async function handler(req, res) {
   if (!apiKey) return res.status(500).json({ ok: false, error: 'Server not configured (missing ANTHROPIC_API_KEY env var).' });
 
   const mode = req.query && req.query.mode;
-  if (mode !== 'plan' && mode !== 'today' && mode !== 'day-plan' && mode !== 'find-patterns') {
-    return res.status(400).json({ ok: false, error: 'mode must be "plan", "today", "day-plan", or "find-patterns"' });
+  if (mode !== 'plan' && mode !== 'today' && mode !== 'day-plan' && mode !== 'find-patterns' && mode !== 'weekly-review') {
+    return res.status(400).json({ ok: false, error: 'mode must be "plan", "today", "day-plan", "find-patterns", or "weekly-review"' });
   }
 
   let body = req.body;
@@ -968,6 +1124,7 @@ export default async function handler(req, res) {
     if (mode === 'plan') return await handlePlan(req, res, apiKey, body);
     if (mode === 'day-plan') return await handleDayPlan(req, res, apiKey, body);
     if (mode === 'find-patterns') return await handleFindPatterns(req, res, apiKey, body);
+    if (mode === 'weekly-review') return await handleWeeklyReview(req, res, apiKey, body);
     return await handleToday(req, res, apiKey, body);
   } catch (e) {
     return res.status(500).json({ ok: false, error: 'Unexpected error: ' + (e && e.message) });
