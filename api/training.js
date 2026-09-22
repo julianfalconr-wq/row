@@ -206,7 +206,7 @@ function extractJson(text) {
 // handleToday's one-line recommendation, where high-effort adaptive
 // thinking was consuming the whole 800-token budget on reasoning and
 // leaving a literal empty string for the actual answer.
-async function callClaude(apiKey, { system, userContent, maxTokens, effort }) {
+async function callClaude(apiKey, { system, userContent, maxTokens, effort, debugLabel }) {
   const body = {
     model: 'claude-sonnet-5',
     max_tokens: maxTokens,
@@ -233,6 +233,28 @@ async function callClaude(apiKey, { system, userContent, maxTokens, effort }) {
   // thinking block, and content[0].text on that block is undefined. This
   // matches the pattern api/chat.js and api/daily-checkin.js already use.
   const textBlock = (data && data.content || []).find((b) => b && b.type === 'text');
+  // TEMPORARY (diagnosing "Model did not return valid JSON" on
+  // mode=plan) — logs to Vercel's function logs only, never sent to
+  // the client. Same "high-effort adaptive thinking consumes the
+  // max_tokens budget before any output text is written" failure
+  // class already fixed for mode=today and the chat endpoint, but NOT
+  // assumed here — handlePlan's own prompt has grown substantially
+  // since effort was last tuned (activity types, restrictions,
+  // cardio-slot logic all added later), so this logs stop_reason,
+  // every content block's type, and the actual raw text (not just
+  // whether it's empty) to tell that failure class apart from a
+  // genuinely malformed/truncated JSON body instead — only gated by
+  // debugLabel so it stays silent for every other mode's calls.
+  // Remove once the real cause is confirmed and fixed.
+  if (debugLabel) {
+    const blockTypes = (data && data.content || []).map((b) => b && b.type);
+    console.log(
+      '[' + debugLabel + ' debug] stop_reason=' + (data && data.stop_reason),
+      'blockTypes=' + JSON.stringify(blockTypes),
+      'usage=' + JSON.stringify((data && data.usage) || null),
+      'rawText=' + JSON.stringify(textBlock ? textBlock.text : null)
+    );
+  }
   return textBlock ? textBlock.text : '';
 }
 
@@ -454,6 +476,7 @@ async function handlePlan(req, res, apiKey, body) {
     system: buildPlanSystemPrompt(restrictions, recommendableTypes),
     userContent: 'Recent history:\n' + JSON.stringify(context, null, 2),
     maxTokens: 800,
+    debugLabel: 'plan', // TEMPORARY — see callClaude's own comment on this
   });
   const parsed = extractJson(text);
   if (!parsed) return res.status(502).json({ ok: false, error: 'Model did not return valid JSON.' });
