@@ -475,7 +475,19 @@ async function handlePlan(req, res, apiKey, body) {
   const text = await callClaude(apiKey, {
     system: buildPlanSystemPrompt(restrictions, recommendableTypes),
     userContent: 'Recent history:\n' + JSON.stringify(context, null, 2),
-    maxTokens: 800,
+    // Confirmed via the [plan debug] log (not assumed): stop_reason
+    // was 'max_tokens' with 327 of the 800-token budget spent on
+    // thinking alone, and the remaining ~470 tokens weren't enough to
+    // finish strength + all 3 cardio slots (each with its own
+    // activityTypeId/activityName/amount/unit/description) + rationale
+    // — the raw text was cut off mid-word. 800 was sized for this
+    // output's shape from before activity types/restrictions/cardio-
+    // slot logic were added; it never got re-sized as that output grew.
+    // 2000 matches how day-plan (4000, ~9 blocks) and find-patterns
+    // (2000) were each sized to their own actual output, with real
+    // margin above the truncated example's own ~800-tokens-and-still-
+    // incomplete size, not a shared generic default.
+    maxTokens: 2000,
     debugLabel: 'plan', // TEMPORARY — see callClaude's own comment on this
   });
   const parsed = extractJson(text);
