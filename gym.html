@@ -3487,6 +3487,33 @@ img, video, canvas, svg { max-width: 100%; }
         // logged set.
         arr.push({ weight, reps, date: new Date().toISOString(), routineId: r.id, plannedSetIndex: si });
         state.logs[exId] = arr;
+        // The original design note above ("Rx/Stats/History/Sparkline
+        // treat this exactly like any other logged set") was only true
+        // of the DATA — every one of those sections actually renders
+        // for getCurrentEx()/state.currentEx specifically, which this
+        // handler never updated. If the routine's exercise wasn't
+        // already the one selected in the main Progressive Overload
+        // Coach form (a routine can belong to any gym/day, independent
+        // of whatever the form happens to be showing), the set saved
+        // correctly but was invisible there — Last Set/Today's Sets/Rx/
+        // Stats/History all kept showing whatever exercise was
+        // previously selected, looking exactly like the log never
+        // happened. Reproduced directly: state.logs had the real entry,
+        // but #lastSet/#todaySetsForEx stayed empty because
+        // state.currentEx still pointed at a different exercise.
+        // Fixed by focusing the form on this exercise the same way a
+        // manual day-filter tap already does (see daySeg's own click
+        // handler above) — filterGym/filterDay first, since
+        // getCurrentEx() silently REJECTS a currentEx that doesn't
+        // match the active filter and picks something else instead;
+        // _userPickedDay so the load-time auto-select-today's-split
+        // doesn't fight this on the next visit.
+        if (ex) {
+          state.filterGym = ex.gym;
+          state.filterDay = ex.day;
+          state.currentEx = exId;
+          state._userPickedDay = true;
+        }
         saveState();
         renderAll();
         repsInput.disabled = true;
