@@ -345,6 +345,15 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
 .chat-plan-label { font-size: 9.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #76746E; }
 .chat-plan-desc { font-size: 11px; color: #A5A3A0; }
 .chat-plan-value { font-size: 12.5px; font-weight: 700; color: #FAFAFA; text-align: right; white-space: nowrap; flex-shrink: 0; }
+/* See planRow()'s own comment on wrapValue — used for a row whose
+   value is a long free-text string (a goal description) rather than a
+   short stat. Stacks label above value instead of side-by-side, and
+   lets the value wrap normally at word boundaries at full width,
+   so nothing is ever squeezed narrow enough to trip the same
+   crushed-flex-item/word-break trap this project has already hit
+   twice elsewhere (main.html's nested calendar chip, trends.html). */
+.chat-plan-row.is-wrap { flex-direction: column; align-items: flex-start; gap: 4px; }
+.chat-plan-row.is-wrap .chat-plan-value { white-space: normal; text-align: left; flex-shrink: 1; width: 100%; }
 .chat-plan-rationale { font-size: 11.5px; color: #A5A3A0; margin-top: 10px; line-height: 1.4; font-style: italic; }
 .chat-plan-actions { display: flex; gap: 8px; margin-top: 12px; }
 .chat-plan-save-btn {
@@ -1480,9 +1489,29 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
     }
     function thisWeekMondayKeyLocal() { return dateKeyLocal(mondayOfLocal(new Date())); }
 
-    function planRow(label, value, desc) {
+    // wrapValue: every OTHER caller passes a short, single-line stat as
+    // value (e.g. "81 kg", "3 sessions/wk") — .chat-plan-value's
+    // white-space:nowrap/flex-shrink:0/text-align:right suits that
+    // correctly and must stay unchanged for those. renderLongTermPlanCard's
+    // own Goal/Adjusted-goal row is different: value there is the
+    // user's full free-text goal description, which can be arbitrarily
+    // long (e.g. "Preparación Sprint Triathlon (750m nado, 20km bici,
+    // 5km correr) en 6 semanas") — forcing THAT onto one nowrap,
+    // never-shrinking line broke two ways at once: the long line
+    // itself forced the whole card into horizontal scroll, and since
+    // it can't shrink at all, 100% of the row's flex-shrink fell on
+    // the LABEL side instead (.chat-plan-main has min-width:0, so
+    // nothing stopped it), crushing "GOAL" down near 0 width — and
+    // because .chat-bubble sets word-break:break-word (inherited by
+    // everything inside it), WebKit's automatic minimum size for that
+    // crushed label dropped to a single glyph, wrapping it letter by
+    // letter (G/O/A/L stacked). wrapValue:true switches the row to a
+    // column layout instead — label on its own line, the long value
+    // wrapping normally at word boundaries underneath, full width —
+    // so nothing is ever squeezed by a competing nowrap sibling.
+    function planRow(label, value, desc, wrapValue) {
       const row = document.createElement('div');
-      row.className = 'chat-plan-row';
+      row.className = 'chat-plan-row' + (wrapValue ? ' is-wrap' : '');
       // label is escaped too (not just value/desc) since Phase 3 of the
       // multi-activity-type feature started interpolating an
       // activityName into it — ultimately a user-chosen activity type
@@ -2034,9 +2063,19 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
       card.className = 'chat-plan-card';
 
       const trackedAs = plan.exerciseName ? (' — ' + plan.exerciseName) : (plan.activityName ? (' — ' + plan.activityName) : '');
-      card.appendChild(planRow(isAdjustment ? 'Adjusted goal' : 'Goal', plan.goalDescription + trackedAs, ''));
+      card.appendChild(planRow(isAdjustment ? 'Adjusted goal' : 'Goal', plan.goalDescription + trackedAs, '', true));
       card.appendChild(planRow('Target', plan.targetValue + ' ' + plan.targetUnit, 'from ' + plan.startValue + ' ' + plan.targetUnit + ' now'));
-      card.appendChild(planRow(isAdjustment ? 'From this week' : 'Timeframe', plan.startDate + ' → ' + plan.endDate, plan.weeklyCheckpoints.length + (isAdjustment ? ' adjusted' : ' weekly') + ' checkpoint' + (plan.weeklyCheckpoints.length === 1 ? '' : 's')));
+      // wrapValue:true here too — unlike Target's short value ("1
+      // triatlón"), a full date range ("2026-09-16 → 2026-10-27") is
+      // long enough that forcing it onto one nowrap line, competing
+      // against the "Timeframe"/"From this week" label for the same
+      // narrow width, still crushed the label across 2 lines with a
+      // mid-word break (confirmed live). A min-width floor on the
+      // label was tried first and rejected: it stopped the crush but
+      // pushed the row's total demanded width past the card's own,
+      // reintroducing horizontal overflow instead. Stacking, like
+      // Goal, has no such tradeoff — it fits by construction.
+      card.appendChild(planRow(isAdjustment ? 'From this week' : 'Timeframe', plan.startDate + ' → ' + plan.endDate, plan.weeklyCheckpoints.length + (isAdjustment ? ' adjusted' : ' weekly') + ' checkpoint' + (plan.weeklyCheckpoints.length === 1 ? '' : 's'), true));
       if (plan.rationale) {
         const rationale = document.createElement('div');
         rationale.className = 'chat-plan-rationale';
