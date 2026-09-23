@@ -96,8 +96,18 @@
 //     // "padel"/"pádel". Treated as a high-intensity commitment, same
 //     // spirit as low Whoop recovery — see buildTodaySystemPrompt's PADEL
 //     // section.
+//     forTomorrow: Boolean,   // main.html's "Plan my day" Tomorrow toggle — see below
+//     todayRecommendation: String | null,   // forTomorrow ONLY: what was already decided/done TODAY, so the
+//     // model can avoid stacking two demanding days back to back — see buildTomorrowSystemPrompt.
 //   }
 //   -> { ok: true, recommendation: String }
+//   When forTomorrow is true, uses buildTomorrowSystemPrompt instead of buildTodaySystemPrompt — same
+//   weekPlan/progress/strengthContext/activeRestrictions inputs, but WHOOP recovery is NOT treated as
+//   predictive of the target day (today's whoopToday/whoopRecentStrain may still be sent and are used only
+//   as general recent-trend background, never as a specific prediction) and there is no padel/calendar
+//   input — reasons instead from the week's remaining objectives, general load-management judgment, and
+//   todayRecommendation. Same reasoning api/chat.js's own QUESTIONS ABOUT A DIFFERENT DAY section already
+//   established for this exact distinction.
 //
 // MODE 3 — POST /api/training?mode=day-plan&secret=...
 //   Proposes a full day's schedule (main.html's "Plan my day"). Never
@@ -111,7 +121,14 @@
 //     // that have already passed — see buildDayPlanSystemPrompt's FIXED section below and the bug this
 //     // fixes (a 1:20pm request proposing a 7:30am breakfast block, since only the DATE was ever sent,
 //     // never the time-of-day the request was actually made).
-//     todayRecommendation: String | null,   // gym.html's cached mode=today result (Phase 1, padel-aware) — reused verbatim, NOT recomputed here
+//     planningDateKey: 'YYYY-MM-DD',   // main.html's Today/Tomorrow toggle — must equal todayDateKey or
+//     // tomorrowDateKey; defaults to todayDateKey (the ORIGINAL, only-ever-today behavior) if omitted or
+//     // anything else, so an older/unmodified caller needs zero changes.
+//     planningRecommendation: String | null,   // whichever training recommendation applies to
+//     // planningDateKey — gym.html's cached mode=today result when planning today (Phase 1, padel-aware,
+//     // reused verbatim, NOT recomputed here), or a mode=today?forTomorrow=true result when planning
+//     // tomorrow (see that mode's own doc comment). Still accepted under the old name
+//     // (todayRecommendation) too, for backward compatibility.
 //     whoopToday: { recoveryPct: Number|null } | null,
 //     fixedEvents: [{ date, start, end, title, allDay }],   // today + tomorrow's REAL existing Calendar events — immovable
 //     wakeUpTime: 'HH:MM',   // pre-computed CLIENT-SIDE as the EARLIER of tomorrow's own configured Day
@@ -600,19 +617,95 @@ function buildTodaySystemPrompt(restrictions) {
   );
 }
 
+// buildTomorrowSystemPrompt — a training recommendation for a target
+// day OTHER than today (main.html's "Plan my day" Tomorrow toggle).
+// Deliberately a SEPARATE prompt function rather than branching inside
+// buildTodaySystemPrompt, matching this file's own established
+// per-mode-own-prompt-function convention (buildPlanSystemPrompt/
+// buildTodaySystemPrompt/buildDayPlanSystemPrompt/etc. each get their
+// own) — lower risk than conditionally rewriting the already-tuned
+// TODAY prompt in place. Reuses buildTodaySystemPrompt's STRENGTH/
+// CARDIO sections' structure (same weekPlan/progress/strengthContext
+// shapes, same reasoning about what's outstanding this week) but
+// drops WHOOP-ADJUSTMENT and PADEL entirely (both fundamentally about
+// TODAY's own specific, already-known numbers) and replaces them with
+// the same "don't pretend to know a future day's recovery" framing
+// api/chat.js's own QUESTIONS ABOUT A DIFFERENT DAY section already
+// established for this exact distinction — reason from the week's
+// remaining objectives and general load-management principles
+// instead (e.g. not stacking two hard days back to back).
+function buildTomorrowSystemPrompt(restrictions) {
+  return (
+    'You recommend training for a day OTHER than today on a personal dashboard — main.html\'s "Plan my day" ' +
+    'is being generated ahead of time for tomorrow. This week\'s plan (weekPlan) always covers BOTH strength ' +
+    'and cardio — evaluate the two independently, then combine whichever pieces are actually outstanding and ' +
+    'appropriate for that day into ONE recommendation (e.g. "Push + Cycling interval"). It is normal and ' +
+    'expected for the answer to include both — do not default to naming only strength; check cardio\'s ' +
+    'status with the same weight every time.\n\n' +
+    'RECOVERY IS UNKNOWN FOR THIS DAY — do NOT lead with or rely on today\'s specific WHOOP recovery/strain ' +
+    'numbers as if they predict or describe tomorrow; a future day\'s recovery is fundamentally unknowable in ' +
+    'advance, and presenting today\'s numbers as if they answer the question would be misleading. Reason ' +
+    'instead from what IS knowable in advance: which weekPlan pieces are still outstanding, recent training ' +
+    'load and volume progression, and general load-management judgment — most importantly, todayRecommendation ' +
+    '(what was already decided/done TODAY) tells you whether today was already a hard day; if so, avoid ' +
+    'stacking another demanding session immediately after it (e.g. two heavy strength days or two hard ' +
+    'interval sessions back to back) — lean toward a lighter or complementary pairing instead, the same way ' +
+    'you would if you already knew recovery would be low, without claiming to actually know that. If ' +
+    'whoopRecentStrain shows a consistent multi-day pattern (not just today alone), it is fine to mention as ' +
+    'general recent-trend background — never as a specific prediction for tomorrow itself.\n\n' +
+    'STRENGTH — strengthContext tells you the ACTUAL configured split for that day; use it, don\'t invent a ' +
+    'different one. strengthContext.todaySplitDay is that day\'s real rotation day (e.g. "Push", "Pull", ' +
+    '"Legs", or "Rest") from the split the user set up themselves — NEVER name a different day, and never ' +
+    'invent a generic structure like "full-body". progress.strengthSessionsDone vs progress.' +
+    'strengthSessionsTarget tells you whether strength is behind this week (as of today — that day\'s own ' +
+    'session, if you recommend one, would add to this). If strengthContext.isRestDayInRotation is true, only ' +
+    'include strength anyway if the weekly target is meaningfully behind, keeping that framing to a couple ' +
+    'trailing words at most (e.g. "Push anyway"). If strengthContext itself is missing or todaySplitDay is ' +
+    'null, no split is configured — say that plainly rather than guessing.\n\n' +
+    'CARDIO (Phase 3 of the multi-activity-type generalization — no longer always running) — weekPlan.cardio ' +
+    'has three pieces, each already assigned its OWN activity by name when the weekly plan was generated: ' +
+    'interval, longSession, and easyVolume. Different pieces can be different activities (e.g. interval on ' +
+    'Cycling, easyVolume on Swimming) — always recommend by whatever activityName that specific piece ' +
+    'actually carries, never assume or default to "running". A piece with a zero/empty target has NOTHING to ' +
+    'recommend — skip it, never invent a replacement. progress.activitiesThisWeek lists what has ACTUALLY ' +
+    'been logged since Monday (through today) — match against each piece\'s activityTypeId to judge which ' +
+    'piece(s) are still outstanding and worth recommending for that day.\n\n' +
+    'Even if weekPlan.cardio shows a nonzero target for a piece, do NOT recommend it if that piece\'s ' +
+    'activityTypeId or activityName matches an entry in activeRestrictions below.\n\n' +
+    buildRestrictionsPromptSection(restrictions) +
+    'FORMAT — this is the most important rule: the recommendation is a SHORT LABEL, not a paragraph. One ' +
+    'line, naming only the split day and/or the specific cardio activity/distance from this week\'s plan — ' +
+    'nothing else. Good examples: "Push", "Push + 5K run", "Easy Cycling — light after a hard training day", ' +
+    '"Rest — today was already demanding". Bad (never do this): listing individual exercises, sets, reps, or ' +
+    'weights; multi-sentence reasoning; presenting today\'s WHOOP numbers as if they describe tomorrow.\n\n' +
+    'Reply with ONLY valid JSON, no markdown fences, no commentary, in exactly this shape:\n' +
+    JSON.stringify({ recommendation: 'ONE short line naming only the split day and/or the specific cardio activity/distance, combined with "+" when both are due' }, null, 2)
+  );
+}
+
 async function handleToday(req, res, apiKey, body) {
   const restrictions = sanitizeRestrictions(body.restrictions);
+  const forTomorrow = !!body.forTomorrow;
   const context = {
     weekPlan: body.weekPlan && typeof body.weekPlan === 'object' ? body.weekPlan : null,
     progress: body.progress && typeof body.progress === 'object' ? body.progress : null,
     strengthContext: body.strengthContext && typeof body.strengthContext === 'object' ? body.strengthContext : null,
     whoopToday: body.whoopToday && typeof body.whoopToday === 'object' ? body.whoopToday : null,
     whoopRecentStrain: Array.isArray(body.whoopRecentStrain) ? body.whoopRecentStrain.slice(0, 14) : null,
-    todayCalendar: body.todayCalendar && typeof body.todayCalendar === 'object'
-      ? { padelToday: !!body.todayCalendar.padelToday, padelEventTitle: typeof body.todayCalendar.padelEventTitle === 'string' ? body.todayCalendar.padelEventTitle.slice(0, 200) : null }
-      : null,
     activeRestrictions: restrictions,
   };
+  if (forTomorrow) {
+    // No padel/calendar input for this variant — out of scope (see
+    // buildTomorrowSystemPrompt's own header comment on what's reused
+    // vs deliberately dropped). todayRecommendation is the one NEW
+    // input this variant needs: what was already decided for TODAY,
+    // so the model can reason about not stacking two hard days.
+    context.todayRecommendation = typeof body.todayRecommendation === 'string' ? body.todayRecommendation.slice(0, 300) : null;
+  } else {
+    context.todayCalendar = body.todayCalendar && typeof body.todayCalendar === 'object'
+      ? { padelToday: !!body.todayCalendar.padelToday, padelEventTitle: typeof body.todayCalendar.padelEventTitle === 'string' ? body.todayCalendar.padelEventTitle.slice(0, 200) : null }
+      : null;
+  }
 
   if (!context.weekPlan) {
     return res.status(200).json({ ok: true, recommendation: 'Generate this week\'s objectives above first, then check back here for today\'s pick.' });
@@ -627,7 +720,7 @@ async function handleToday(req, res, apiKey, body) {
   // this kind of simple, short-output, latency-sensitive task, and lets
   // the model skip thinking entirely on inputs this straightforward.
   const text = await callClaude(apiKey, {
-    system: buildTodaySystemPrompt(restrictions),
+    system: forTomorrow ? buildTomorrowSystemPrompt(restrictions) : buildTodaySystemPrompt(restrictions),
     userContent: 'Context:\n' + JSON.stringify(context, null, 2),
     maxTokens: 800,
     effort: 'low',
@@ -643,50 +736,79 @@ async function handleToday(req, res, apiKey, body) {
 // MODE: day-plan
 // ------------------------------------------------------------
 
+// planningDateKey (added for main.html's Today/Tomorrow toggle):
+// which day the MAIN schedule (training/work/meals/walks) actually
+// gets built for — either todayDateKey or tomorrowDateKey, client-
+// chosen. Every rule below was ALREADY correctly scoped by DATE
+// (todayDateKey vs tomorrowDateKey) rather than by semantic role, so
+// almost nothing needed to change to parameterize this: the nowTime
+// rule already only constrains "todayDateKey" blocks specifically, so
+// it automatically stops applying on its own once the main schedule's
+// blocks are dated tomorrowDateKey instead — no separate conditional
+// needed. Only three things actually needed rewording: (1) which date
+// the "WHAT YOU DECIDE" items get placed on, (2) which wake time
+// anchors meal placement (planningWakeUpTime — todayWakeUpTime when
+// planningDateKey is today, or wakeUpTime itself — tomorrow's own
+// already-computed wake anchor — when planning tomorrow, so there's
+// no second wake-time computation needed for that case), and (3) the
+// low-recovery dampening below, which is about TODAY's specific real
+// recovery number and must not be treated as predictive of tomorrow —
+// same principle as api/chat.js's own QUESTIONS ABOUT A DIFFERENT DAY
+// section and buildTomorrowSystemPrompt above.
 function buildDayPlanSystemPrompt(restrictions) {
   return (
     'You are planning ONE user\'s day on a personal dashboard, producing a concrete schedule of time ' +
     'blocks that will be created as real Google Calendar events only after the user reviews and explicitly ' +
-    'confirms them — nothing is created automatically, so propose a genuinely usable, non-overlapping plan.\n\n' +
+    'confirms them — nothing is created automatically, so propose a genuinely usable, non-overlapping plan. ' +
+    'planningDateKey tells you which day (todayDateKey or tomorrowDateKey) the main schedule below actually ' +
+    'goes on — it may be either one.\n\n' +
     'FIXED, NON-NEGOTIABLE — never overlap these, and never move or omit them:\n' +
     '- fixedEvents: the user\'s ACTUAL existing calendar events for today and tomorrow (meetings, padel, ' +
     'appointments, etc. — already-booked real time). Every block you propose must fit strictly around these.\n' +
     '- wakeUpTime is already computed (the earlier of tomorrow\'s configured wake time and a buffer before ' +
     'tomorrow\'s earliest fixed commitment) — do NOT recalculate it yourself. Output a short "Wake up" ' +
     'block on tomorrowDateKey starting at wakeUpTime, and never schedule anything else on tomorrowDateKey ' +
-    'before it.\n' +
+    'before it — this applies regardless of planningDateKey; if you are planning tomorrow\'s own main ' +
+    'schedule, this IS that day\'s first block, so nothing else on tomorrowDateKey may come before it.\n' +
     '- todayBedtime is today\'s already-configured sleep time (do NOT recalculate it) — output a ' +
     '"Wind-down" block on todayDateKey ending exactly at todayBedtime, using the exact given time, and ' +
-    'never schedule anything else on todayDateKey after it.\n' +
+    'never schedule anything else on todayDateKey after it. This is ALWAYS about tonight specifically, ' +
+    'regardless of planningDateKey — even when planning tomorrow\'s schedule, still output tonight\'s own ' +
+    'Wind-down block on todayDateKey exactly as if planning today.\n' +
     '- nowTime is the actual current wall-clock time this plan is being generated at, "HH:MM". EVERY block ' +
     'you propose on todayDateKey must start at or after nowTime — never propose a start time on todayDateKey ' +
     'that has already passed, even for a normally-morning item. If a default item like breakfast would only ' +
     'make sense before nowTime, use your judgment: shift it to a later, still-sensible slot and rename it if ' +
     'the new time no longer fits the original name (e.g. "Brunch" instead of "Breakfast" if nowTime is ' +
     'already midday), or omit it entirely if no reasonable later slot makes sense — but never output a ' +
-    'todayDateKey block starting before nowTime. tomorrowDateKey blocks (the Wake up block) are unaffected ' +
-    'by nowTime.\n\n' +
+    'todayDateKey block starting before nowTime. tomorrowDateKey blocks are unaffected by nowTime — if ' +
+    'planningDateKey is tomorrowDateKey, that means the WHOLE day you are scheduling is open, with no ' +
+    '"already passed" constraint at all (only the Wake up block\'s own timing still applies).\n\n' +
     'WHAT YOU DECIDE — fit these into whatever open time remains around the fixed items above, on ' +
-    'todayDateKey unless noted:\n' +
-    '1. Today\'s training session — todayRecommendation is the exact, already-decided session (it already ' +
-    'accounts for WHOOP recovery and any padel commitment today — do not re-evaluate or change WHAT it ' +
-    'says, just place it once, in a sensible open slot). If todayRecommendation is null, skip the training ' +
-    'block entirely rather than inventing one.\n' +
+    'planningDateKey:\n' +
+    '1. Training session — planningRecommendation is the exact, already-decided session for planningDateKey ' +
+    '(already accounts for whatever is actually known/relevant for that day — do not re-evaluate or change ' +
+    'WHAT it says, just place it once, in a sensible open slot). If planningRecommendation is null, skip the ' +
+    'training block entirely rather than inventing one.\n' +
     '2. One focused productivity/work block — a reasonable default length (about 1 hour) since no specific ' +
     'preference is configured.\n' +
     '3. Three generic meal blocks — "Breakfast", "Lunch", "Dinner" only, no recipes or macros — at ' +
-    'reasonable times relative to todayWakeUpTime (today\'s already-configured wake time — do NOT ' +
-    'recalculate it, just use it as the anchor for how early breakfast may start), the fixed events, and ' +
-    'each other (breakfast shortly after todayWakeUpTime, lunch around midday, dinner in the evening; ' +
+    'reasonable times relative to planningWakeUpTime (planningDateKey\'s own already-configured wake time — ' +
+    'do NOT recalculate it, just use it as the anchor for how early breakfast may start), the fixed events, ' +
+    'and each other (breakfast shortly after planningWakeUpTime, lunch around midday, dinner in the evening; ' +
     'several hours apart; never overlapping the training block or a fixed event) — subject always to the ' +
-    'nowTime rule above, which can override todayWakeUpTime\'s placement (e.g. skip or rename breakfast, per ' +
-    'that rule, rather than starting it before nowTime).\n' +
+    'nowTime rule above when planningDateKey is todayDateKey (it can override planningWakeUpTime\'s ' +
+    'placement, e.g. skip or rename breakfast rather than starting it before nowTime); irrelevant when ' +
+    'planningDateKey is tomorrowDateKey, since nothing on that day has "already passed" yet.\n' +
     '4. A short post-meal walk (10-15 minutes) shortly after each of the three meal blocks (or after however ' +
-    'many of them survive the nowTime rule above).\n\n' +
-    'If whoopToday shows low recovery (recoveryPct below 34), keep the rest of the day light — do not add ' +
-    'anything beyond the items above, and lean toward the shorter end of the work block\'s duration; the ' +
-    'training recommendation itself is already adjusted for recovery, so do not second-guess it further ' +
-    'here.\n\n' +
+    'many of them survive the nowTime rule, when it applies).\n\n' +
+    'If planningDateKey is todayDateKey AND whoopToday shows low recovery (recoveryPct below 34), keep the ' +
+    'rest of the day light — do not add anything beyond the items above, and lean toward the shorter end of ' +
+    'the work block\'s duration; the training recommendation itself is already adjusted for recovery, so do ' +
+    'not second-guess it further here. If planningDateKey is tomorrowDateKey instead, do NOT apply this — ' +
+    'today\'s specific whoopToday number does not predict tomorrow\'s recovery, and planningRecommendation ' +
+    'for tomorrow has already reasoned about load-management appropriately on its own (see how it was ' +
+    'generated); do not layer a second, today-based recovery adjustment on top of it.\n\n' +
     buildRestrictionsPromptSection(restrictions) +
     'Reply with ONLY valid JSON, no markdown fences, no commentary, in exactly this shape:\n' +
     JSON.stringify({
@@ -766,11 +888,30 @@ async function handleDayPlan(req, res, apiKey, body) {
   }
 
   const restrictions = sanitizeRestrictions(body.restrictions);
+  // planningDateKey defaults to todayDateKey — an older client that
+  // never sends it (or main.html itself with "Today" selected) gets
+  // EXACTLY the original behavior with zero change. Only accepted if
+  // it actually matches one of the two real dates already given;
+  // anything else falls back to todayDateKey rather than trusting an
+  // arbitrary client-supplied date string.
+  const planningDateKey = body.planningDateKey === tomorrowDateKey ? tomorrowDateKey : todayDateKey;
+  const wakeUpTime = typeof body.wakeUpTime === 'string' && HHMM_RE.test(body.wakeUpTime) ? body.wakeUpTime : '07:00';
+  const todayWakeUpTime = typeof body.todayWakeUpTime === 'string' && HHMM_RE.test(body.todayWakeUpTime) ? body.todayWakeUpTime : '08:00';
   const context = {
     todayDateKey,
     tomorrowDateKey,
+    planningDateKey,
     nowTime,
-    todayRecommendation: typeof body.todayRecommendation === 'string' ? body.todayRecommendation.slice(0, 300) : null,
+    // planningRecommendation replaces the old todayRecommendation name
+    // — same field, just no longer assumed to always be about today:
+    // when planningDateKey is tomorrowDateKey, the client sends
+    // whatever mode=today?forTomorrow=true produced instead (see that
+    // mode's own doc comment above). Still accepted under the old
+    // name too, for a caller that hasn't been updated — planningDateKey
+    // would just be todayDateKey in that case anyway, so the meaning
+    // is identical either way.
+    planningRecommendation: typeof body.planningRecommendation === 'string' ? body.planningRecommendation.slice(0, 300)
+      : typeof body.todayRecommendation === 'string' ? body.todayRecommendation.slice(0, 300) : null,
     whoopToday: body.whoopToday && typeof body.whoopToday === 'object' ? { recoveryPct: numOrNull(body.whoopToday.recoveryPct) } : null,
     fixedEvents: Array.isArray(body.fixedEvents) ? body.fixedEvents.slice(0, 40).map((e) => ({
       date: typeof (e && e.date) === 'string' ? e.date.slice(0, 10) : '',
@@ -780,18 +921,27 @@ async function handleDayPlan(req, res, apiKey, body) {
       allDay: !!(e && e.allDay),
     })) : [],
     // TOMORROW's inferred wake time (from tomorrow's earliest fixed
-    // commitment) — used only for the "Wake up" block on
-    // tomorrowDateKey. Do not confuse with todayWakeUpTime/todayBedtime
-    // below, both about TODAY's own configured schedule instead.
-    wakeUpTime: typeof body.wakeUpTime === 'string' && HHMM_RE.test(body.wakeUpTime) ? body.wakeUpTime : '07:00',
+    // commitment) — used for the "Wake up" block on tomorrowDateKey
+    // (always), AND doubles as planningWakeUpTime below when
+    // planningDateKey is tomorrowDateKey — tomorrow's own real wake
+    // anchor, no second computation needed for that case.
+    wakeUpTime,
     // TODAY's own already-configured wake/sleep times (Day Ring's
     // per-weekday dayRingSchedule, read client-side by TODAY's actual
-    // weekday). todayWakeUpTime anchors how early breakfast may start;
-    // todayBedtime is where tonight's Wind-down block ends. Defaults
-    // match the Day Ring feature's own DAY_RING_DEFAULT_WAKE/_SLEEP if
-    // the client omits either for any reason.
-    todayWakeUpTime: typeof body.todayWakeUpTime === 'string' && HHMM_RE.test(body.todayWakeUpTime) ? body.todayWakeUpTime : '08:00',
+    // weekday). todayBedtime is where tonight's Wind-down block ends —
+    // ALWAYS today's, regardless of planningDateKey (see
+    // buildDayPlanSystemPrompt's own comment). Defaults match the Day
+    // Ring feature's own DAY_RING_DEFAULT_WAKE/_SLEEP if the client
+    // omits either for any reason.
+    todayWakeUpTime,
     todayBedtime: typeof body.todayBedtime === 'string' && HHMM_RE.test(body.todayBedtime) ? body.todayBedtime : '00:00',
+    // The actual wake-time anchor for whichever day is being planned —
+    // today's own (todayWakeUpTime) when planningDateKey is
+    // todayDateKey, or tomorrow's already-computed wakeUpTime when
+    // planning ahead. See buildDayPlanSystemPrompt's own header
+    // comment on why this needed no separate "tomorrow's own wake
+    // time" computation.
+    planningWakeUpTime: planningDateKey === tomorrowDateKey ? wakeUpTime : todayWakeUpTime,
     activeRestrictions: restrictions,
   };
 

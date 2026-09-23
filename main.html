@@ -1457,6 +1457,16 @@ body::after {
     <div class="section-title">Plan My Day</div>
     <div class="gm-card">
       <div class="plan-day-intro" id="planDayIntro">Proposes today's training, meals, a work block, and tonight's wind-down around your real calendar. Nothing is created until you confirm.</div>
+      <!-- Today/Tomorrow toggle — same .cal-tabs/.cal-tab pattern as
+           the Calendar card's own range tabs right above, for visual
+           consistency. Tonight's Wind-down block is always tonight's
+           regardless of which is selected (see planDayGenerateBtn's
+           own click handler comment) — this only changes which day the
+           MAIN schedule (training/meals/work/walks) gets built for. -->
+      <div class="cal-tabs" id="planDayRangeTabs">
+        <button type="button" class="cal-tab active" data-target="today">Today</button>
+        <button type="button" class="cal-tab" data-target="tomorrow">Tomorrow</button>
+      </div>
       <button type="button" class="save-btn" id="planDayGenerateBtn">Generate today's plan</button>
       <div id="planDayStatus" class="plan-day-status"></div>
       <div id="planDayBlocks" class="plan-day-blocks" style="display:none"></div>
@@ -2933,6 +2943,106 @@ document.addEventListener('DOMContentLoaded', function () {
     return null;
   }
 
+  // =============================================================
+  // Tomorrow's training recommendation ("Plan my day" Tomorrow toggle)
+  // — no cache exists for a future day the way
+  // po_coach_today_recommendation_v1 caches TODAY's (gym.html's
+  // Training page only ever computes today's own), so this gathers
+  // the same weekPlan/progress/strengthContext inputs api/training.js
+  // ?mode=today already expects and calls it live, with
+  // forTomorrow:true (see that mode's own doc comment). Deliberately
+  // NOT byte-for-byte gym.html's own computeWeekProgress()/
+  // buildTodayStrengthContext() (those live in gym.html's own Training-
+  // page closure, built on helpers — activityTypeById(), window.PoCoach
+  // — that aren't reachable from here) — sums real po_coach_activities
+  // distance the same generalized way computeCardioCategory's own
+  // weekly-pace fallback does (matched against whichever
+  // activityTypeId(s) the week's plan actually assigned, not hardcoded
+  // running) — same scope/simplification that function's own comment
+  // documents (distance-based only). mondayOfKey/todaySplitFor below
+  // are this closure's own small copies of the score engine's
+  // identically-named functions (a separate <script> block/closure —
+  // see this file's own established per-scope duplication convention,
+  // e.g. wakeUpTimeFromDayRingSchedule above already does the same
+  // rather than reaching into a different script's scope).
+  function mondayOfKey(dateKeyStr) {
+    const date = DayLib.parseDateKey(dateKeyStr);
+    const day = date.getDay();
+    const diff = (day === 0 ? -6 : 1) - day;
+    date.setDate(date.getDate() + diff);
+    return DayLib.plainDateKey(date);
+  }
+  function todaySplitFor(pcState, dateKeyStr) {
+    try {
+      const rot = pcState.splitRotation;
+      if (!rot || !rot.length) return { name: '—' };
+      const a = DayLib.parseDateKey(pcState.splitAnchor.date);
+      const t = DayLib.parseDateKey(dateKeyStr);
+      a.setHours(0, 0, 0, 0); t.setHours(0, 0, 0, 0);
+      const diffDays = Math.round((t - a) / 86400000);
+      const idx = ((pcState.splitAnchor.index + diffDays) % rot.length + rot.length) % rot.length;
+      return { name: rot[idx] };
+    } catch (e) { return { name: '—' }; }
+  }
+  function tomorrowStrengthContext(tomorrowDateKey) {
+    let pc = null;
+    try { pc = JSON.parse(localStorage.getItem('po_coach_v1')); } catch (e) {}
+    if (!pc || !Array.isArray(pc.splitRotation) || !pc.splitRotation.length || !pc.splitAnchor || !pc.splitAnchor.date) return null;
+    const split = todaySplitFor(pc, tomorrowDateKey);
+    return { todaySplitDay: split.name || null, isRestDayInRotation: /^rest\b/i.test(split.name || '') };
+  }
+  function loadCurrentWeeklyPlan(weekMondayKey) {
+    let stored = null;
+    try { stored = JSON.parse(localStorage.getItem('po_coach_weekly_plan_v1')); } catch (e) {}
+    if (!stored || stored.weekStart !== weekMondayKey || !stored.plan) return null;
+    return stored.plan;
+  }
+  function weekProgressAsOf(weekMondayKey, asOfDateKey, plan) {
+    let doneDays = {};
+    try { doneDays = JSON.parse(localStorage.getItem('po_coach_workout_done')) || {}; } catch (e) {}
+    const strengthDone = Object.keys(doneDays).filter((k) => k >= weekMondayKey && k <= asOfDateKey && !!doneDays[k]).length;
+    const strengthTarget = (plan && plan.strength && plan.strength.targetSessions) || 0;
+    const cardio = plan ? plan.cardio : null;
+    const longSession = cardio ? cardio.longSession : null;
+    const easyVolume = cardio ? cardio.easyVolume : null;
+    const assignedTypeIds = new Set([longSession && longSession.activityTypeId, easyVolume && easyVolume.activityTypeId].filter(Boolean));
+    const cardioUnit = (longSession && longSession.unit) || (easyVolume && easyVolume.unit) || 'km';
+    const cardioAmountTarget = Math.round((((longSession && Number(longSession.targetAmount)) || 0) + ((easyVolume && Number(easyVolume.targetAmount)) || 0)) * 10) / 10;
+    let activities = [];
+    try { activities = JSON.parse(localStorage.getItem('po_coach_activities')) || []; } catch (e) {}
+    const weekActivities = activities.filter((a) => a && a.dateKey >= weekMondayKey && a.dateKey <= asOfDateKey);
+    const cardioAmountDone = Math.round(weekActivities.filter((a) => assignedTypeIds.has(a.activityTypeId)).reduce((s, a) => s + (Number(a.distanceKm) || 0), 0) * 10) / 10;
+    return {
+      strengthSessionsDone: strengthDone, strengthSessionsTarget: strengthTarget,
+      cardioAmountDone, cardioAmountTarget, cardioUnit,
+      activitiesThisWeek: weekActivities.map((a) => ({ dateKey: a.dateKey, activityTypeId: a.activityTypeId, distanceKm: a.distanceKm, count: a.count, durationMin: a.durationMin, effort: a.effort })),
+    };
+  }
+  async function fetchTomorrowRecommendation(secret, todayDateKey, tomorrowDateKey, todayRecommendation, restrictions) {
+    const plan = loadCurrentWeeklyPlan(mondayOfKey(todayDateKey));
+    if (!plan) return null;
+    const strengthContext = tomorrowStrengthContext(tomorrowDateKey);
+    // Progress "as of tomorrow" includes TODAY's own logged sessions too
+    // — by tomorrow morning, today's training already counts toward
+    // this week's remaining objectives.
+    const progress = weekProgressAsOf(mondayOfKey(todayDateKey), todayDateKey, plan);
+    const whoopToday = await fetchRecoveryForPlan();
+    try {
+      const res = await fetch('/api/training?mode=today&secret=' + encodeURIComponent(secret), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          weekPlan: plan, progress, strengthContext,
+          whoopToday: whoopToday ? { recoveryPct: whoopToday.recoveryPct } : null,
+          activeRestrictions: restrictions,
+          forTomorrow: true,
+          todayRecommendation,
+        }),
+      });
+      const json = await res.json();
+      return (json && json.ok && typeof json.recommendation === 'string') ? json.recommendation : null;
+    } catch (e) { return null; }
+  }
+
   let planDayBlocksState = null; // [{date,start,end,title,category}] from the last generated proposal
 
   function planCatLabel(cat) {
@@ -2954,6 +3064,21 @@ document.addEventListener('DOMContentLoaded', function () {
     $('planDayActions').style.display = 'flex';
   }
 
+  // Today/Tomorrow toggle — only changes which day the MAIN schedule
+  // (training/work/meals/walks) is built for; see planDayGenerateBtn's
+  // own handler and api/training.js's buildDayPlanSystemPrompt header
+  // comment for what does and doesn't change with it (tonight's
+  // Wind-down is ALWAYS tonight's, regardless).
+  let planDayTarget = 'today';
+  $('planDayRangeTabs').querySelectorAll('.cal-tab').forEach((tab) => {
+    tab.addEventListener('click', () => {
+      $('planDayRangeTabs').querySelectorAll('.cal-tab').forEach((t) => t.classList.remove('active'));
+      tab.classList.add('active');
+      planDayTarget = tab.dataset.target;
+      $('planDayGenerateBtn').textContent = planDayTarget === 'tomorrow' ? 'Generate tomorrow\'s plan' : 'Generate today\'s plan';
+    });
+  });
+
   $('planDayGenerateBtn').addEventListener('click', async () => {
     const secret = getSecret();
     if (!secret) { $('planDayStatus').textContent = 'Set your dashboard secret first (on the Cronometer page) to use AI features.'; return; }
@@ -2971,6 +3096,7 @@ document.addEventListener('DOMContentLoaded', function () {
       const tomorrowDateKeyDate = DayLib.parseDateKey(todayDateKey);
       tomorrowDateKeyDate.setDate(tomorrowDateKeyDate.getDate() + 1);
       const tomorrowDateKey = DayLib.plainDateKey(tomorrowDateKeyDate);
+      const planningDateKey = planDayTarget === 'tomorrow' ? tomorrowDateKey : todayDateKey;
 
       // Today through the end of tomorrow — both days' ALREADY-FIXED
       // events, treated as immovable by the model.
@@ -3020,6 +3146,22 @@ document.addEventListener('DOMContentLoaded', function () {
       const todayRecommendation = readCachedTrainingRecommendation(todayDateKey);
       const restrictions = await fetchActiveRestrictionsForPlan(todayDateKey);
 
+      // planningRecommendation: today's own cached pick when planning
+      // today (unchanged), or a live tomorrow-specific call when
+      // planning ahead — no cache exists for a future day (see
+      // fetchTomorrowRecommendation's own header comment). Either way
+      // this is the ONE thing that actually differs in HOW it's
+      // gathered between the two modes; everything else below
+      // (fixedEvents, wakeUpTime, todayWakeUpTime/todayBedtime,
+      // restrictions) is fetched exactly the same regardless — the
+      // API request itself carries planningDateKey/planningRecommendation
+      // and decides what to do with them server-side.
+      let planningRecommendation = todayRecommendation;
+      if (planDayTarget === 'tomorrow') {
+        $('planDayStatus').textContent = 'Checking tomorrow\'s training…';
+        planningRecommendation = await fetchTomorrowRecommendation(secret, todayDateKey, tomorrowDateKey, todayRecommendation, restrictions);
+      }
+
       $('planDayStatus').textContent = 'Thinking…';
       // Read right before sending (not earlier in this handler) so it
       // reflects the actual moment the request is made, not whenever
@@ -3028,9 +3170,9 @@ document.addEventListener('DOMContentLoaded', function () {
       const res = await fetch('/api/training?mode=day-plan&secret=' + encodeURIComponent(secret), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          todayDateKey, tomorrowDateKey,
+          todayDateKey, tomorrowDateKey, planningDateKey,
           nowTime,
-          todayRecommendation,
+          planningRecommendation,
           whoopToday,
           fixedEvents,
           wakeUpTime,
@@ -3043,9 +3185,11 @@ document.addEventListener('DOMContentLoaded', function () {
 
       planDayBlocksState = json.blocks;
       renderPlanDayBlocks(json.blocks);
-      $('planDayStatus').textContent = todayRecommendation
+      $('planDayStatus').textContent = planningRecommendation
         ? 'Review below, then confirm.'
-        : 'Review below, then confirm. (No cached Training recommendation for today yet — visit the Training tab first if you want a training block included.)';
+        : (planDayTarget === 'tomorrow'
+          ? 'Review below, then confirm. (No training recommendation for tomorrow — Generate this week\'s objectives first if you want a training block included.)'
+          : 'Review below, then confirm. (No cached Training recommendation for today yet — visit the Training tab first if you want a training block included.)');
     } catch (e) {
       $('planDayStatus').textContent = 'Could not generate a plan: ' + (e.message || String(e));
     } finally {
