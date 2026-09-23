@@ -3443,12 +3443,12 @@ document.addEventListener('DOMContentLoaded', function () {
   // this also means the score is still exactly 0-100 even if the
   // configured weights don't sum to exactly 100 (defensive — the
   // Settings UI enforces that sum, but an old cached profile might not).
-  function combineTrainingFraction(strength, running) {
+  function combineTrainingFraction(strength, cardio) {
     const fracs = [];
     const details = [];
     if (strength.available) { fracs.push(strength.fraction); details.push(strength.label + ': ' + strength.detail); }
-    if (running.available) { fracs.push(running.fraction); details.push(running.label + ': ' + running.detail); }
-    if (!fracs.length) return { available: false, reason: strength.reason || running.reason || 'no data yet' };
+    if (cardio.available) { fracs.push(cardio.fraction); details.push(cardio.label + ': ' + cardio.detail); }
+    if (!fracs.length) return { available: false, reason: strength.reason || cardio.reason || 'no data yet' };
     return { available: true, fraction: fracs.reduce((a, b) => a + b, 0) / fracs.length, detail: details.join(' · ') };
   }
   function combineWeightedCategories(categories, weights) {
@@ -3519,18 +3519,6 @@ document.addEventListener('DOMContentLoaded', function () {
     return { available: true, fraction: done ? 1 : 0, label: 'Strength (' + split.name + ')', detail: done ? 'Done' : 'Not logged yet' };
   }
 
-  // Phase 3 of the multi-activity-type generalization (Training/
-  // Activities) replaced the weekly plan's "running" key with a
-  // generalized "cardio" one, where each of the three slots can be
-  // assigned to any recommendable activity type, not necessarily
-  // running. This category is specifically about running pace/volume
-  // (po_coach_runs, a running-only mirror — see gym.html's Activities
-  // tab comments) and isn't being generalized itself here — out of
-  // scope for that feature — so it now only reports a target when the
-  // plan actually assigned running to one of the volume slots this
-  // week, and gracefully reports unavailable otherwise (accurate: if
-  // cardio went to a different activity, there genuinely is no running
-  // target) rather than crashing on the now-removed .running key.
   // Migrates a plan generated before Phase 3 of the multi-activity-type
   // feature (top-level "running" -> "cardio") — same shape adapter as
   // gym.html's normalizeStoredPlanCardio(), duplicated here rather than
@@ -3552,7 +3540,44 @@ document.addEventListener('DOMContentLoaded', function () {
       },
     });
   }
-  function computeRunningCategory(datePlainKey, weekMondayPlainKey) {
+  // Phase 3 of the multi-activity-type generalization (Training/
+  // Activities) replaced the weekly plan's "running" key with a
+  // generalized "cardio" one, where each of the three slots can be
+  // assigned to any recommendable activity type — but THIS category
+  // (the "Training" score breakdown row) stayed hardcoded to 'running'
+  // specifically, and kept reading po_coach_runs, a running-ONLY
+  // derived mirror kept alive purely for this one function (see
+  // gym.html's own ACTIVITY LOG header comment: "po_coach_runs is kept
+  // too, but purely as a DERIVED, running-only mirror... so main.html's
+  // computeRunningCategory... [isn't] touched by this generalization").
+  // Confirmed bug: on a week whose plan assigned a cardio slot to
+  // swimming/cycling instead of running (e.g. a triathlon plan), or on
+  // any day the user logged a real session of a type the plan didn't
+  // happen to assign at all, this silently reported "no running target
+  // this week" or simply never saw the real po_coach_activities entry —
+  // Today's Score's Training row showed 0/25 despite a real completed
+  // session, exactly reproduced: computeStrengthCategory available:true/
+  // fraction:0 (no strength that day) + this category available:false
+  // (no running-specific target) => combineTrainingFraction averages
+  // only the available one (strength alone) => 0.
+  //
+  // Fixed in two parts: (1) a real activity of ANY type logged TODAY
+  // is immediate full credit, regardless of whether it matches
+  // whichever type a slot happened to be assigned — the task's own
+  // explicit fix requirement, and the direct fix for the reported bug.
+  // (2) failing that, the ORIGINAL weekly-pace-so-far math is preserved
+  // exactly (same formula, same "on pace by today" semantics) as a
+  // fallback for a day nothing was logged yet, just generalized to
+  // whichever type(s) the plan's slots actually carry (not hardcoded
+  // running) and reading po_coach_activities (the real, generalized
+  // store) instead of the running-only mirror — a pure single-activity-
+  // type running week behaves byte-identical to before, since
+  // assignedTypeIds ends up exactly {'running'} either way.
+  // Distance-based (distanceKm) only, same scope the original running-
+  // only version already had — a count/duration-only cardio type isn't
+  // picked up by this weekly-pace fallback, but IS still covered by
+  // the today-fallback above regardless of its unit kind.
+  function computeCardioCategory(datePlainKey, weekMondayPlainKey) {
     let plan = null;
     try { plan = JSON.parse(localStorage.getItem('po_coach_weekly_plan_v1')); } catch (e) {}
     if (plan && plan.plan) plan.plan = migratePlanCardio(plan.plan);
@@ -3560,19 +3585,36 @@ document.addEventListener('DOMContentLoaded', function () {
     const cardio = plan.plan.cardio;
     const longSession = cardio.longSession || {};
     const easyVolume = cardio.easyVolume || {};
+    const assignedTypeIds = new Set([longSession.activityTypeId, easyVolume.activityTypeId].filter(Boolean));
+
+    let activities = [];
+    try { activities = JSON.parse(localStorage.getItem('po_coach_activities')) || []; } catch (e) { activities = []; }
+
+    // (1) Any recommendable-type session actually logged TODAY —
+    // "recommendable" isn't checked here (no synchronous access to
+    // that config in this scoring path), but that's the right call
+    // regardless: whether a type is currently allowed for future AI
+    // planning is a different question from whether a real session the
+    // user actually did today should count as "trained today".
+    const todayTypes = Array.from(new Set(activities.filter((a) => a && a.dateKey === datePlainKey).map((a) => a.activityTypeId).filter(Boolean)));
+    if (todayTypes.length) {
+      return { available: true, fraction: 1, label: 'Cardio', detail: 'Logged today (' + todayTypes.join(', ') + ')' };
+    }
+
+    // (2) Fallback — this week's pace-so-far toward whichever type(s)
+    // were actually assigned, same math as the original running-only
+    // version.
     let kmTarget = 0;
-    if (longSession.activityTypeId === 'running') kmTarget += Number(longSession.targetAmount) || 0;
-    if (easyVolume.activityTypeId === 'running') kmTarget += Number(easyVolume.targetAmount) || 0;
+    if (longSession.activityTypeId) kmTarget += Number(longSession.targetAmount) || 0;
+    if (easyVolume.activityTypeId) kmTarget += Number(easyVolume.targetAmount) || 0;
     kmTarget = Math.round(kmTarget * 10) / 10;
-    if (!kmTarget) return { available: false, reason: 'no running target this week' };
-    let runs = [];
-    try { runs = JSON.parse(localStorage.getItem('po_coach_runs')) || []; } catch (e) { runs = []; }
-    const soFar = runs.filter((r) => r && r.dateKey >= weekMondayPlainKey && r.dateKey <= datePlainKey);
-    const kmDone = Math.round(soFar.reduce((s, r) => s + (Number(r.distanceKm) || 0), 0) * 10) / 10;
+    if (!kmTarget) return { available: false, reason: 'no cardio target this week' };
+    const soFar = activities.filter((a) => a && assignedTypeIds.has(a.activityTypeId) && a.dateKey >= weekMondayPlainKey && a.dateKey <= datePlainKey);
+    const kmDone = Math.round(soFar.reduce((s, a) => s + (Number(a.distanceKm) || 0), 0) * 10) / 10;
     const dayIdx = mondayBasedDayIndex(datePlainKey);
     const expected = kmTarget * ((dayIdx + 1) / 7);
     const fraction = expected > 0 ? Math.min(1, kmDone / expected) : 1;
-    return { available: true, fraction, label: 'Running pace', detail: kmDone + ' / ' + kmTarget + ' km this week' };
+    return { available: true, fraction, label: 'Cardio pace', detail: kmDone + ' / ' + kmTarget + ' km this week' };
   }
 
   async function computeNutritionCategory(datePlainKey, precachedResult) {
@@ -3745,9 +3787,9 @@ document.addEventListener('DOMContentLoaded', function () {
     const stack = computeStackCategory(dateActiveKey);
     const water = computeWaterCategory(datePlainKey);
     const strength = computeStrengthCategory(datePlainKey);
-    const running = computeRunningCategory(datePlainKey, weekMondayPlainKey);
+    const cardio = computeCardioCategory(datePlainKey, weekMondayPlainKey);
     const nutrition = await computeNutritionCategory(datePlainKey, opts.cronoCache);
-    const training = combineTrainingFraction(strength, running);
+    const training = combineTrainingFraction(strength, cardio);
     const autoSources = await computeAutoThresholdSources(datePlainKey, { water, strength, nutrition, habitConfig });
     const manual = scoreManualHabitsForDate(habitConfig, entriesByDate, dateActiveKey, weekMondayActiveKey, autoSources);
     const habits = manual.possible > 0
@@ -3763,7 +3805,7 @@ document.addEventListener('DOMContentLoaded', function () {
       { key: 'dailyStack', c: stack },
     ], weights);
 
-    return { score, manual, habits, nutrition, strength, running, training, water, stack, weights };
+    return { score, manual, habits, nutrition, strength, cardio, training, water, stack, weights };
   }
 
   // ---------- render: hero ring ----------
@@ -3864,8 +3906,8 @@ document.addEventListener('DOMContentLoaded', function () {
       const stack = computeStackCategory(dk);
       const water = computeWaterCategory(dPlain);
       const strength = computeStrengthCategory(dPlain);
-      const running = computeRunningCategory(dPlain, weekMondayPlain);
-      const training = combineTrainingFraction(strength, running);
+      const cardio = computeCardioCategory(dPlain, weekMondayPlain);
+      const training = combineTrainingFraction(strength, cardio);
       const habits = manual.possible > 0 ? { available: true, fraction: manual.earned / manual.possible } : { available: false };
       const dayScore = combineWeightedCategories([
         { key: 'habits', c: habits },
@@ -3886,19 +3928,23 @@ document.addEventListener('DOMContentLoaded', function () {
         if (plan && plan.plan) plan.plan = migratePlanCardio(plan.plan);
         if (plan && plan.weekStart === weekMondayPlain && plan.plan && plan.plan.cardio) {
           let doneDays = {}; try { doneDays = JSON.parse(localStorage.getItem('po_coach_workout_done')) || {}; } catch (e) {}
-          let runs = []; try { runs = JSON.parse(localStorage.getItem('po_coach_runs')) || []; } catch (e) {}
+          let activities = []; try { activities = JSON.parse(localStorage.getItem('po_coach_activities')) || []; } catch (e) {}
           const strengthDone = Object.keys(doneDays).filter((k) => k >= weekMondayPlain && !!doneDays[k]).length;
           const strengthTarget = plan.plan.strength.targetSessions || 0;
-          const runsThisWeek = runs.filter((r) => r && r.dateKey >= weekMondayPlain);
-          const kmDone = Math.round(runsThisWeek.reduce((s, r) => s + (Number(r.distanceKm) || 0), 0) * 10) / 10;
-          // Phase 3 of the multi-activity-type generalization: only count
-          // a km target when the plan actually assigned running to one of
-          // the volume slots this week — see computeRunningCategory's
-          // identical reasoning above.
+          // Generalized the same way computeCardioCategory's own weekly-
+          // pace fallback is (see that function's own comment) — matched
+          // against whichever activity type(s) the plan's slots actually
+          // carry, not hardcoded 'running', and reading po_coach_activities
+          // (the real, generalized store) instead of the running-only
+          // po_coach_runs mirror. A pure running week behaves identically
+          // to before, since assignedTypeIds ends up exactly {'running'}.
           const cardio = plan.plan.cardio;
+          const assignedTypeIds = new Set([cardio.longSession && cardio.longSession.activityTypeId, cardio.easyVolume && cardio.easyVolume.activityTypeId].filter(Boolean));
+          const activitiesThisWeek = activities.filter((a) => a && assignedTypeIds.has(a.activityTypeId) && a.dateKey >= weekMondayPlain);
+          const kmDone = Math.round(activitiesThisWeek.reduce((s, a) => s + (Number(a.distanceKm) || 0), 0) * 10) / 10;
           let kmTarget = 0;
-          if (cardio.longSession && cardio.longSession.activityTypeId === 'running') kmTarget += Number(cardio.longSession.targetAmount) || 0;
-          if (cardio.easyVolume && cardio.easyVolume.activityTypeId === 'running') kmTarget += Number(cardio.easyVolume.targetAmount) || 0;
+          if (cardio.longSession && cardio.longSession.activityTypeId) kmTarget += Number(cardio.longSession.targetAmount) || 0;
+          if (cardio.easyVolume && cardio.easyVolume.activityTypeId) kmTarget += Number(cardio.easyVolume.targetAmount) || 0;
           kmTarget = Math.round(kmTarget * 10) / 10;
           const fracs = [];
           if (strengthTarget > 0) fracs.push(Math.min(1, strengthDone / strengthTarget));

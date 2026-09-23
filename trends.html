@@ -505,10 +505,10 @@ document.addEventListener('DOMContentLoaded', function () {
     });
     return { earned, possible, breakdown, flags };
   }
-  function combineTrainingFraction(strength, running) {
+  function combineTrainingFraction(strength, cardio) {
     const fracs = [];
     if (strength.available) fracs.push(strength.fraction);
-    if (running.available) fracs.push(running.fraction);
+    if (cardio.available) fracs.push(cardio.fraction);
     if (!fracs.length) return { available: false };
     return { available: true, fraction: fracs.reduce((a, b) => a + b, 0) / fracs.length };
   }
@@ -584,7 +584,14 @@ document.addEventListener('DOMContentLoaded', function () {
       },
     });
   }
-  function computeRunningCategory(datePlainKey, weekMondayPlainKey) {
+  // Ported from main.html's own computeCardioCategory() (see that
+  // file's own comment for the full investigation/reasoning) — was
+  // computeRunningCategory, hardcoded to 'running' and reading the
+  // running-only po_coach_runs mirror, which under-reported a real
+  // triathlon-style week's swim/bike sessions on this chart too.
+  // Kept in sync with main.html's copy per this port's own established
+  // convention (see loadScoreTrend's header comment).
+  function computeCardioCategory(datePlainKey, weekMondayPlainKey) {
     let plan = null;
     try { plan = JSON.parse(localStorage.getItem('po_coach_weekly_plan_v1')); } catch (e) {}
     if (plan && plan.plan) plan.plan = migratePlanCardio(plan.plan);
@@ -592,15 +599,20 @@ document.addEventListener('DOMContentLoaded', function () {
     const cardio = plan.plan.cardio;
     const longSession = cardio.longSession || {};
     const easyVolume = cardio.easyVolume || {};
+    const assignedTypeIds = new Set([longSession.activityTypeId, easyVolume.activityTypeId].filter(Boolean));
+
+    let activities = [];
+    try { activities = JSON.parse(localStorage.getItem('po_coach_activities')) || []; } catch (e) { activities = []; }
+    const todayTypes = Array.from(new Set(activities.filter((a) => a && a.dateKey === datePlainKey).map((a) => a.activityTypeId).filter(Boolean)));
+    if (todayTypes.length) return { available: true, fraction: 1 };
+
     let kmTarget = 0;
-    if (longSession.activityTypeId === 'running') kmTarget += Number(longSession.targetAmount) || 0;
-    if (easyVolume.activityTypeId === 'running') kmTarget += Number(easyVolume.targetAmount) || 0;
+    if (longSession.activityTypeId) kmTarget += Number(longSession.targetAmount) || 0;
+    if (easyVolume.activityTypeId) kmTarget += Number(easyVolume.targetAmount) || 0;
     kmTarget = Math.round(kmTarget * 10) / 10;
     if (!kmTarget) return { available: false };
-    let runs = [];
-    try { runs = JSON.parse(localStorage.getItem('po_coach_runs')) || []; } catch (e) { runs = []; }
-    const soFar = runs.filter((r) => r && r.dateKey >= weekMondayPlainKey && r.dateKey <= datePlainKey);
-    const kmDone = Math.round(soFar.reduce((s, r) => s + (Number(r.distanceKm) || 0), 0) * 10) / 10;
+    const soFar = activities.filter((a) => a && assignedTypeIds.has(a.activityTypeId) && a.dateKey >= weekMondayPlainKey && a.dateKey <= datePlainKey);
+    const kmDone = Math.round(soFar.reduce((s, a) => s + (Number(a.distanceKm) || 0), 0) * 10) / 10;
     const dayIdx = mondayBasedDayIndex(datePlainKey);
     const expected = kmTarget * ((dayIdx + 1) / 7);
     const fraction = expected > 0 ? Math.min(1, kmDone / expected) : 1;
@@ -631,8 +643,8 @@ document.addEventListener('DOMContentLoaded', function () {
     const stack = computeStackCategory(dk);
     const water = computeWaterCategory(dk);
     const strength = computeStrengthCategory(dk);
-    const running = computeRunningCategory(dk, weekMonday);
-    const training = combineTrainingFraction(strength, running);
+    const cardio = computeCardioCategory(dk, weekMonday);
+    const training = combineTrainingFraction(strength, cardio);
     const habits = manual.possible > 0 ? { available: true, fraction: manual.earned / manual.possible } : { available: false };
     const score = combineWeightedCategories([
       { key: 'habits', c: habits },
