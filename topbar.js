@@ -582,7 +582,18 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
     back.className = 'topbar-icon-btn topbar-back-btn';
     back.id = 'topbarBackBtn';
     back.setAttribute('aria-label', 'Back');
-    back.innerHTML = '<span class="topbar-icon">←</span>';
+    // A real Lucide SVG icon, not a text glyph — matching every OTHER
+    // .topbar-icon-btn exactly (e.g. Finance's <i data-lucide="wallet">
+    // below). .topbar-icon's width/height/stroke CSS only has any
+    // effect on a replaced element like an SVG; on a plain text <span>
+    // those are no-ops, so the "←" character sat at its own font's
+    // baseline/glyph metrics instead of truly centered in the button —
+    // visibly off relative to every sibling icon, which IS a properly
+    // centered SVG. injectBackButton() runs (via injectChrome()) before
+    // boot()'s own window.RowIcons.render() call below, so this gets
+    // picked up and converted to inline SVG in the same pass as every
+    // other icon, with identical centering.
+    back.innerHTML = '<i data-lucide="arrow-left" class="topbar-icon"></i>';
     topbarEl.insertBefore(back, topbarEl.firstChild);
   }
 
