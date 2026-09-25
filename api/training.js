@@ -566,9 +566,15 @@ function buildTodaySystemPrompt(restrictions) {
     'for your own reasoning only (sanity-checking the day actually has exercises configured) — never ' +
     'repeat it in the output. progress.strengthSessionsDone vs progress.strengthSessionsTarget tells you ' +
     'whether strength is behind this week. If strengthContext.isRestDayInRotation is true, only include ' +
-    'strength anyway if the weekly target is meaningfully behind and recovery allows it, keeping that ' +
-    'framing to a couple trailing words at most (e.g. "Push anyway"). If strengthContext itself is ' +
-    'missing or todaySplitDay is null, no split is configured — say that plainly rather than guessing.\n\n' +
+    'strength anyway if the weekly target is meaningfully behind and recovery allows it, and when you do, ' +
+    'you MUST pick which day-type to name using strengthContext.rotationDayTypes (all the user\'s real, ' +
+    'non-Rest day-types) minus strengthContext.daysTrainedThisWeek (day-types already trained since Monday, ' +
+    'from actual logs) — always prefer a day-type NOT in daysTrainedThisWeek over repeating one that is, ' +
+    'even though today\'s rotation slot is Rest. Only repeat an already-trained day-type if EVERY day-type ' +
+    'in rotationDayTypes is already in daysTrainedThisWeek (training frequency exceeding the number of day- ' +
+    'types is the only legitimate reason to repeat one within the same week). Keep the framing to a couple ' +
+    'trailing words at most (e.g. "<day-type> anyway"). If strengthContext itself is missing or ' +
+    'todaySplitDay is null, no split is configured — say that plainly rather than guessing.\n\n' +
     'CARDIO (Phase 3 of the multi-activity-type generalization — no longer always running) — ' +
     'weekPlan.cardio has three pieces, each already assigned its OWN activity by name when the weekly ' +
     'plan was generated: interval (activityTypeId/activityName + targetSessions/targetMinutes), ' +
@@ -659,9 +665,14 @@ function buildTomorrowSystemPrompt(restrictions) {
     'invent a generic structure like "full-body". progress.strengthSessionsDone vs progress.' +
     'strengthSessionsTarget tells you whether strength is behind this week (as of today — that day\'s own ' +
     'session, if you recommend one, would add to this). If strengthContext.isRestDayInRotation is true, only ' +
-    'include strength anyway if the weekly target is meaningfully behind, keeping that framing to a couple ' +
-    'trailing words at most (e.g. "Push anyway"). If strengthContext itself is missing or todaySplitDay is ' +
-    'null, no split is configured — say that plainly rather than guessing.\n\n' +
+    'include strength anyway if the weekly target is meaningfully behind, and when you do, you MUST pick ' +
+    'which day-type to name using strengthContext.rotationDayTypes (all the user\'s real, non-Rest day-' +
+    'types) minus strengthContext.daysTrainedThisWeek (day-types already trained since Monday, from actual ' +
+    'logs, through today) — always prefer a day-type NOT in daysTrainedThisWeek over repeating one that is. ' +
+    'Only repeat an already-trained day-type if EVERY day-type in rotationDayTypes is already in ' +
+    'daysTrainedThisWeek. Keep the framing to a couple trailing words at most (e.g. "<day-type> anyway"). ' +
+    'If strengthContext itself is missing or todaySplitDay is null, no split is configured — say that ' +
+    'plainly rather than guessing.\n\n' +
     'CARDIO (Phase 3 of the multi-activity-type generalization — no longer always running) — weekPlan.cardio ' +
     'has three pieces, each already assigned its OWN activity by name when the weekly plan was generated: ' +
     'interval, longSession, and easyVolume. Different pieces can be different activities (e.g. interval on ' +

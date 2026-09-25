@@ -2984,12 +2984,46 @@ document.addEventListener('DOMContentLoaded', function () {
       return { name: rot[idx] };
     } catch (e) { return { name: '—' }; }
   }
-  function tomorrowStrengthContext(tomorrowDateKey) {
+  // daysTrainedThisWeek/rotationDayTypes — same ground-truth fields
+  // gym.html's buildTodayStrengthContext() now sends (see its own
+  // comment for the "Push anyway" rest-day-override bug this fixes);
+  // duplicated here per this file's established per-closure convention
+  // since po_coach_v1's exercises/logs aren't reachable from gym.html's
+  // scope. "This week" is anchored to tomorrowDateKey's own Monday —
+  // trained-so-far is still only real logs through TODAY (tomorrow
+  // hasn't happened yet).
+  function tomorrowDaysTrainedThisWeek(pc, weekMondayKey, throughDateKey) {
+    const days = Array.isArray(pc.days) ? pc.days : [];
+    const dayNameById = {};
+    days.forEach((d) => { dayNameById[d.id] = d.name; });
+    const exDayById = {};
+    (pc.exercises || []).forEach((ex) => { exDayById[ex.id] = ex.day; });
+    const trained = new Set();
+    const logs = pc.logs || {};
+    Object.keys(logs).forEach((exId) => {
+      const dayId = exDayById[exId];
+      const dayName = dayId != null ? dayNameById[dayId] : null;
+      if (!dayName) return;
+      const arr = logs[exId] || [];
+      for (let i = 0; i < arr.length; i++) {
+        const dk = String(arr[i].date || '').slice(0, 10);
+        if (dk >= weekMondayKey && dk <= throughDateKey) { trained.add(dayName); break; }
+      }
+    });
+    return Array.from(trained);
+  }
+  function tomorrowStrengthContext(tomorrowDateKey, todayDateKey) {
     let pc = null;
     try { pc = JSON.parse(localStorage.getItem('po_coach_v1')); } catch (e) {}
     if (!pc || !Array.isArray(pc.splitRotation) || !pc.splitRotation.length || !pc.splitAnchor || !pc.splitAnchor.date) return null;
     const split = todaySplitFor(pc, tomorrowDateKey);
-    return { todaySplitDay: split.name || null, isRestDayInRotation: /^rest\b/i.test(split.name || '') };
+    const days = Array.isArray(pc.days) ? pc.days : [];
+    return {
+      todaySplitDay: split.name || null,
+      isRestDayInRotation: /^rest\b/i.test(split.name || ''),
+      rotationDayTypes: days.map((d) => d.name).filter(Boolean),
+      daysTrainedThisWeek: tomorrowDaysTrainedThisWeek(pc, mondayOfKey(tomorrowDateKey), todayDateKey),
+    };
   }
   function loadCurrentWeeklyPlan(weekMondayKey) {
     let stored = null;
@@ -3021,7 +3055,7 @@ document.addEventListener('DOMContentLoaded', function () {
   async function fetchTomorrowRecommendation(secret, todayDateKey, tomorrowDateKey, todayRecommendation, restrictions) {
     const plan = loadCurrentWeeklyPlan(mondayOfKey(todayDateKey));
     if (!plan) return null;
-    const strengthContext = tomorrowStrengthContext(tomorrowDateKey);
+    const strengthContext = tomorrowStrengthContext(tomorrowDateKey, todayDateKey);
     // Progress "as of tomorrow" includes TODAY's own logged sessions too
     // — by tomorrow morning, today's training already counts toward
     // this week's remaining objectives.

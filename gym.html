@@ -5595,6 +5595,37 @@ img, video, canvas, svg { max-width: 100%; }
   // Without this, api/training.js had nothing telling it what the user's
   // real split even is, so it was free to invent a generic structure (e.g.
   // "full-body") that doesn't match what's actually set up in Strength.
+  // daysTrainedThisWeek/rotationDayTypes — ground truth for the
+  // "Push anyway" rest-day-override bug: the model was told to name a
+  // day-type on a rest-day override with zero information about which
+  // day-type(s) were already trained this week, so it just echoed the
+  // prompt's own hardcoded "Push anyway" example verbatim, silently
+  // repeating an already-done day even when a fresher one was still
+  // outstanding. Ground truth comes from actual logged sets (which
+  // exercise.day was really trained), not the rotation's own
+  // assumption of what SHOULD have been trained each date — the user
+  // may train off-rotation, and only real logs reflect that.
+  function daysTrainedThisWeek(state, weekMondayKey) {
+    const days = Array.isArray(state.days) ? state.days : [];
+    const dayNameById = {};
+    days.forEach((d) => { dayNameById[d.id] = d.name; });
+    const exDayById = {};
+    (state.exercises || []).forEach((ex) => { exDayById[ex.id] = ex.day; });
+    const trained = new Set();
+    const logs = state.logs || {};
+    Object.keys(logs).forEach((exId) => {
+      const dayId = exDayById[exId];
+      const dayName = dayId != null ? dayNameById[dayId] : null;
+      if (!dayName) return;
+      const arr = logs[exId] || [];
+      for (let i = 0; i < arr.length; i++) {
+        const dk = String(arr[i].date || '').slice(0, 10);
+        if (dk >= weekMondayKey) { trained.add(dayName); break; }
+      }
+    });
+    return Array.from(trained);
+  }
+
   function buildTodayStrengthContext() {
     const state = (window.PoCoach && window.PoCoach.getState()) || {};
     const split = (window.PoCoach && window.PoCoach.getTodaySplit()) || { name: null, index: 0 };
@@ -5623,6 +5654,8 @@ img, video, canvas, svg { max-width: 100%; }
       todaySplitDay: splitName, // e.g. "Push", "Pull", "Legs", "Rest" — or null if no rotation configured at all
       isRestDayInRotation: isRestDay,
       exercisesConfiguredForToday, // [] on a rest day or if nothing is configured for this split day
+      rotationDayTypes: days.map((d) => d.name).filter(Boolean), // all real (non-Rest) day-types the user has configured, e.g. ["Push","Pull","Legs"]
+      daysTrainedThisWeek: daysTrainedThisWeek(state, thisWeekMondayKey()), // ground truth from actual logs since Monday, e.g. ["Push"]
     };
   }
 
