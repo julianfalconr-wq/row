@@ -200,7 +200,7 @@ body::after {
 .patterns-finding-icon { flex-shrink: 0; font-size: 15px; line-height: 1.5; }
 .patterns-meta { margin-top: 10px; font-size: 11px; color: var(--text-tertiary); font-family: var(--font-mono); }
 
-/* Weekly Review ("Ver mi semana") — holistic recap, on-demand only.
+/* Weekly Review — holistic recap, on-demand only.
    Reuses .patterns-btn/.patterns-loading/.patterns-error verbatim (same
    button/loading/error visual language, no reason to diverge) — only
    the results area gets its own classes, since a dated summary
@@ -303,18 +303,19 @@ body::after {
     <div class="patterns-results" id="patternsResults"></div>
   </div>
 
-  <!-- Ver mi semana (Weekly Review) — on-demand holistic recap of the
-       most recent 7 days across everything above, PLUS finance if
-       available. Different from Find Patterns (correlations, not a
-       recap) and from Plan's own per-goal weekly nudge (one specific
-       goal, not everything). Never runs automatically (see
+  <!-- Weekly Review (was "Ver mi semana" — renamed to match the app's
+       all-English UI convention, no logic change) — on-demand holistic
+       recap of the most recent 7 days across everything above, PLUS
+       finance if available. Different from Find Patterns (correlations,
+       not a recap) and from Plan's own per-goal weekly nudge (one
+       specific goal, not everything). Never runs automatically (see
        weeklyReviewBtn's own click handler). -->
   <div class="trend-card">
     <div class="trend-card-head">
-      <h3>Ver mi semana</h3>
+      <h3>Weekly Review</h3>
     </div>
     <div class="patterns-intro">A holistic recap of your last 7 days across everything — score, habits, weight, nutrition, WHOOP, strength, activities, and finance if synced. What went well, what didn't, grounded in your real numbers for the week.</div>
-    <button type="button" class="patterns-btn" id="weeklyReviewBtn">Ver mi semana</button>
+    <button type="button" class="patterns-btn" id="weeklyReviewBtn">Weekly Review</button>
     <div class="patterns-loading" id="weeklyReviewLoading" style="display:none">Reviewing your last 7 days… this can take a few seconds.</div>
     <div class="patterns-error" id="weeklyReviewError" style="display:none"></div>
     <div class="patterns-results" id="weeklyReviewResult"></div>
@@ -1132,7 +1133,7 @@ document.addEventListener('DOMContentLoaded', function () {
   });
 
   // =============================================================
-  // Ver mi semana (Weekly Review) — on-demand, fixed to the most
+  // Weekly Review — on-demand, fixed to the most
   // recent 7 days regardless of whichever range tab is currently
   // selected (unlike Find Patterns, which reuses the CURRENTLY
   // selected range). Switches the range tabs to 7D and calls loadAll()
