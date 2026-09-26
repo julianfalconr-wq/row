@@ -799,8 +799,12 @@ function buildDayPlanSystemPrompt(restrictions) {
     'planningDateKey:\n' +
     '1. Training session — planningRecommendation is the exact, already-decided session for planningDateKey ' +
     '(already accounts for whatever is actually known/relevant for that day — do not re-evaluate or change ' +
-    'WHAT it says, just place it once, in a sensible open slot). If planningRecommendation is null, skip the ' +
-    'training block entirely rather than inventing one.\n' +
+    'WHAT it says, just place it once). DEFAULT TO EARLY: place it shortly after planningWakeUpTime — as the ' +
+    'first thing in the day, before breakfast/work — unless a fixedEvents entry actually occupies that slot, ' +
+    'in which case fit it into the next open slot as close to planningWakeUpTime as still possible. Do not ' +
+    'drift it later in the day (e.g. after breakfast or the work block) without an actual scheduling conflict ' +
+    'forcing that — an early session right after waking is the expected default, not a mid-day or afternoon ' +
+    'placement. If planningRecommendation is null, skip the training block entirely rather than inventing one.\n' +
     '2. One focused productivity/work block — a reasonable default length (about 1 hour) since no specific ' +
     'preference is configured.\n' +
     '3. Three generic meal blocks — "Breakfast", "Lunch", "Dinner" only, no recipes or macros — at ' +
