@@ -735,6 +735,14 @@ main {
 
 /* ====== SEARCH AUTOCOMPLETE — appears below the form when typing in Name ====== */
 .stack-name-wrap { position: relative; }
+/* .stack-name-wrap itself correctly shrinks via the grid's own
+   minmax(0, 1fr) track above, but the <input> it wraps (needed for
+   the dropdown below it) is an ordinary block child of a plain div,
+   not a grid item — grid's stretch-to-fill-track behavior never
+   reaches it, so without an explicit width it kept its own default
+   browser intrinsic input width (~20 characters), overflowing the
+   now-narrower wrapper and overlapping the Dose field next to it. */
+.stack-name-wrap input { width: 100%; box-sizing: border-box; }
 
 .stack-search-results {
   position: absolute;
