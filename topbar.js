@@ -175,7 +175,8 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
   bottom: calc(84px + env(safe-area-inset-bottom));
   z-index: 200;
   width: 52px; height: 52px;
-  border-radius: 50%;
+  padding: 0;
+  border-radius: 18px;
   background: #1D9E75;
   color: #08110D;
   border: none;
@@ -186,8 +187,8 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
   transition: transform 0.15s, box-shadow 0.15s, filter 0.15s;
 }
 .chat-fab-img {
-  width: 68%; height: 68%;
-  object-fit: contain;
+  width: 100%; height: 100%;
+  object-fit: cover;
   object-position: center;
   display: block;
   pointer-events: none;
