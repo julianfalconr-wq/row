@@ -588,7 +588,11 @@ document.addEventListener('DOMContentLoaded', function () {
         points: Number(h.points) || 0,
         buildOrQuit: h.buildOrQuit === 'quit' ? 'quit' : 'build',
         frequency: h.frequency || { type: 'daily' },
-        dailyGoal: Number(h.dailyGoal) || 1,
+        // NOT "Number(h.dailyGoal) || 1" — a Quit habit can legitimately
+        // be saved with dailyGoal 0 (abstain completely), and 0 is
+        // falsy, so that fallback would silently revert it back to 1
+        // every time the config reloads through this "safety net" path.
+        dailyGoal: Number.isFinite(Number(h.dailyGoal)) ? Number(h.dailyGoal) : 1,
         unit: typeof h.unit === 'string' ? h.unit : 'times',
         advanced: h.advanced || null,
       };
@@ -880,7 +884,7 @@ document.addEventListener('DOMContentLoaded', function () {
     const existingEntry = entriesByDate[viewDateKey] || {};
     const html = (currentHabitConfig.habits || []).map((h) => {
       const adv = h.advanced || null;
-      const goalNote = ' <small>Goal: ' + (h.dailyGoal || 1) + (h.unit ? ' ' + escapeHtml(h.unit) : '') + '</small>';
+      const goalNote = ' <small>Goal: ' + (Number.isFinite(h.dailyGoal) ? h.dailyGoal : 1) + (h.unit ? ' ' + escapeHtml(h.unit) : '') + '</small>';
       const advNote = adv && adv.zeroTolerance ? ' <small>Zero tolerance</small>'
         : adv && adv.weeklyCap ? ' <small>Cap: ' + adv.weeklyCap.allowedPerWeek + '/week</small>'
         : adv && adv.autoThreshold ? ' <small>' + escapeHtml(AUTO_SOURCE_LABELS[adv.autoThreshold.source] || adv.autoThreshold.source || '') + ' ' + escapeHtml(adv.autoThreshold.operator || '>=') + ' ' + (adv.autoThreshold.value != null ? adv.autoThreshold.value : 0) + '</small>'
@@ -1153,8 +1157,18 @@ document.addEventListener('DOMContentLoaded', function () {
   });
 
   // ---------- add/edit habit modal ----------
+  // Daily Goal's floor depends on buildOrQuit: a "Build" habit doing
+  // something 0 times a day makes no sense (min 1, unchanged), but a
+  // "Quit" habit's natural goal IS 0 (abstain completely) — the
+  // stepper's HTML min="1" and every place that clamped against a
+  // hardcoded 1 were never adjusted for that when Quit habits were
+  // added, so a Quit habit's goal could never be set below 1.
+  function goalFloorFor(buildOrQuit) { return buildOrQuit === 'quit' ? 0 : 1; }
   function setBuildOrQuit(value) {
     $('hfBuildOrQuit').querySelectorAll('.hf-toggle-btn').forEach((b) => b.classList.toggle('active', b.dataset.value === value));
+    const floor = goalFloorFor(value);
+    $('hfGoal').min = String(floor);
+    if ((Number($('hfGoal').value) || 0) < floor) $('hfGoal').value = floor;
   }
   function getBuildOrQuit() {
     const active = $('hfBuildOrQuit').querySelector('.hf-toggle-btn.active');
@@ -1162,7 +1176,13 @@ document.addEventListener('DOMContentLoaded', function () {
   }
   $('hfBuildOrQuit').addEventListener('click', (e) => {
     const btn = e.target.closest('.hf-toggle-btn');
-    if (btn) setBuildOrQuit(btn.dataset.value);
+    if (!btn) return;
+    // Default a new/just-switched-to Quit habit's goal to 0 (abstain —
+    // almost always the real intent) — only when the goal is still at
+    // the untouched default of 1, so switching type while editing an
+    // existing habit's real, already-customized goal doesn't clobber it.
+    if (btn.dataset.value === 'quit' && Number($('hfGoal').value) === 1) $('hfGoal').value = 0;
+    setBuildOrQuit(btn.dataset.value);
   });
   function setSpecificDays(days) {
     $('hfDayToggles').querySelectorAll('.hf-day-btn').forEach((b) => b.classList.toggle('active', days.indexOf(b.dataset.day) !== -1));
@@ -1193,7 +1213,10 @@ document.addEventListener('DOMContentLoaded', function () {
     $('hfAdvancedToggleBtn').textContent = 'Advanced ' + (body.hidden ? '▾' : '▴');
   });
   $('hfGoalInc').addEventListener('click', () => { $('hfGoal').value = (Number($('hfGoal').value) || 0) + 1; });
-  $('hfGoalDec').addEventListener('click', () => { $('hfGoal').value = Math.max(1, (Number($('hfGoal').value) || 1) - 1); });
+  $('hfGoalDec').addEventListener('click', () => {
+    const floor = goalFloorFor(getBuildOrQuit());
+    $('hfGoal').value = Math.max(floor, (Number($('hfGoal').value) || floor) - 1);
+  });
 
   // Resets every field to the defaults a brand-new plain habit gets —
   // this is what makes "+ Add habit" -> type a name -> Save enough to
@@ -1231,7 +1254,11 @@ document.addEventListener('DOMContentLoaded', function () {
       if (freq.type === 'timesPerWeek') $('hfTimesPerWeek').value = freq.timesPerWeek || 3;
       if (freq.type === 'specificDays') setSpecificDays(freq.days || []);
       updateFrequencyFieldsVisibility();
-      $('hfGoal').value = h.dailyGoal || 1;
+      // NOT "h.dailyGoal || 1" — a saved Quit habit can legitimately
+      // have dailyGoal 0, and 0 is falsy, so that fallback would have
+      // shown "1" in the field instead of the real saved 0 every time
+      // the editor reopened.
+      $('hfGoal').value = Number.isFinite(h.dailyGoal) ? h.dailyGoal : 1;
       $('hfUnit').value = h.unit || '';
       $('hfPoints').value = h.points || 0;
       const advType = advancedTypeOf(h);
@@ -1275,7 +1302,10 @@ document.addEventListener('DOMContentLoaded', function () {
       name,
       buildOrQuit: getBuildOrQuit(),
       frequency,
-      dailyGoal: Math.max(1, Number($('hfGoal').value) || 1),
+      // NOT "Number(...) || 1" — 0 is a legitimate, intentional value
+      // for a Quit habit's goal, and 0 is falsy, so that fallback would
+      // have silently coerced a real 0 back to 1 on every save.
+      dailyGoal: Math.max(goalFloorFor(getBuildOrQuit()), Number.isFinite(Number($('hfGoal').value)) ? Number($('hfGoal').value) : goalFloorFor(getBuildOrQuit())),
       // No "|| 'times'" fallback here — some real habits (e.g. "Walks")
       // intentionally carry an empty unit, and this must not silently
       // reset it back to "times" on every unrelated edit. New habits

@@ -3559,7 +3559,11 @@ document.addEventListener('DOMContentLoaded', function () {
         points: Number(h.points) || 0,
         buildOrQuit: h.buildOrQuit === 'quit' ? 'quit' : 'build',
         frequency: h.frequency || { type: 'daily' },
-        dailyGoal: Number(h.dailyGoal) || 1,
+        // NOT "Number(h.dailyGoal) || 1" — a Quit habit can legitimately
+        // be saved with dailyGoal 0 (abstain completely), and 0 is
+        // falsy, so that fallback would silently revert it back to 1
+        // every time the config reloads through this "safety net" path.
+        dailyGoal: Number.isFinite(Number(h.dailyGoal)) ? Number(h.dailyGoal) : 1,
         unit: typeof h.unit === 'string' ? h.unit : 'times',
         advanced: h.advanced || null,
       };
