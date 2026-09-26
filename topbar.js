@@ -176,10 +176,11 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
   z-index: 200;
   width: 52px; height: 52px;
   padding: 0;
-  border-radius: 18px;
+  border-radius: 9px;
   background: #1D9E75;
   color: #08110D;
   border: none;
+  outline: none;
   box-shadow: 0 8px 24px rgba(0,0,0,0.40), inset 0 1px 0 rgba(255,255,255,0.18);
   display: flex; align-items: center; justify-content: center;
   overflow: hidden;
@@ -188,6 +189,15 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
 }
 .chat-fab-img {
   width: 100%; height: 100%;
+  /* Matches .chat-fab's own border-radius rather than relying only on
+     the parent's overflow:hidden clip — a raster <img> with
+     object-fit is commonly promoted to its own compositor layer, and
+     clipping it purely via an ancestor's border-radius can leave a
+     hairline of the ancestor's background color showing at the
+     rounded edge (worse on high-density displays). Giving the image
+     its own matching radius makes it rasterize its own rounded edge
+     directly, eliminating that fringe. */
+  border-radius: 9px;
   object-fit: cover;
   object-position: center;
   display: block;
