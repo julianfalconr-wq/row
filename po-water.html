@@ -1196,6 +1196,21 @@ html, body {
     return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   }
 
+  // Re-paint when sync.js pulls fresh po_water_v1 from another device
+  // (its onApplied dispatches this same 'storage' event). Unlike
+  // health.html's Daily Stack render(), this page's renderAll()/
+  // renderWater() etc. read from the closure-captured `state` variable
+  // (set once at load via loadState()), not fresh from localStorage
+  // each call — so `state` itself must be reloaded first, or the
+  // re-render would just repaint the same stale data. Without this
+  // listener at all, a cross-device water/profile sync was silently
+  // landing in localStorage but never reaching the screen until a
+  // second, unrelated page reload.
+  window.addEventListener('storage', () => {
+    state = loadState();
+    renderAll();
+  });
+
   // BOOT
   renderAll();
 })();
@@ -1224,9 +1239,19 @@ html, body {
 document.addEventListener('DOMContentLoaded', function () {
   try { if (window.self !== window.top) return; } catch (e) { return; }
   if (typeof initCloudSync !== 'function') return;
+  // IMPORTANT: health.html shares this exact appKey='health' row (one
+  // Supabase app_state row for both pages' data) — this call MUST list
+  // the exact same syncedKeys/syncedPrefixes as health.html's own
+  // initCloudSync call. sync.js's upsert replaces the WHOLE row on
+  // every push, so if this list only mentions po_water_v1 while
+  // health.html's mentions stack:* too, whichever page pushes last wins
+  // and silently drops the other's fields — this was a real, confirmed
+  // bug (this page's push could wipe health.html's Daily Stack data
+  // server-side, and a later pull could then delete it locally too).
   initCloudSync({
     appKey: 'health',
-    syncedKeys: ['po_water_v1'],
+    syncedKeys: ['stack:items', 'stack:version', 'stack:low', 'po_water_v1'],
+    syncedPrefixes: ['stack:taken:'],
     onApplied: function () { window.dispatchEvent(new Event('storage')); }
   });
 });

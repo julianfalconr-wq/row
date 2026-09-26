@@ -4399,7 +4399,17 @@ img, video, canvas, svg { max-width: 100%; }
   // untouched by this generalization) keep reading exactly the shape
   // they already expect, on every device, without needing their own
   // migration.
-  const PC_SYNCED_KEYS = ['po_coach_v1', 'po_coach_workout_done', 'po_coach_weights', 'po_coach_photos', 'po_coach_runs', 'po_coach_activities'];
+  // po_coach_weekly_plan_v1/po_coach_today_recommendation_v1 added here
+  // (previously pure localStorage, never synced) — this week's assigned
+  // training plan and today's cached AI recommendation were invisible
+  // on any device other than the one that generated them. Both are
+  // whole-value overwrites like every other key here (no merge needed):
+  // today_recommendation is already dateKey-scoped, so a stale-dated
+  // cache from another device is discarded by the existing freshness
+  // check in loadCachedTodayRecommendation()/readCachedTrainingRecommendation()
+  // regardless of local-vs-synced origin, and weekly_plan_v1's own
+  // weekStart field gets the same treatment.
+  const PC_SYNCED_KEYS = ['po_coach_v1', 'po_coach_workout_done', 'po_coach_weights', 'po_coach_photos', 'po_coach_runs', 'po_coach_activities', 'po_coach_weekly_plan_v1', 'po_coach_today_recommendation_v1'];
 
   let pcSupa = null;
   let pcPushTimer = null;

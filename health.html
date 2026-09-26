@@ -1799,6 +1799,15 @@ main {
     render();
   });
 
+  // Re-paint when sync.js pulls fresh Daily Stack data from another
+  // device (its onApplied dispatches this same 'storage' event) — this
+  // page reads its state fresh from localStorage on every render() call
+  // via getItems()/getLogs(), so no cached variable needs refreshing
+  // first, just a re-render. Without this, a cross-device sync was
+  // silently landing in localStorage but never reaching the screen
+  // until a second, unrelated page reload.
+  window.addEventListener('storage', () => { render(); });
+
   render();
   startTicker();
 })();
@@ -2082,6 +2091,24 @@ document.addEventListener('DOMContentLoaded', function () {
     if (data) renderForDate(viewDateKey);
   });
 
+  // Cross-device sync for cronometer_targets_v1/cronometer_score_history_v1
+  // (Cronometer nutrition targets + score history) — previously pure
+  // localStorage with no sync path at all. Deliberately a DIFFERENT
+  // appKey from both 'health' (this page's own Daily Stack/water mirror
+  // above) and 'cronometer' (the server-written raw diary cache from
+  // api/cronometer-data.js) — reusing either would recreate the exact
+  // shared-row collision bug just fixed for health.html/po-water.html.
+  if (typeof initCloudSync === 'function') {
+    initCloudSync({
+      appKey: 'cronometer-local',
+      syncedKeys: ['cronometer_targets_v1', 'cronometer_score_history_v1'],
+      onApplied: function () {
+        targets = Crono.loadTargets();
+        if (data) renderForDate(viewDateKey);
+      }
+    });
+  }
+
   loadAndRender();
 });
 </script>
@@ -2309,6 +2336,14 @@ document.addEventListener('DOMContentLoaded', function () {
 <script>
 document.addEventListener('DOMContentLoaded', function () {
   if (typeof initCloudSync !== 'function') return;
+  // IMPORTANT: po-water.html shares this exact appKey='health' row (one
+  // Supabase app_state row for both pages' data) — its own initCloudSync
+  // call MUST list the exact same syncedKeys/syncedPrefixes as this one.
+  // sync.js's upsert replaces the WHOLE row on every push, so if the two
+  // pages ever list different keys again, whichever page pushes last
+  // wins and silently drops the other's fields (confirmed: this exact
+  // mismatch — po-water.html only knew about po_water_v1 — was a real
+  // bug, fixed together with po-water.html's own call).
   initCloudSync({
     appKey: 'health',
     syncedKeys: ['stack:items', 'stack:version', 'stack:low', 'po_water_v1'],

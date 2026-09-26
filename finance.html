@@ -3548,6 +3548,22 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   safeRenderTicker();
   setInterval(safeRenderTicker, 1500);
 
+  // Re-paint when sync.js pulls fresh finance data from another device
+  // (its onApplied dispatches this same 'storage' event). renderAllNetWorth()
+  // already internally re-triggers renderNetWorthChart()/renderAllocationDonut()/
+  // renderActivity()/renderWishlist()/renderOrders() (see its own body),
+  // and every render function here reads via storeGet() fresh each call
+  // (no cached state variable) — so no separate refresh step is needed,
+  // just re-invoking the two top-level entry points. safeRenderTicker's
+  // own 1.5s heartbeat already keeps the ticker itself fresh on its own.
+  // Without this listener, a cross-device finance sync was silently
+  // landing in localStorage but never reaching the screen until a
+  // second, unrelated page reload.
+  window.addEventListener('storage', () => {
+    renderAllNetWorth();
+    renderSubs();
+  });
+
 })();
 </script>
 <script>
