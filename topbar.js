@@ -175,11 +175,12 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
   bottom: calc(84px + env(safe-area-inset-bottom));
   z-index: 200;
   width: 52px; height: 52px;
+  box-sizing: border-box;
   padding: 0;
   border-radius: 9px;
   background: #1D9E75;
   color: #08110D;
-  border: none;
+  border: 3px solid #FA5411; /* matches the mascot image's own dominant orange */
   outline: none;
   box-shadow: 0 8px 24px rgba(0,0,0,0.40), inset 0 1px 0 rgba(255,255,255,0.18);
   display: flex; align-items: center; justify-content: center;
@@ -189,15 +190,19 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
 }
 .chat-fab-img {
   width: 100%; height: 100%;
-  /* Matches .chat-fab's own border-radius rather than relying only on
-     the parent's overflow:hidden clip — a raster <img> with
-     object-fit is commonly promoted to its own compositor layer, and
-     clipping it purely via an ancestor's border-radius can leave a
-     hairline of the ancestor's background color showing at the
-     rounded edge (worse on high-density displays). Giving the image
-     its own matching radius makes it rasterize its own rounded edge
-     directly, eliminating that fringe. */
-  border-radius: 9px;
+  /* Concentric with .chat-fab's own 9px radius, NOT the same value —
+     the image sits inset by the 3px border (box-sizing:border-box),
+     so for its own rounded corner to align with the border's inner
+     edge the radius must shrink by the border width (9 - 3 = 6),
+     otherwise a small gap opens at each corner exposing the button's
+     background color underneath. Also avoids relying only on the
+     parent's overflow:hidden clip — a raster <img> with object-fit is
+     commonly promoted to its own compositor layer, and clipping it
+     purely via an ancestor's border-radius can leave a hairline of
+     the ancestor's background showing at the rounded edge (worse on
+     high-density displays); giving the image its own radius makes it
+     rasterize its own rounded edge directly. */
+  border-radius: 6px;
   object-fit: cover;
   object-position: center;
   display: block;
