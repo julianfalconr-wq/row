@@ -177,7 +177,7 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
   width: 52px; height: 52px;
   box-sizing: border-box;
   padding: 0;
-  border-radius: 9px;
+  border-radius: 13px;
   background: #1D9E75;
   color: #08110D;
   border: 3px solid #FA5411; /* matches the mascot image's own dominant orange */
@@ -190,10 +190,10 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
 }
 .chat-fab-img {
   width: 100%; height: 100%;
-  /* Concentric with .chat-fab's own 9px radius, NOT the same value —
+  /* Concentric with .chat-fab's own 13px radius, NOT the same value —
      the image sits inset by the 3px border (box-sizing:border-box),
      so for its own rounded corner to align with the border's inner
-     edge the radius must shrink by the border width (9 - 3 = 6),
+     edge the radius must shrink by the border width (13 - 3 = 10),
      otherwise a small gap opens at each corner exposing the button's
      background color underneath. Also avoids relying only on the
      parent's overflow:hidden clip — a raster <img> with object-fit is
@@ -202,7 +202,7 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
      the ancestor's background showing at the rounded edge (worse on
      high-density displays); giving the image its own radius makes it
      rasterize its own rounded edge directly. */
-  border-radius: 6px;
+  border-radius: 10px;
   object-fit: cover;
   object-position: center;
   display: block;
