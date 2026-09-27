@@ -29,6 +29,10 @@
      doesn't strictly need this, but every other page loads daylib.js
      this way and there's no reason for this one to be the exception. -->
 <script src="daylib.js"></script>
+<!-- score-lib.js: same non-deferred, loaded-right-after-daylib.js
+     pattern as daylib.js itself — this page's habit scoring below calls
+     window.ScoreLib synchronously, so it must already exist. -->
+<script src="score-lib.js"></script>
 <script src="https://unpkg.com/lucide@1.43.0/dist/umd/lucide.js" defer></script>
 <script src="topbar.js" defer></script>
 <style>
@@ -548,77 +552,21 @@ document.addEventListener('DOMContentLoaded', function () {
   function getSecret() { try { return localStorage.getItem('dashboard:secret') || ''; } catch (e) { return ''; } }
   function escapeHtml(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
-  // ---------- default habit config — kept identical to main.html's
-  // score hero card, which is the other reader of this same
-  // habit_config row. If you change the defaults, change both. New
-  // unified schema (Phase 1 of the Habits redesign): no more internal
-  // "type" — every habit is buildOrQuit + frequency + dailyGoal + unit
-  // + points, with an optional "advanced" object for the three power-
-  // user behaviors (zeroTolerance / weeklyCap / autoThreshold) that
-  // used to be their own "types". ----------
-  function defaultHabitConfig() {
-    return {
-      habits: [
-        { id: 'sleep_wake',   name: 'Slept early & woke early',    points: 10, buildOrQuit: 'build', frequency: { type: 'daily' }, dailyGoal: 2, unit: 'times', advanced: null },
-        { id: 'brush_teeth',  name: 'Brush teeth (AM + PM)',       points: 4,  buildOrQuit: 'build', frequency: { type: 'daily' }, dailyGoal: 2, unit: 'times', advanced: null },
-        { id: 'productivity', name: '1h focused productivity',     points: 8,  buildOrQuit: 'build', frequency: { type: 'daily' }, dailyGoal: 1, unit: 'times', advanced: null },
-        { id: 'screen_time',  name: 'Screen time under 6h',        points: 8,  buildOrQuit: 'build', frequency: { type: 'daily' }, dailyGoal: 1, unit: 'times', advanced: null },
-        { id: 'plan_day',     name: 'Plan the day',                points: 5,  buildOrQuit: 'build', frequency: { type: 'daily' }, dailyGoal: 1, unit: 'times', advanced: null },
-        { id: 'walk_dog',     name: 'Walk the dog (AM + PM)',      points: 6,  buildOrQuit: 'build', frequency: { type: 'daily' }, dailyGoal: 2, unit: 'times', advanced: null },
-        { id: 'no_phone_30',  name: 'No phone first 30 min',       points: 6,  buildOrQuit: 'build', frequency: { type: 'daily' }, dailyGoal: 1, unit: 'times', advanced: null },
-        { id: 'no_porn',      name: 'No porn',                     points: 15, buildOrQuit: 'quit',  frequency: { type: 'daily' }, dailyGoal: 1, unit: 'times', advanced: { zeroTolerance: true } },
-        { id: 'no_fap',       name: 'No fap',                      points: 15, buildOrQuit: 'quit',  frequency: { type: 'daily' }, dailyGoal: 1, unit: 'times', advanced: { weeklyCap: { allowedPerWeek: 2, weeklyPenalty: 15, dailyPenalty: 5 } } },
-        { id: 'read',         name: 'Read',                        points: 4,  buildOrQuit: 'build', frequency: { type: 'daily' }, dailyGoal: 1, unit: 'times', advanced: null },
-        { id: 'stretch',      name: 'Stretching (morning + night)',points: 6,  buildOrQuit: 'build', frequency: { type: 'daily' }, dailyGoal: 2, unit: 'times', advanced: null },
-      ],
-    };
-  }
-
-  // Defensive adapter — same mapping the one-time production migration
-  // used to convert the user's real habit_config to this shape, kept
-  // here permanently as a safety net (e.g. a stale cached copy from
-  // before the migration). See main.html's identical copy for the
-  // full reasoning.
-  function normalizeHabit(h) {
-    h = h || {};
-    if (h.dailyGoal != null || h.buildOrQuit || h.advanced !== undefined) {
-      return {
-        id: h.id,
-        name: h.name || h.label || '',
-        points: Number(h.points) || 0,
-        buildOrQuit: h.buildOrQuit === 'quit' ? 'quit' : 'build',
-        frequency: h.frequency || { type: 'daily' },
-        // NOT "Number(h.dailyGoal) || 1" — a Quit habit can legitimately
-        // be saved with dailyGoal 0 (abstain completely), and 0 is
-        // falsy, so that fallback would silently revert it back to 1
-        // every time the config reloads through this "safety net" path.
-        dailyGoal: Number.isFinite(Number(h.dailyGoal)) ? Number(h.dailyGoal) : 1,
-        unit: typeof h.unit === 'string' ? h.unit : 'times',
-        advanced: h.advanced || null,
-      };
-    }
-    const base = { id: h.id, name: h.label || '', points: Number(h.points) || 0, frequency: { type: 'daily' } };
-    if (h.type === 'manual_count2') return { ...base, buildOrQuit: 'build', dailyGoal: 2, unit: 'times', advanced: null };
-    if (h.type === 'manual_numeric') return { ...base, buildOrQuit: 'build', dailyGoal: Number(h.goal) || 1, unit: (h.unit != null ? h.unit : ''), advanced: null };
-    if (h.type === 'zero_tolerance') return { ...base, buildOrQuit: 'quit', dailyGoal: 1, unit: 'times', advanced: { zeroTolerance: true } };
-    if (h.type === 'weekly_cap') return { ...base, buildOrQuit: 'quit', dailyGoal: 1, unit: 'times', advanced: { weeklyCap: { allowedPerWeek: h.weeklyCap, weeklyPenalty: h.weeklyPenaltyPoints, dailyPenalty: h.perExtraDayPenaltyPoints } } };
-    if (h.type === 'auto_threshold') return { ...base, buildOrQuit: 'build', dailyGoal: 1, unit: 'times', advanced: { autoThreshold: { source: h.source, operator: h.operator, value: h.threshold } } };
-    return { ...base, buildOrQuit: 'build', dailyGoal: 1, unit: 'times', advanced: null };
-  }
-
+  // defaultHabitConfig()/normalizeHabit() moved to score-lib.js
+  // (window.ScoreLib) — see that file's own header comment for why.
   // ---------- server: habit_config + daily_habits (api/sync-state.js's
   // resource= dispatch — same endpoint main.html's score card uses) ----------
   async function fetchHabitConfig() {
     const secret = getSecret();
-    if (!secret) return defaultHabitConfig();
+    if (!secret) return ScoreLib.defaultHabitConfig();
     let config = null;
     try {
       const r = await fetch('/api/sync-state?resource=habit-config&secret=' + encodeURIComponent(secret));
       const j = await r.json();
       if (j && j.ok && j.config && Array.isArray(j.config.habits) && j.config.habits.length) config = j.config;
     } catch (e) {}
-    if (!config) config = defaultHabitConfig();
-    return { habits: config.habits.map(normalizeHabit) };
+    if (!config) config = ScoreLib.defaultHabitConfig();
+    return { habits: config.habits.map(ScoreLib.normalizeHabit) };
   }
   async function saveHabitConfig(config) {
     const secret = getSecret();
@@ -652,100 +600,14 @@ document.addEventListener('DOMContentLoaded', function () {
     if (!r.ok || !j.ok) throw new Error((j && j.error) || 'save failed');
   }
 
-  // ---------- manual habits scoring — same formula as main.html's
-  // score hero card (see its header comment for the full rationale on
-  // zero_tolerance/weekly_cap); kept in sync by hand, not shared, per
-  // this project's no-shared-module convention for page-specific logic
-  // (daylib.js is the one exception, being pure date math). ----------
-  // Unified formula for the new schema (no more internal "type" — see
-  // main.html's identical copy for the full reasoning): a boolean
-  // entryVal (still how former-binary/zero_tolerance/weekly_cap habits
-  // store "done") coerces via Number() to 1 or 0, reproducing the old
-  // binary formula exactly; a numeric entryVal against its matching
-  // dailyGoal reproduces the old count2/numeric formulas exactly.
-  function manualHabitFraction(habit, entryVal) {
-    return Math.max(0, Math.min(1, (Number(entryVal) || 0) / (Number(habit.dailyGoal) || 1)));
-  }
-  // auto_threshold habits are evaluated against real data sources
-  // (WHOOP/Cronometer/Water/Training) that only main.html's score
-  // engine actually fetches (see main.html's computeAutoThresholdSources
-  // — reuses data it's already pulling for the other auto-sourced
-  // categories, plus one gated WHOOP read). This page is manual-entry-
-  // only and has no autoSources to pass in, so these always fall
-  // through to the "unlogged" branch below in THIS page's own summary
-  // widget — an intentional, documented gap: the "Today's Score" circle
-  // on main.html is the one place these habits are actually scored.
-  function compareThreshold(value, operator, threshold) {
-    const v = Number(value), t = Number(threshold);
-    switch (operator) {
-      case '>': return v > t;
-      case '<=': return v <= t;
-      case '<': return v < t;
-      case '==': return v === t;
-      default: return v >= t;
-    }
-  }
-  // Only ever called for a weeklyCap-configured Quit habit (e.g. "No
-  // fap") — "occurred" here means the bad behavior happened that day,
-  // a plain Number(entryVal) > 0 check, completely independent of
-  // dailyGoal. See main.html's identical copy for the full reasoning:
-  // this used to go through manualHabitFraction (entryVal / dailyGoal),
-  // which inverted the result once a weeklyCap habit's dailyGoal could
-  // legitimately be 0 — confirmed live to exactly match reported
-  // backwards scoring (logging 0/abstained penalized, logging 1/slipped
-  // scored full points). Still correctly handles a legacy boolean
-  // entry: Number(true)=1 (occurred), Number(false)=0 (abstained).
-  function weekOccurrenceCount(habit, entriesByDate, fromKey, toKey) {
-    let n = 0;
-    datesFromTo(fromKey, toKey).forEach((k) => {
-      const e = entriesByDate[k] && entriesByDate[k][habit.id];
-      if (e && e.na !== true && Number(e.value) > 0) n++;
-    });
-    return n;
-  }
-  function scoreManualHabitsForDate(habitConfig, entriesByDate, dateActiveKey, weekMondayActiveKey, autoSources) {
-    const entry = entriesByDate[dateActiveKey] || null;
-    let earned = 0, possible = 0;
-    const flags = [];
-    (habitConfig.habits || []).forEach((h) => {
-      const advanced = h.advanced || null;
-      if (advanced && advanced.autoThreshold) {
-        const cfg = advanced.autoThreshold;
-        const src = (autoSources && autoSources[cfg.source]) || { available: false };
-        if (!src.available) return; // see compareThreshold's comment above — always the case on this page
-        if (compareThreshold(src.value, cfg.operator, cfg.value)) { earned += h.points; }
-        possible += h.points;
-        return;
-      }
-      const e = entry && entry[h.id];
-      if (!e || e.na === true) return; // unlogged or N/A — excluded, not scored 0
-      if (advanced && advanced.weeklyCap) {
-        const cfg = advanced.weeklyCap;
-        possible += h.points;
-        // Raw value check, not manualHabitFraction/dailyGoal — see
-        // weekOccurrenceCount's own comment above for why.
-        if (Number(e.value) <= 0) { earned += h.points; return; }
-        const countThroughToday = weekOccurrenceCount(h, entriesByDate, weekMondayActiveKey, dateActiveKey);
-        const over = Math.max(0, countThroughToday - (cfg.allowedPerWeek || 0));
-        earned += Math.max(0, h.points - over * (cfg.dailyPenalty || 0));
-        return;
-      }
-      // Same class of bug as weeklyCap above — see main.html's identical
-      // copy for the full reasoning. zeroTolerance is a full-loss-on-any-
-      // occurrence rule, not a fractional goal, so it needs the direct
-      // Number(e.value) > 0 check instead of manualHabitFraction.
-      if (advanced && advanced.zeroTolerance) {
-        possible += h.points;
-        const violated = Number(e.value) > 0;
-        if (violated) { flags.push(h.name); return; }
-        earned += h.points;
-        return;
-      }
-      const frac = manualHabitFraction(h, e.value);
-      earned += frac * h.points; possible += h.points;
-    });
-    return { earned, possible, flags };
-  }
+  // manualHabitFraction()/compareThreshold()/weekOccurrenceCount()/
+  // scoreManualHabitsForDate() moved to score-lib.js (window.ScoreLib)
+  // — see that file's own header comment for why. This page never
+  // passes autoSources, so autoThreshold habits still correctly fall
+  // through to "unlogged" here — an intentional, documented gap: the
+  // "Today's Score" circle on main.html is the one place those habits
+  // are actually scored live. Call sites use ScoreLib.scoreManualHabitsForDate
+  // directly now and simply don't read its (unused here) .breakdown field.
 
   let currentHabitConfig = null;
   let entriesByDate = {};
@@ -802,7 +664,7 @@ document.addEventListener('DOMContentLoaded', function () {
   });
 
   async function renderSummary() {
-    const manual = scoreManualHabitsForDate(currentHabitConfig, entriesByDate, viewDateKey, mondayOfKey(viewDateKey));
+    const manual = ScoreLib.scoreManualHabitsForDate(currentHabitConfig, entriesByDate, viewDateKey, mondayOfKey(viewDateKey));
     const pct = manual.possible > 0 ? Math.round((manual.earned / manual.possible) * 100) : null;
     const dayWord = viewDateKey === todayActive ? 'today' : 'that day';
     $('habitsSummaryPct').textContent = pct == null ? '—' : pct + '%';
@@ -1001,7 +863,7 @@ document.addEventListener('DOMContentLoaded', function () {
   function dayStatus(habit, dateKey) {
     const e = entriesByDate[dateKey] && entriesByDate[dateKey][habit.id];
     if (e && e.na === true) return 'na';
-    if (e && manualHabitFraction(habit, e.value) >= 1) return 'done';
+    if (e && ScoreLib.manualHabitFraction(habit, e.value) >= 1) return 'done';
     return 'empty';
   }
   // N/A days are skip-neutral for both streaks: they neither extend

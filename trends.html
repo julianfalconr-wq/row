@@ -30,6 +30,10 @@
      work here, but there's nothing to gain from diverging from the
      established pattern. -->
 <script src="daylib.js"></script>
+<!-- score-lib.js: same non-deferred, loaded-right-after-daylib.js
+     pattern as daylib.js itself — this page's score trend chart below
+     calls window.ScoreLib synchronously, so it must already exist. -->
+<script src="score-lib.js"></script>
 <!-- Same exact version main.html/topbar.js's chat feature already
      loads for its own charts (see topbar.js's loadChartJs()) — kept
      in sync deliberately so both chart surfaces in this app render
@@ -330,12 +334,12 @@ document.addEventListener('DOMContentLoaded', function () {
 
   // =============================================================
   // Date helpers — ported verbatim from main.html's score-engine
-  // script (mondayOfKey/addDaysKey/mondayBasedDayIndex/datesFromTo),
-  // per this project's established per-page small-duplication
-  // convention (no shared module for this — see e.g. topbar.js's
-  // Google-token helpers duplicated per render function). datesFromTo's
-  // guard is raised from main.html's own 8 (that copy only ever walks
-  // a single week) to 400, since this page needs up to 90 days.
+  // script (mondayOfKey/addDaysKey/datesFromTo), per this project's
+  // established per-page small-duplication convention (no shared
+  // module for this — see e.g. topbar.js's Google-token helpers
+  // duplicated per render function). datesFromTo's guard is raised
+  // from main.html's own 8 (that copy only ever walks a single week)
+  // to 400, since this page needs up to 90 days.
   // =============================================================
   function addDaysKey(dateKeyStr, n) {
     const d = DayLib.parseDateKey(dateKeyStr);
@@ -349,10 +353,8 @@ document.addEventListener('DOMContentLoaded', function () {
     date.setDate(date.getDate() + diff);
     return DayLib.plainDateKey(date);
   }
-  function mondayBasedDayIndex(dateKeyStr) {
-    const day = DayLib.parseDateKey(dateKeyStr).getDay();
-    return day === 0 ? 6 : day - 1;
-  }
+  // mondayBasedDayIndex() moved to score-lib.js (window.ScoreLib) — its
+  // only caller here (computeCardioCategory) moved there too.
   function datesFromTo(fromKey, toKey) {
     const out = [];
     let k = fromKey;
@@ -389,56 +391,27 @@ document.addEventListener('DOMContentLoaded', function () {
   // day) — doing that per day across a 90-day range would also be
   // ~180 wasted network calls for a guaranteed-negative result.
   // =============================================================
-  function defaultHabitConfig() {
-    return {
-      habits: [
-        { id: 'sleep_wake',   name: 'Slept early & woke early',    points: 10, buildOrQuit: 'build', frequency: { type: 'daily' }, dailyGoal: 2, unit: 'times', advanced: null },
-        { id: 'brush_teeth',  name: 'Brush teeth (AM + PM)',       points: 4,  buildOrQuit: 'build', frequency: { type: 'daily' }, dailyGoal: 2, unit: 'times', advanced: null },
-        { id: 'productivity', name: '1h focused productivity',     points: 8,  buildOrQuit: 'build', frequency: { type: 'daily' }, dailyGoal: 1, unit: 'times', advanced: null },
-        { id: 'screen_time',  name: 'Screen time under 6h',        points: 8,  buildOrQuit: 'build', frequency: { type: 'daily' }, dailyGoal: 1, unit: 'times', advanced: null },
-        { id: 'plan_day',     name: 'Plan the day',                points: 5,  buildOrQuit: 'build', frequency: { type: 'daily' }, dailyGoal: 1, unit: 'times', advanced: null },
-        { id: 'walk_dog',     name: 'Walk the dog (AM + PM)',      points: 6,  buildOrQuit: 'build', frequency: { type: 'daily' }, dailyGoal: 2, unit: 'times', advanced: null },
-        { id: 'no_phone_30',  name: 'No phone first 30 min',       points: 6,  buildOrQuit: 'build', frequency: { type: 'daily' }, dailyGoal: 1, unit: 'times', advanced: null },
-        { id: 'no_porn',      name: 'No porn',                     points: 15, buildOrQuit: 'quit',  frequency: { type: 'daily' }, dailyGoal: 1, unit: 'times', advanced: { zeroTolerance: true } },
-        { id: 'no_fap',       name: 'No fap',                      points: 15, buildOrQuit: 'quit',  frequency: { type: 'daily' }, dailyGoal: 1, unit: 'times', advanced: { weeklyCap: { allowedPerWeek: 2, weeklyPenalty: 15, dailyPenalty: 5 } } },
-        { id: 'read',         name: 'Read',                        points: 4,  buildOrQuit: 'build', frequency: { type: 'daily' }, dailyGoal: 1, unit: 'times', advanced: null },
-        { id: 'stretch',      name: 'Stretching (morning + night)',points: 6,  buildOrQuit: 'build', frequency: { type: 'daily' }, dailyGoal: 2, unit: 'times', advanced: null },
-      ],
-    };
-  }
-  function normalizeHabit(h) {
-    h = h || {};
-    if (h.dailyGoal != null || h.buildOrQuit || h.advanced !== undefined) {
-      return {
-        id: h.id,
-        name: h.name || h.label || '',
-        points: Number(h.points) || 0,
-        buildOrQuit: h.buildOrQuit === 'quit' ? 'quit' : 'build',
-        frequency: h.frequency || { type: 'daily' },
-        dailyGoal: Number(h.dailyGoal) || 1,
-        unit: typeof h.unit === 'string' ? h.unit : 'times',
-        advanced: h.advanced || null,
-      };
-    }
-    const base = { id: h.id, name: h.label || '', points: Number(h.points) || 0, frequency: { type: 'daily' } };
-    if (h.type === 'manual_count2') return { ...base, buildOrQuit: 'build', dailyGoal: 2, unit: 'times', advanced: null };
-    if (h.type === 'manual_numeric') return { ...base, buildOrQuit: 'build', dailyGoal: Number(h.goal) || 1, unit: (h.unit != null ? h.unit : ''), advanced: null };
-    if (h.type === 'zero_tolerance') return { ...base, buildOrQuit: 'quit', dailyGoal: 1, unit: 'times', advanced: { zeroTolerance: true } };
-    if (h.type === 'weekly_cap') return { ...base, buildOrQuit: 'quit', dailyGoal: 1, unit: 'times', advanced: { weeklyCap: { allowedPerWeek: h.weeklyCap, weeklyPenalty: h.weeklyPenaltyPoints, dailyPenalty: h.perExtraDayPenaltyPoints } } };
-    if (h.type === 'auto_threshold') return { ...base, buildOrQuit: 'build', dailyGoal: 1, unit: 'times', advanced: { autoThreshold: { source: h.source, operator: h.operator, value: h.threshold } } };
-    return { ...base, buildOrQuit: 'build', dailyGoal: 1, unit: 'times', advanced: null };
-  }
+  // defaultHabitConfig()/normalizeHabit() moved to score-lib.js
+  // (window.ScoreLib) — see that file's own header comment for why.
+  // (This consolidation also fixed a real, previously-missed divergence
+  // here: this copy's normalizeHabit still had the old
+  // "Number(h.dailyGoal) || 1" bug — a Quit habit's real dailyGoal:0
+  // getting silently reset to 1 on every config reload. Confirmed
+  // harmless in practice: nothing downstream here consulted dailyGoal
+  // for a weeklyCap/zeroTolerance habit even before this fix, since
+  // those branches use a direct Number(e.value) check instead — but a
+  // real divergence from main.html/habits.html nonetheless.)
   async function fetchHabitConfig() {
     const secret = getSecret();
-    if (!secret) return defaultHabitConfig();
+    if (!secret) return ScoreLib.defaultHabitConfig();
     let config = null;
     try {
       const r = await fetch('/api/sync-state?resource=habit-config&secret=' + encodeURIComponent(secret));
       const j = await r.json();
       if (j && j.ok && j.config && Array.isArray(j.config.habits) && j.config.habits.length) config = j.config;
     } catch (e) {}
-    if (!config) config = defaultHabitConfig();
-    return { habits: config.habits.map(normalizeHabit) };
+    if (!config) config = ScoreLib.defaultHabitConfig();
+    return { habits: config.habits.map(ScoreLib.normalizeHabit) };
   }
   async function fetchDailyHabitsRange(fromKey, toKey) {
     const secret = getSecret();
@@ -451,209 +424,16 @@ document.addEventListener('DOMContentLoaded', function () {
     } catch (e) {}
     return out;
   }
-  function manualHabitFraction(habit, entryVal) {
-    return Math.max(0, Math.min(1, (Number(entryVal) || 0) / (Number(habit.dailyGoal) || 1)));
-  }
-  // Only ever called for a weeklyCap-configured Quit habit — "occurred"
-  // is a plain Number(entryVal) > 0 check, independent of dailyGoal.
-  // See main.html's identical copy for the full reasoning: this used
-  // to go through manualHabitFraction (entryVal / dailyGoal), which
-  // inverted the result once a weeklyCap habit's dailyGoal could
-  // legitimately be 0 (found and fixed in main.html/habits.html; this
-  // copy was missed at the time — same fix, applied here too).
-  function weekOccurrenceCount(habit, entriesByDate, fromKey, toKey) {
-    let n = 0;
-    datesFromTo(fromKey, toKey).forEach((k) => {
-      const e = entriesByDate[k] && entriesByDate[k][habit.id];
-      if (e && e.na !== true && Number(e.value) > 0) n++;
-    });
-    return n;
-  }
-  // Identical to main.html's scoreManualHabitsForDate() except the
-  // 5th parameter (autoSources) is always omitted here — see this
-  // section's header comment above for why that's the correct
-  // behavior for a past day, not a shortcut.
-  function scoreManualHabitsForDate(habitConfig, entriesByDate, dateActiveKey, weekMondayActiveKey) {
-    const entry = entriesByDate[dateActiveKey] || null;
-    let earned = 0, possible = 0;
-    const breakdown = [];
-    const flags = [];
-    (habitConfig.habits || []).forEach((h) => {
-      const advanced = h.advanced || null;
-      if (advanced && advanced.autoThreshold) {
-        breakdown.push({ id: h.id, label: h.name, points: h.points, status: 'unlogged' });
-        return;
-      }
-      const e = entry && entry[h.id];
-      if (!e) { breakdown.push({ id: h.id, label: h.name, points: h.points, status: 'unlogged' }); return; }
-      if (e.na === true) { breakdown.push({ id: h.id, label: h.name, points: h.points, status: 'na' }); return; }
-
-      if (advanced && advanced.weeklyCap) {
-        const cfg = advanced.weeklyCap;
-        possible += h.points;
-        // Raw value check, not manualHabitFraction/dailyGoal — see
-        // weekOccurrenceCount's own comment above for why.
-        if (Number(e.value) <= 0) {
-          earned += h.points;
-          breakdown.push({ id: h.id, label: h.name, points: h.points, earnedPts: h.points, status: 'ok' });
-        } else {
-          const countThroughToday = weekOccurrenceCount(h, entriesByDate, weekMondayActiveKey, dateActiveKey);
-          const over = Math.max(0, countThroughToday - (cfg.allowedPerWeek || 0));
-          const pts = Math.max(0, h.points - over * (cfg.dailyPenalty || 0));
-          earned += pts;
-          breakdown.push({ id: h.id, label: h.name, points: h.points, earnedPts: pts, status: pts <= 0 ? 'zero' : 'partial', overCap: countThroughToday > (cfg.allowedPerWeek || 0) });
-        }
-        return;
-      }
-
-      // Same class of bug as weeklyCap above — see main.html's identical
-      // copy for the full reasoning. zeroTolerance is a full-loss-on-any-
-      // occurrence rule, not a fractional goal, so it needs the direct
-      // Number(e.value) > 0 check instead of manualHabitFraction.
-      if (advanced && advanced.zeroTolerance) {
-        possible += h.points;
-        const violated = Number(e.value) > 0;
-        const pts = violated ? 0 : h.points;
-        earned += pts;
-        if (violated) flags.push(h.name);
-        breakdown.push({ id: h.id, label: h.name, points: h.points, earnedPts: pts, status: violated ? 'zero_tolerance_violation' : 'ok' });
-        return;
-      }
-
-      const frac = manualHabitFraction(h, e.value);
-      const pts = frac * h.points;
-      earned += pts; possible += h.points;
-      breakdown.push({ id: h.id, label: h.name, points: h.points, earnedPts: pts, status: pts >= h.points ? 'ok' : (pts <= 0 ? 'zero' : 'partial') });
-    });
-    return { earned, possible, breakdown, flags };
-  }
-  // See main.html's identical copy for the full reasoning (WHOOP's own
-  // documented All-Out tier is strain >= 18 — confirmed against WHOOP's
-  // developer docs). Only ever populated for the real current today
-  // (see computeDayScoreFromCache below) — a past day's "most recent
-  // WHOOP cycle" fetch wouldn't be that day's data anyway, so this
-  // never fires for historical points in the trend chart.
-  function combineTrainingFraction(strength, cardio, whoopStrainToday) {
-    if (whoopStrainToday && whoopStrainToday.available && whoopStrainToday.strain >= 18) {
-      return { available: true, fraction: 1 };
-    }
-    const fracs = [];
-    if (strength.available) fracs.push(strength.fraction);
-    if (cardio.available) fracs.push(cardio.fraction);
-    if (!fracs.length) return { available: false };
-    return { available: true, fraction: fracs.reduce((a, b) => a + b, 0) / fracs.length };
-  }
-  function combineWeightedCategories(categories, weights) {
-    let earned = 0, weightSum = 0;
-    categories.forEach(({ key, c }) => {
-      if (!c.available) return;
-      const w = Number(weights[key]) || 0;
-      earned += c.fraction * w;
-      weightSum += w;
-    });
-    return weightSum > 0 ? Math.round((earned / weightSum) * 100) : null;
-  }
-  function computeStackCategory(dateActiveKey) {
-    if (typeof window.CronoLib === 'undefined') return { available: false };
-    const pct = window.CronoLib.getStackCompletionForDate(dateActiveKey);
-    if (pct == null) return { available: false };
-    return { available: true, fraction: pct / 100 };
-  }
-  function computeWaterCategory(datePlainKey) {
-    let s = null;
-    try { s = JSON.parse(localStorage.getItem('po_water_v1')); } catch (e) {}
-    if (!s || typeof s !== 'object') return { available: false };
-    const logs = s.logs || {};
-    if (!Object.prototype.hasOwnProperty.call(logs, datePlainKey)) return { available: false };
-    const count = logs[datePlainKey] || 0;
-    const unitMl = s.unit === 'bottle' ? (s.bottleMl || 500) : s.unit === 'glass' ? (s.glassMl || 250) : s.unit === 'oz' ? 30 : 1;
-    const drankMl = count * unitMl;
-    const p = Object.assign({ weightKg: 75, age: 25, sex: 'm', activityHrsPerWeek: 5 }, s.profile || {});
-    const wKg = s.weightUnit === 'lb' ? p.weightKg / 2.20462 : p.weightKg;
-    const base = wKg * 35;
-    const exercise = (p.activityHrsPerWeek || 0) / 7 * 500;
-    const caffeine = Math.max(0, (s.caffeineMgPerDay != null ? s.caffeineMgPerDay : 200) - 200) * 1.5;
-    let adjust = 0;
-    if (p.sex === 'm') adjust += 200;
-    if ((p.age || 0) >= 50) adjust += 100;
-    const targetMl = base + exercise + caffeine + adjust;
-    if (!targetMl) return { available: false };
-    return { available: true, fraction: Math.min(1, drankMl / targetMl) };
-  }
-  function todaySplitFor(pcState, dateKeyStr) {
-    try {
-      const rot = pcState.splitRotation;
-      if (!rot || !rot.length) return { name: '—' };
-      const a = DayLib.parseDateKey(pcState.splitAnchor.date);
-      const t = DayLib.parseDateKey(dateKeyStr);
-      a.setHours(0, 0, 0, 0); t.setHours(0, 0, 0, 0);
-      const diffDays = Math.round((t - a) / 86400000);
-      const idx = ((pcState.splitAnchor.index + diffDays) % rot.length + rot.length) % rot.length;
-      return { name: rot[idx] };
-    } catch (e) { return { name: '—' }; }
-  }
-  function computeStrengthCategory(datePlainKey) {
-    let pc = null;
-    try { pc = JSON.parse(localStorage.getItem('po_coach_v1')); } catch (e) {}
-    if (!pc || !Array.isArray(pc.splitRotation) || !pc.splitRotation.length || !pc.splitAnchor || !pc.splitAnchor.date) return { available: false };
-    const split = todaySplitFor(pc, datePlainKey);
-    if (/^rest\b/i.test(split.name || '')) return { available: false };
-    let doneDays = {};
-    try { doneDays = JSON.parse(localStorage.getItem('po_coach_workout_done')) || {}; } catch (e) {}
-    return { available: true, fraction: doneDays[datePlainKey] ? 1 : 0 };
-  }
-  function migratePlanCardio(planInner) {
-    if (!planInner || typeof planInner !== 'object' || planInner.cardio) return planInner;
-    const running = planInner.running;
-    if (!running) return planInner;
-    const longRun = running.longRun || {};
-    const easyVolume = running.easyVolume || {};
-    return Object.assign({}, planInner, {
-      cardio: {
-        longSession: { activityTypeId: 'running', targetAmount: longRun.targetKm || 0 },
-        easyVolume: { activityTypeId: 'running', targetAmount: easyVolume.targetKm || 0 },
-      },
-    });
-  }
-  // Ported from main.html's own computeCardioCategory() (see that
-  // file's own comment for the full investigation/reasoning) — was
-  // computeRunningCategory, hardcoded to 'running' and reading the
-  // running-only po_coach_runs mirror, which under-reported a real
-  // triathlon-style week's swim/bike sessions on this chart too.
-  // Kept in sync with main.html's copy per this port's own established
-  // convention (see loadScoreTrend's header comment).
-  function computeCardioCategory(datePlainKey, weekMondayPlainKey) {
-    // Checked FIRST, with no dependency on a weekly plan existing —
-    // see main.html's identical copy for the full reasoning (a real
-    // logged session must count as training regardless of whether a
-    // plan exists to compare it against; this used to sit after the
-    // "no plan yet" early-return below and was silently unreachable
-    // whenever the current week had no matching plan).
-    let activities = [];
-    try { activities = JSON.parse(localStorage.getItem('po_coach_activities')) || []; } catch (e) { activities = []; }
-    const todayTypes = Array.from(new Set(activities.filter((a) => a && a.dateKey === datePlainKey).map((a) => a.activityTypeId).filter(Boolean)));
-    if (todayTypes.length) return { available: true, fraction: 1 };
-
-    let plan = null;
-    try { plan = JSON.parse(localStorage.getItem('po_coach_weekly_plan_v1')); } catch (e) {}
-    if (plan && plan.plan) plan.plan = migratePlanCardio(plan.plan);
-    if (!plan || plan.weekStart !== weekMondayPlainKey || !plan.plan || !plan.plan.cardio) return { available: false };
-    const cardio = plan.plan.cardio;
-    const longSession = cardio.longSession || {};
-    const easyVolume = cardio.easyVolume || {};
-    const assignedTypeIds = new Set([longSession.activityTypeId, easyVolume.activityTypeId].filter(Boolean));
-    let kmTarget = 0;
-    if (longSession.activityTypeId) kmTarget += Number(longSession.targetAmount) || 0;
-    if (easyVolume.activityTypeId) kmTarget += Number(easyVolume.targetAmount) || 0;
-    kmTarget = Math.round(kmTarget * 10) / 10;
-    if (!kmTarget) return { available: false };
-    const soFar = activities.filter((a) => a && assignedTypeIds.has(a.activityTypeId) && a.dateKey >= weekMondayPlainKey && a.dateKey <= datePlainKey);
-    const kmDone = Math.round(soFar.reduce((s, a) => s + (Number(a.distanceKm) || 0), 0) * 10) / 10;
-    const dayIdx = mondayBasedDayIndex(datePlainKey);
-    const expected = kmTarget * ((dayIdx + 1) / 7);
-    const fraction = expected > 0 ? Math.min(1, kmDone / expected) : 1;
-    return { available: true, fraction };
-  }
+  // manualHabitFraction()/weekOccurrenceCount()/scoreManualHabitsForDate()/
+  // combineTrainingFraction()/combineWeightedCategories()/
+  // computeStackCategory()/computeWaterCategory()/todaySplitFor()/
+  // computeStrengthCategory()/migratePlanCardio()/computeCardioCategory()
+  // all moved to score-lib.js (window.ScoreLib) — see that file's own
+  // header comment for why. This page never passes autoSources to
+  // scoreManualHabitsForDate, so autoThreshold habits still correctly
+  // fall through to "unlogged" here (a past day can't be evaluated
+  // live against WHOOP/Cronometer anyway) — same intentional,
+  // documented gap as before.
   // One day's score AND its habits-only completion %, given
   // already-fetched shared context (habitConfig/entriesByDate/
   // cronoCache/weights) — mirrors main.html's own weekly-average loop
@@ -697,14 +477,14 @@ document.addEventListener('DOMContentLoaded', function () {
         if (s != null) nutrition = { available: true, fraction: s / 100 };
       }
     }
-    const manual = scoreManualHabitsForDate(habitConfig, entriesByDate, dk, weekMonday);
-    const stack = computeStackCategory(dk);
-    const water = computeWaterCategory(dk);
-    const strength = computeStrengthCategory(dk);
-    const cardio = computeCardioCategory(dk, weekMonday);
-    const training = combineTrainingFraction(strength, cardio, dk === DayLib.effectiveDateKey() ? whoopStrainToday : null);
+    const manual = ScoreLib.scoreManualHabitsForDate(habitConfig, entriesByDate, dk, weekMonday);
+    const stack = ScoreLib.computeStackCategory(dk);
+    const water = ScoreLib.computeWaterCategory(dk);
+    const strength = ScoreLib.computeStrengthCategory(dk);
+    const cardio = ScoreLib.computeCardioCategory(dk, weekMonday);
+    const training = ScoreLib.combineTrainingFraction(strength, cardio, dk === DayLib.effectiveDateKey() ? whoopStrainToday : null);
     const habits = manual.possible > 0 ? { available: true, fraction: manual.earned / manual.possible } : { available: false };
-    const score = combineWeightedCategories([
+    const score = ScoreLib.combineWeightedCategories([
       { key: 'habits', c: habits },
       { key: 'training', c: training },
       { key: 'nutrition', c: nutrition },
