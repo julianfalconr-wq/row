@@ -444,39 +444,50 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
   // drifted slightly out of sync with the others (a missing animation here,
   // a different accent color there, mismatched z-index layering). gym.html,
   // po-water.html and cronometer.html never had it at all. Consolidated here
-  // as the single shared version (main.html's own, the most complete/correct
-  // of the copies — proper z-index stacking, animated drift) so every page
-  // gets the same glow. Kept as literal values, same reasoning as `css`
-  // above: not every page defines the CSS variables the old per-page
-  // versions relied on (health.html used --accent-glow, others used
-  // --glow-opacity, gym.html/po-water.html/cronometer.html defined neither).
+  // as the single shared version so every page gets the same glow.
+  //
+  // NOT implemented as a body::before/::after pseudo-element at negative
+  // z-index, despite that being every prior per-page version's approach —
+  // verified live (real production URL, three engines: Chromium, WebKit,
+  // and the actual Brave binary) that a position:fixed element at negative
+  // z-index is silently invisible on every page here, because every page's
+  // own `html, body { background: var(--surface-1) }` rule (each page sets
+  // this itself, before topbar.js runs) paints its OPAQUE background OVER
+  // any negative-z-index descendant instead of under it, regardless of DOM
+  // placement — reproduced with a plain solid-color div, not just this
+  // gradient, so it isn't specific to blur/opacity/gradients. Confirmed
+  // fixed by painting the glow as extra `background-image` layers on body
+  // itself instead: since it's part of body's OWN background (not a
+  // separate stacking-context participant), there's no ordering ambiguity
+  // to get wrong. `background-attachment: fixed` replaces `position: fixed`
+  // for "stays put while the page scrolls". True `filter: blur()` and
+  // `transform`-based drift aren't available for a background-image layer
+  // alone (they'd blur/shift all of body's real content too) — approximated
+  // instead with a longer gradient falloff and a `background-position`
+  // drift animation. Kept as literal values, same reasoning as `css` above:
+  // not every page defines the CSS variables the old per-page versions
+  // relied on (health.html used --accent-glow, others used --glow-opacity,
+  // gym.html/po-water.html/cronometer.html defined neither).
   const glowCss = `
-body::before {
-  content: '';
-  position: fixed; inset: 0;
-  background:
-    radial-gradient(circle at 82% 14%, rgba(23, 232, 143, 0.14), transparent 45%),
-    radial-gradient(circle at 18% 90%, rgba(180, 180, 200, 0.06), transparent 50%);
-  filter: blur(40px);
-  opacity: 1;
-  pointer-events: none;
-  z-index: -2;
+body {
+  background-image:
+    radial-gradient(circle at 82% 14%, rgba(23, 232, 143, 0.14), transparent 55%),
+    radial-gradient(circle at 18% 90%, rgba(180, 180, 200, 0.06), transparent 60%),
+    radial-gradient(rgba(255,255,255,0.014) 1px, transparent 1px);
+  background-size: auto, auto, 3px 3px;
+  background-attachment: fixed, fixed, fixed;
+  background-repeat: no-repeat, no-repeat, repeat;
   animation: row-glow-drift 36s ease-in-out infinite alternate;
 }
-body::after {
-  content: '';
-  position: fixed; inset: 0;
-  background-image: radial-gradient(rgba(255,255,255,0.014) 1px, transparent 1px);
-  background-size: 3px 3px;
-  opacity: 1;
-  pointer-events: none;
-  z-index: -1;
+html[data-theme="light"] body {
+  background-image:
+    radial-gradient(circle at 82% 14%, rgba(23, 232, 143, 0.049), transparent 55%),
+    radial-gradient(circle at 18% 90%, rgba(180, 180, 200, 0.021), transparent 60%),
+    radial-gradient(rgba(255,255,255,0.014) 1px, transparent 1px);
 }
-html[data-theme="light"] body::before,
-html[data-theme="light"] body::after { opacity: 0.35; }
 @keyframes row-glow-drift {
-  0%   { transform: translate3d(0,0,0); }
-  100% { transform: translate3d(-22px, 14px, 0); }
+  0%   { background-position: 0 0, 0 0, 0 0; }
+  100% { background-position: -22px 14px, -22px 14px, 0 0; }
 }
 `;
 
