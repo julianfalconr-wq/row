@@ -3629,7 +3629,23 @@ document.addEventListener('DOMContentLoaded', function () {
   // this also means the score is still exactly 0-100 even if the
   // configured weights don't sum to exactly 100 (defensive — the
   // Settings UI enforces that sum, but an old cached profile might not).
-  function combineTrainingFraction(strength, cardio) {
+  // whoopStrainToday (optional, {available, strain}): an "All-Out" WHOOP
+  // day (strain >= 18, WHOOP's own documented top tier — confirmed
+  // against WHOOP's developer docs: Light 0-9, Moderate 10-13, High
+  // 14-17, All Out 18-21) is real, significant evidence of physical
+  // exertion on its own, regardless of whether that exertion happened
+  // to get logged as a strength session specifically. Without this, a
+  // day like 213 minutes of padel at strain 19 — clearly enough
+  // exertion that requiring a SEPARATE strength session on top of it
+  // doesn't make sense — still only gets averaged with Strength's own
+  // 0 (not logged that day), capping Training at ~50%. This is an
+  // ADDITIVE override for exceptional days only: below the All-Out
+  // threshold, or when strain data isn't available, the normal
+  // Strength+Cardio averaging below is completely unchanged.
+  function combineTrainingFraction(strength, cardio, whoopStrainToday) {
+    if (whoopStrainToday && whoopStrainToday.available && whoopStrainToday.strain >= 18) {
+      return { available: true, fraction: 1, detail: 'All-Out day (WHOOP strain ' + whoopStrainToday.strain + ') — full training credit' };
+    }
     const fracs = [];
     const details = [];
     if (strength.available) { fracs.push(strength.fraction); details.push(strength.label + ': ' + strength.detail); }
@@ -3912,6 +3928,29 @@ document.addEventListener('DOMContentLoaded', function () {
       return { sleep: { available: false }, recovery: { available: false } };
     }
   }
+  // Live "today" WHOOP day-strain fetch for combineTrainingFraction's
+  // All-Out override above — /cycle (not /recovery or /activity/sleep)
+  // is WHOOP's own day-strain endpoint, same one gym.html's
+  // fetchWhoopTrend() already reads for its strain trend line. Same
+  // date-match safety as computeWhoopAutoSources: limit=1 returns the
+  // most recent cycle, which could still be an earlier day's if WHOOP
+  // hasn't synced today's yet.
+  async function computeWhoopStrainToday(datePlainKey) {
+    let t = null;
+    try { t = JSON.parse(localStorage.getItem('whoop_tokens_v1')); } catch (e) {}
+    if (!t || !t.access || (t.expires && Date.now() > t.expires)) return { available: false };
+    try {
+      const cycles = await fetch('/api/whoop-data?path=' + encodeURIComponent('/cycle') + '&limit=1', { headers: { Authorization: 'Bearer ' + t.access } }).then((r) => r.ok ? r.json() : null).catch(() => null);
+      const c = cycles && cycles.records && cycles.records[0];
+      const cDate = c && String(c.start || '').slice(0, 10);
+      if (c && c.score && c.score.strain != null && cDate === datePlainKey) {
+        return { available: true, strain: Math.round(c.score.strain * 10) / 10 };
+      }
+      return { available: false };
+    } catch (e) {
+      return { available: false };
+    }
+  }
   // Only ever called for a weeklyCap-configured Quit habit (e.g. "No
   // fap") — "occurred" here means the bad behavior happened that day,
   // a plain Number(entryVal) > 0 check, completely independent of
@@ -4013,7 +4052,7 @@ document.addEventListener('DOMContentLoaded', function () {
     const strength = computeStrengthCategory(datePlainKey);
     const cardio = computeCardioCategory(datePlainKey, weekMondayPlainKey);
     const nutrition = await computeNutritionCategory(datePlainKey, opts.cronoCache);
-    const training = combineTrainingFraction(strength, cardio);
+    const training = combineTrainingFraction(strength, cardio, opts.whoopStrainToday);
     const autoSources = await computeAutoThresholdSources(datePlainKey, { water, strength, nutrition, habitConfig });
     const manual = scoreManualHabitsForDate(habitConfig, entriesByDate, dateActiveKey, weekMondayActiveKey, autoSources);
     const habits = manual.possible > 0
@@ -4078,8 +4117,12 @@ document.addEventListener('DOMContentLoaded', function () {
     if (typeof window.CronoLib !== 'undefined' && window.CronoLib.getSecret()) {
       try { const r = await window.CronoLib.fetchCronometerData(); if (r.ok) cronoCache = r; } catch (e) {}
     }
+    // Only ever fetched for TODAY specifically (see combineTrainingFraction's
+    // own comment) — the weekly loop below scores past days, where "the
+    // most recent WHOOP cycle" wouldn't be that day's anyway.
+    const whoopStrainToday = await computeWhoopStrainToday(todayPlain);
 
-    const today = await computeDailyScore(todayActive, todayPlain, weekMondayActive, weekMondayPlain, habitConfig, entriesByDate, { cronoCache });
+    const today = await computeDailyScore(todayActive, todayPlain, weekMondayActive, weekMondayPlain, habitConfig, entriesByDate, { cronoCache, whoopStrainToday });
     lastResult = { habitConfig, entriesByDate, today };
     const weights = today.weights; // reused below for the weekly loop, so every day's score is computed with the SAME weights snapshot
 

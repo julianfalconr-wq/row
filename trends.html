@@ -454,11 +454,18 @@ document.addEventListener('DOMContentLoaded', function () {
   function manualHabitFraction(habit, entryVal) {
     return Math.max(0, Math.min(1, (Number(entryVal) || 0) / (Number(habit.dailyGoal) || 1)));
   }
+  // Only ever called for a weeklyCap-configured Quit habit — "occurred"
+  // is a plain Number(entryVal) > 0 check, independent of dailyGoal.
+  // See main.html's identical copy for the full reasoning: this used
+  // to go through manualHabitFraction (entryVal / dailyGoal), which
+  // inverted the result once a weeklyCap habit's dailyGoal could
+  // legitimately be 0 (found and fixed in main.html/habits.html; this
+  // copy was missed at the time — same fix, applied here too).
   function weekOccurrenceCount(habit, entriesByDate, fromKey, toKey) {
     let n = 0;
     datesFromTo(fromKey, toKey).forEach((k) => {
       const e = entriesByDate[k] && entriesByDate[k][habit.id];
-      if (e && e.na !== true && manualHabitFraction(habit, e.value) < 1) n++;
+      if (e && e.na !== true && Number(e.value) > 0) n++;
     });
     return n;
   }
@@ -484,7 +491,9 @@ document.addEventListener('DOMContentLoaded', function () {
       if (advanced && advanced.weeklyCap) {
         const cfg = advanced.weeklyCap;
         possible += h.points;
-        if (manualHabitFraction(h, e.value) >= 1) {
+        // Raw value check, not manualHabitFraction/dailyGoal — see
+        // weekOccurrenceCount's own comment above for why.
+        if (Number(e.value) <= 0) {
           earned += h.points;
           breakdown.push({ id: h.id, label: h.name, points: h.points, earnedPts: h.points, status: 'ok' });
         } else {
@@ -497,16 +506,37 @@ document.addEventListener('DOMContentLoaded', function () {
         return;
       }
 
+      // Same class of bug as weeklyCap above — see main.html's identical
+      // copy for the full reasoning. zeroTolerance is a full-loss-on-any-
+      // occurrence rule, not a fractional goal, so it needs the direct
+      // Number(e.value) > 0 check instead of manualHabitFraction.
+      if (advanced && advanced.zeroTolerance) {
+        possible += h.points;
+        const violated = Number(e.value) > 0;
+        const pts = violated ? 0 : h.points;
+        earned += pts;
+        if (violated) flags.push(h.name);
+        breakdown.push({ id: h.id, label: h.name, points: h.points, earnedPts: pts, status: violated ? 'zero_tolerance_violation' : 'ok' });
+        return;
+      }
+
       const frac = manualHabitFraction(h, e.value);
       const pts = frac * h.points;
       earned += pts; possible += h.points;
-      const zt = !!(advanced && advanced.zeroTolerance) && frac === 0;
-      if (zt) flags.push(h.name);
-      breakdown.push({ id: h.id, label: h.name, points: h.points, earnedPts: pts, status: zt ? 'zero_tolerance_violation' : (pts >= h.points ? 'ok' : (pts <= 0 ? 'zero' : 'partial')) });
+      breakdown.push({ id: h.id, label: h.name, points: h.points, earnedPts: pts, status: pts >= h.points ? 'ok' : (pts <= 0 ? 'zero' : 'partial') });
     });
     return { earned, possible, breakdown, flags };
   }
-  function combineTrainingFraction(strength, cardio) {
+  // See main.html's identical copy for the full reasoning (WHOOP's own
+  // documented All-Out tier is strain >= 18 — confirmed against WHOOP's
+  // developer docs). Only ever populated for the real current today
+  // (see computeDayScoreFromCache below) — a past day's "most recent
+  // WHOOP cycle" fetch wouldn't be that day's data anyway, so this
+  // never fires for historical points in the trend chart.
+  function combineTrainingFraction(strength, cardio, whoopStrainToday) {
+    if (whoopStrainToday && whoopStrainToday.available && whoopStrainToday.strain >= 18) {
+      return { available: true, fraction: 1 };
+    }
     const fracs = [];
     if (strength.available) fracs.push(strength.fraction);
     if (cardio.available) fracs.push(cardio.fraction);
@@ -633,7 +663,29 @@ document.addEventListener('DOMContentLoaded', function () {
   // ("today.manual.possible > 0 ? round(earned/possible*100) : null")
   // — returned alongside score rather than recomputed a second time,
   // since both come from the same scoreManualHabitsForDate() call.
-  function computeDayScoreFromCache(dk, habitConfig, entriesByDate, cronoCache, weights) {
+  // Same live "today" WHOOP day-strain fetch as main.html's identical
+  // copy — only ever meaningful for the real current day (a past day's
+  // "most recent cycle" fetch wouldn't be that day's data), so
+  // loadScoreTrend below only calls this once and only applies the
+  // result to whichever single date in the chart's range equals today.
+  async function computeWhoopStrainToday(datePlainKey) {
+    let t = null;
+    try { t = JSON.parse(localStorage.getItem(WHOOP_KEY)); } catch (e) {}
+    if (!t || !t.access) return { available: false };
+    try {
+      if (t.expires && Date.now() > t.expires - 60000) { const n = await whoopRefreshToken(t); if (n) t = n; }
+      const cycles = await whoopProxyFetch('/cycle?limit=1', t).catch(() => null);
+      const c = cycles && cycles.records && cycles.records[0];
+      const cDate = c && String(c.start || '').slice(0, 10);
+      if (c && c.score && c.score.strain != null && cDate === datePlainKey) {
+        return { available: true, strain: Math.round(c.score.strain * 10) / 10 };
+      }
+      return { available: false };
+    } catch (e) {
+      return { available: false };
+    }
+  }
+  function computeDayScoreFromCache(dk, habitConfig, entriesByDate, cronoCache, weights, whoopStrainToday) {
     const weekMonday = mondayOfKey(dk);
     let nutrition = { available: false };
     if (cronoCache) {
@@ -650,7 +702,7 @@ document.addEventListener('DOMContentLoaded', function () {
     const water = computeWaterCategory(dk);
     const strength = computeStrengthCategory(dk);
     const cardio = computeCardioCategory(dk, weekMonday);
-    const training = combineTrainingFraction(strength, cardio);
+    const training = combineTrainingFraction(strength, cardio, dk === DayLib.effectiveDateKey() ? whoopStrainToday : null);
     const habits = manual.possible > 0 ? { available: true, fraction: manual.earned / manual.possible } : { available: false };
     const score = combineWeightedCategories([
       { key: 'habits', c: habits },
@@ -677,7 +729,11 @@ document.addEventListener('DOMContentLoaded', function () {
       try { const r = await window.CronoLib.fetchCronometerData(); if (r.ok) cronoCache = r; } catch (e) {}
     }
     const weights = (DayLib.loadProfile().categoryWeights) || DayLib.DEFAULT_PROFILE.categoryWeights;
-    const results = dates.map((dk) => computeDayScoreFromCache(dk, habitConfig, entriesByDate, cronoCache, weights));
+    // Only fetched once, and only ever applied to whichever single date
+    // below equals today (see computeDayScoreFromCache's own check) —
+    // see its comment for why this can't generalize to past days.
+    const whoopStrainToday = await computeWhoopStrainToday(DayLib.effectiveDateKey());
+    const results = dates.map((dk) => computeDayScoreFromCache(dk, habitConfig, entriesByDate, cronoCache, weights, whoopStrainToday));
     const data = results.map((r) => r.score);
     renderChart('scoreTrendChart', dates.map(shortLabel), [{ label: "Today's Score", data, color: '#1D9E75' }]);
     const loggedCount = data.filter((v) => v != null).length;
