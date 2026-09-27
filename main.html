@@ -3764,6 +3764,33 @@ document.addEventListener('DOMContentLoaded', function () {
   // picked up by this weekly-pace fallback, but IS still covered by
   // the today-fallback above regardless of its unit kind.
   function computeCardioCategory(datePlainKey, weekMondayPlainKey) {
+    let activities = [];
+    try { activities = JSON.parse(localStorage.getItem('po_coach_activities')) || []; } catch (e) { activities = []; }
+
+    // (1) Any session actually logged TODAY — checked FIRST, with NO
+    // dependency on a weekly plan existing at all. This used to sit
+    // after the "no plan yet" early-return below, which meant a real
+    // logged session (e.g. a WHOOP-imported padel/paddle-tennis entry)
+    // was silently ignored whenever the current week had no matching
+    // plan yet (never generated, or generated for a different
+    // weekStart) — confirmed live: Training showed 0/20 with cardio
+    // excluded entirely from combineTrainingFraction's average, even
+    // though po_coach_activities had a real session for today. A
+    // logged session is real evidence of training regardless of
+    // whether a plan exists to compare it against. "recommendable"
+    // isn't checked here either — that's the right call regardless:
+    // whether a type is currently allowed for future AI planning is a
+    // different question from whether a real session the user actually
+    // did today should count as "trained today".
+    const todayTypes = Array.from(new Set(activities.filter((a) => a && a.dateKey === datePlainKey).map((a) => a.activityTypeId).filter(Boolean)));
+    if (todayTypes.length) {
+      return { available: true, fraction: 1, label: 'Cardio', detail: 'Logged today (' + todayTypes.join(', ') + ')' };
+    }
+
+    // (2) Fallback — this week's pace-so-far toward whichever type(s)
+    // were actually assigned, same math as the original running-only
+    // version. This DOES need a real plan for the current week, since
+    // it compares progress against that plan's own targets.
     let plan = null;
     try { plan = JSON.parse(localStorage.getItem('po_coach_weekly_plan_v1')); } catch (e) {}
     if (plan && plan.plan) plan.plan = migratePlanCardio(plan.plan);
@@ -3772,24 +3799,6 @@ document.addEventListener('DOMContentLoaded', function () {
     const longSession = cardio.longSession || {};
     const easyVolume = cardio.easyVolume || {};
     const assignedTypeIds = new Set([longSession.activityTypeId, easyVolume.activityTypeId].filter(Boolean));
-
-    let activities = [];
-    try { activities = JSON.parse(localStorage.getItem('po_coach_activities')) || []; } catch (e) { activities = []; }
-
-    // (1) Any recommendable-type session actually logged TODAY —
-    // "recommendable" isn't checked here (no synchronous access to
-    // that config in this scoring path), but that's the right call
-    // regardless: whether a type is currently allowed for future AI
-    // planning is a different question from whether a real session the
-    // user actually did today should count as "trained today".
-    const todayTypes = Array.from(new Set(activities.filter((a) => a && a.dateKey === datePlainKey).map((a) => a.activityTypeId).filter(Boolean)));
-    if (todayTypes.length) {
-      return { available: true, fraction: 1, label: 'Cardio', detail: 'Logged today (' + todayTypes.join(', ') + ')' };
-    }
-
-    // (2) Fallback — this week's pace-so-far toward whichever type(s)
-    // were actually assigned, same math as the original running-only
-    // version.
     let kmTarget = 0;
     if (longSession.activityTypeId) kmTarget += Number(longSession.targetAmount) || 0;
     if (easyVolume.activityTypeId) kmTarget += Number(easyVolume.targetAmount) || 0;

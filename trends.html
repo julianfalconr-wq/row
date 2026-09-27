@@ -593,6 +593,17 @@ document.addEventListener('DOMContentLoaded', function () {
   // Kept in sync with main.html's copy per this port's own established
   // convention (see loadScoreTrend's header comment).
   function computeCardioCategory(datePlainKey, weekMondayPlainKey) {
+    // Checked FIRST, with no dependency on a weekly plan existing —
+    // see main.html's identical copy for the full reasoning (a real
+    // logged session must count as training regardless of whether a
+    // plan exists to compare it against; this used to sit after the
+    // "no plan yet" early-return below and was silently unreachable
+    // whenever the current week had no matching plan).
+    let activities = [];
+    try { activities = JSON.parse(localStorage.getItem('po_coach_activities')) || []; } catch (e) { activities = []; }
+    const todayTypes = Array.from(new Set(activities.filter((a) => a && a.dateKey === datePlainKey).map((a) => a.activityTypeId).filter(Boolean)));
+    if (todayTypes.length) return { available: true, fraction: 1 };
+
     let plan = null;
     try { plan = JSON.parse(localStorage.getItem('po_coach_weekly_plan_v1')); } catch (e) {}
     if (plan && plan.plan) plan.plan = migratePlanCardio(plan.plan);
@@ -601,12 +612,6 @@ document.addEventListener('DOMContentLoaded', function () {
     const longSession = cardio.longSession || {};
     const easyVolume = cardio.easyVolume || {};
     const assignedTypeIds = new Set([longSession.activityTypeId, easyVolume.activityTypeId].filter(Boolean));
-
-    let activities = [];
-    try { activities = JSON.parse(localStorage.getItem('po_coach_activities')) || []; } catch (e) { activities = []; }
-    const todayTypes = Array.from(new Set(activities.filter((a) => a && a.dateKey === datePlainKey).map((a) => a.activityTypeId).filter(Boolean)));
-    if (todayTypes.length) return { available: true, fraction: 1 };
-
     let kmTarget = 0;
     if (longSession.activityTypeId) kmTarget += Number(longSession.targetAmount) || 0;
     if (easyVolume.activityTypeId) kmTarget += Number(easyVolume.targetAmount) || 0;
