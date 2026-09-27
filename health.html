@@ -191,7 +191,10 @@ main {
    verbatim into every other section this phase touches (Habits,
    Training, Water, Daily Stack) so the pattern reads identically
    everywhere rather than drifting per page. */
-.day-nav { display: flex; align-items: center; gap: 4px; min-width: 0; }
+/* margin-bottom standardized to 14px — see habits.html's identical
+   copy for the full reasoning (was inconsistent per page, reported as
+   visually cramped against whatever follows). */
+.day-nav { display: flex; align-items: center; gap: 4px; min-width: 0; margin-bottom: 14px; }
 .day-nav-btn {
   flex-shrink: 0; width: 30px; height: 30px; border-radius: 8px;
   background: transparent; border: 1px solid var(--border-strong);
@@ -441,7 +444,12 @@ main {
 }
 
 .stack-head { margin-bottom: 12px; }
-#stackDayNav { margin: 4px 0 8px; }
+/* Was "margin: 4px 0 8px" — a more-specific ID override that
+   silently won over .day-nav's own margin-bottom above (8px < the
+   14px standard), the exact inconsistency being fixed here. Keeps
+   the small 4px top offset (visual alignment with .sf-eyebrow beside
+   it) but matches the shared bottom value now. */
+#stackDayNav { margin: 4px 0 14px; }
 .sf-eyebrow {
   font-family: var(--font-mono);
   font-size: 11px; font-weight: 600;

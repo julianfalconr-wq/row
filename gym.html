@@ -336,7 +336,10 @@ img, video, canvas, svg { max-width: 100%; }
 /* Shared history-navigation pattern (Phase E) — identical rules to
    health.html's Cronometer section and habits.html, same generic class
    names on purpose so the pattern reads identically everywhere. */
-.day-nav { display: flex; align-items: center; gap: 4px; min-width: 0; }
+/* margin-bottom standardized to 14px — see habits.html's identical
+   copy for the full reasoning (was inconsistent per page, reported as
+   visually cramped against whatever follows). */
+.day-nav { display: flex; align-items: center; gap: 4px; min-width: 0; margin-bottom: 14px; }
 .day-nav-btn {
   flex-shrink: 0; width: 30px; height: 30px; border-radius: 8px;
   background: transparent; border: 1px solid var(--border-strong);

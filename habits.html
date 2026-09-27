@@ -128,7 +128,16 @@ body::after {
    health.html's Cronometer section, same generic class names on
    purpose so the pattern reads identically across every section this
    phase touches. */
-.day-nav { display: flex; align-items: center; gap: 4px; min-width: 0; margin-bottom: 6px; }
+/* margin-bottom standardized to 14px (this app's established component-
+   gap value — see .dash-header's own margin-bottom) across every page
+   that uses this shared component (habits.html/gym.html/health.html/
+   po-water.html) — was inconsistent per file (6px here, 10px on
+   po-water.html, none at all on gym.html/health.html, relying only on
+   a wrapper element's own margin there, which wasn't always enough on
+   its own) and reported as visually cramped against whatever follows
+   it (e.g. this page's own "HABITS" title sitting almost flush below
+   it) — confirmed live via real element measurements, not assumed. */
+.day-nav { display: flex; align-items: center; gap: 4px; min-width: 0; margin-bottom: 14px; }
 .day-nav-btn {
   flex-shrink: 0; width: 28px; height: 28px; border-radius: 8px;
   background: transparent; border: 1px solid var(--line);
