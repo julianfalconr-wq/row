@@ -635,6 +635,22 @@ body::after {
 
 /* Plan teaser card — see planSection's own HTML comment for why this
    is deliberately compact (the real feature lives on plan.html). */
+.race-countdown-badge {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 11px 14px; margin-bottom: 10px; border-radius: 12px;
+  background: linear-gradient(135deg, rgba(29,158,117,0.18), rgba(29,158,117,0.06));
+  border: 1px solid rgba(29,158,117,0.35);
+  font-size: 13px; font-weight: 700; color: #17E88F;
+  text-align: center; text-decoration: none; transition: background 0.15s;
+}
+.race-countdown-badge:hover { background: linear-gradient(135deg, rgba(29,158,117,0.26), rgba(29,158,117,0.1)); }
+.race-countdown-badge.is-race-day {
+  background: linear-gradient(135deg, rgba(250,84,17,0.22), rgba(250,84,17,0.08));
+  border-color: rgba(250,84,17,0.5); color: #FF8A50;
+}
+.race-countdown-badge.is-past {
+  background: var(--inset-bg); border-color: var(--line); color: var(--text-tertiary);
+}
 .plan-mini-card { display: block; text-decoration: none; transition: background 0.15s; }
 .plan-mini-card:hover { background: rgba(255, 255, 255, 0.06); }
 .plan-mini-row { display: flex; align-items: center; gap: 12px; }
@@ -1442,6 +1458,10 @@ body::after {
        (the multi-week goal) then zoom-in (today's actual schedule). -->
   <div class="section" id="planSection">
     <div class="section-title">Plan</div>
+    <!-- Race-date countdown — distinct from the plan's own progress
+         below (see plan.html's saveRaceDate() comment for why it's a
+         separate field). Hidden entirely until a race date is set. -->
+    <a href="plan.html" class="race-countdown-badge" id="raceCountdownBadge" style="display:none"></a>
     <a href="plan.html" class="gm-card plan-mini-card" id="planMiniCard">
       <div class="plan-mini-row">
         <div class="plan-mini-text">
@@ -3351,7 +3371,37 @@ document.addEventListener('DOMContentLoaded', function () {
   function getSecret() { try { return localStorage.getItem('dashboard:secret') || ''; } catch (e) { return ''; } }
   const titleEl = document.getElementById('planMiniTitle');
   const subEl = document.getElementById('planMiniSub');
+  const raceBadge = document.getElementById('raceCountdownBadge');
   if (!titleEl) return;
+
+  // Race date — a distinct field from the plan's own endDate/checkpoints
+  // (see plan.html's saveRaceDate() comment for the full reasoning).
+  // Reuses the SAME active-plan fetch below (no extra network call) —
+  // this card already has the plan object in hand once loaded. Hidden
+  // entirely once the race date is in the past: this is a daily-glance
+  // dashboard card, not a history view (plan.html's own race-date field
+  // still shows "Race day was <date>" if the user visits Plan directly
+  // afterward — see its raceCountdownLabel()).
+  function renderRaceBadge(active) {
+    if (!raceBadge) return;
+    const raceDate = active && active.raceDate;
+    if (!raceDate) { raceBadge.style.display = 'none'; return; }
+    const todayK = (typeof DayLib !== 'undefined') ? DayLib.effectiveDateKey() : new Date().toISOString().slice(0, 10);
+    const days = Math.round((new Date(raceDate + 'T00:00:00') - new Date(todayK + 'T00:00:00')) / 86400000);
+    raceBadge.classList.remove('is-race-day', 'is-past');
+    if (days > 1) {
+      raceBadge.textContent = days + ' days until your race';
+    } else if (days === 1) {
+      raceBadge.textContent = '1 day until your race';
+    } else if (days === 0) {
+      raceBadge.textContent = 'Race day! 🏁';
+      raceBadge.classList.add('is-race-day');
+    } else {
+      raceBadge.style.display = 'none';
+      return;
+    }
+    raceBadge.style.display = 'flex';
+  }
 
   async function load() {
     const secret = getSecret();
@@ -3363,6 +3413,7 @@ document.addEventListener('DOMContentLoaded', function () {
       if (j && j.ok && Array.isArray(j.plans)) plans = j.plans;
     } catch (e) {}
     const active = plans.find((p) => p.status === 'active');
+    renderRaceBadge(active);
     if (!active) {
       titleEl.textContent = 'No active plan';
       subEl.textContent = 'Tap to start one via chat →';

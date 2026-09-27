@@ -527,6 +527,14 @@ export default async function handler(req, res) {
             if (patch.status !== undefined && !['active', 'completed', 'abandoned'].includes(patch.status)) {
               return res.status(400).json({ error: 'patch.status must be one of: active, completed, abandoned' });
             }
+            // raceDate — a distinct field from the plan's own endDate/
+            // checkpoints (see plan.html's saveRaceDate() comment for
+            // why), purely additive: null/undefined clears it (plan.html
+            // sends null when the date input is cleared), otherwise must
+            // be a real YYYY-MM-DD.
+            if (patch.raceDate !== undefined && patch.raceDate !== null && !DATE_RE.test(patch.raceDate)) {
+              return res.status(400).json({ error: 'patch.raceDate must be YYYY-MM-DD or null' });
+            }
             const updated = await updatePlan(id, patch);
             if (!updated) return res.status(404).json({ error: 'plan not found' });
             return res.status(200).json({ ok: true, plan: updated });

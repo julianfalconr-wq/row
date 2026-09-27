@@ -209,6 +209,19 @@ body::after {
 .plan-checkpoint-week { font-size: 10.5px; color: var(--text-tertiary); margin-top: 1px; }
 .plan-checkpoint-val { font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); flex-shrink: 0; white-space: nowrap; }
 
+.plan-race-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  margin-top: 14px; padding: 10px 12px; background: var(--inset-bg);
+  border: 1px solid var(--line); border-radius: 10px;
+}
+.plan-race-label { font-size: 12.5px; font-weight: 600; color: var(--text-secondary); }
+.plan-race-sub { display: block; font-size: 11px; font-weight: 700; color: var(--success); margin-top: 2px; font-family: var(--font-mono); }
+.plan-race-input {
+  background: var(--surface-1); border: 1px solid var(--line); color: var(--text-primary);
+  font-family: inherit; font-size: 13px; padding: 7px 9px; border-radius: 8px; outline: none;
+  color-scheme: dark;
+}
+
 .plan-actions { display: flex; gap: 8px; margin-top: 20px; flex-wrap: wrap; }
 .plan-action-btn {
   padding: 9px 14px; border-radius: 10px; border: 1px solid var(--line);
@@ -325,6 +338,14 @@ body::after {
   <div id="planActive" class="plan-card" style="display:none">
     <div class="plan-goal-desc" id="planGoalDesc"></div>
     <div class="plan-goal-meta" id="planGoalMeta"></div>
+
+    <!-- Race date — a distinct field from the plan's own endDate/
+         checkpoints (see saveRaceDate()'s own comment for why it's
+         kept separate rather than reusing endDate). Purely optional. -->
+    <div class="plan-race-row">
+      <span class="plan-race-label">Race date<span class="plan-race-sub" id="planRaceSub"></span></span>
+      <input type="date" id="planRaceDateInput" class="plan-race-input">
+    </div>
 
     <div class="plan-progress-row">
       <div class="plan-progress-num" id="planProgressNum">—</div>
@@ -616,6 +637,40 @@ document.addEventListener('DOMContentLoaded', function () {
       return !!(j && j.ok);
     } catch (e) { return false; }
   }
+  // A race date is a distinct concept from the plan's own endDate — the
+  // plan's checkpoints/endDate track a TRAINING goal (e.g. "gain 3kg",
+  // "run a 10K in under 50min") on its own schedule, which doesn't
+  // necessarily land on the same day as the actual race. Reuses the
+  // exact same generic resource=plans update/patch endpoint as
+  // updatePlanStatus above (a plain shallow merge server-side — see
+  // api/sync-state.js's updatePlan(), confirmed before wiring this: it
+  // never touches any field not present in the patch), so this needed
+  // zero server-side schema changes beyond the raceDate format check
+  // added there.
+  async function saveRaceDate(id, raceDate) {
+    const secret = getSecret();
+    if (!secret) return false;
+    try {
+      const r = await fetch('/api/sync-state?resource=plans&secret=' + encodeURIComponent(secret), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'update', id, patch: { raceDate } }),
+      });
+      const j = await r.json();
+      return !!(j && j.ok);
+    } catch (e) { return false; }
+  }
+  // Shared with main.html's own countdown badge — kept in sync by
+  // hand per this project's established per-page small-duplication
+  // convention (see e.g. trends.html's own date-helpers header
+  // comment). daysUntil > 0: upcoming: 0: race day; < 0: already past.
+  function raceCountdownLabel(raceDate, todayKeyStr) {
+    if (!raceDate) return null;
+    const days = Math.round((DayLib.parseDateKey(raceDate) - DayLib.parseDateKey(todayKeyStr)) / 86400000);
+    if (days > 1) return { days, text: days + ' days until your race' };
+    if (days === 1) return { days, text: '1 day until your race' };
+    if (days === 0) return { days, text: 'Race day! 🏁' };
+    return { days, text: 'Race day was ' + shortLabel(raceDate) };
+  }
   async function fetchActivityTypes() {
     const secret = getSecret();
     const fallback = [{ id: 'running', name: 'Running', unit: 'km', unitKind: 'distance', recommendable: true }];
@@ -663,6 +718,25 @@ document.addEventListener('DOMContentLoaded', function () {
       : (plan.goalType === 'strength_pr' && plan.goalExerciseName) ? (' · "' + plan.goalExerciseName + '" (not matched to a configured exercise — showing checkpoints only)')
       : '';
     $('planGoalMeta').textContent = startLabel + ' → ' + endLabel + extra;
+
+    const raceDateInput = $('planRaceDateInput');
+    raceDateInput.value = plan.raceDate || '';
+    const raceLabel = raceCountdownLabel(plan.raceDate, todayK);
+    $('planRaceSub').textContent = raceLabel ? raceLabel.text : '';
+    raceDateInput.onchange = async () => {
+      const val = raceDateInput.value || null; // clearing the input removes the race date
+      raceDateInput.disabled = true;
+      const ok = await saveRaceDate(plan.id, val);
+      raceDateInput.disabled = false;
+      if (ok) {
+        plan.raceDate = val;
+        const updated = raceCountdownLabel(val, todayKey());
+        $('planRaceSub').textContent = updated ? updated.text : '';
+      } else {
+        raceDateInput.value = plan.raceDate || ''; // revert on failure
+        alert("Couldn't save race date — try again.");
+      }
+    };
 
     // Progress number + bar — the most recent actual value available
     // (weight/strength: as of today; running: this week's total so
