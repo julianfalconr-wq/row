@@ -524,12 +524,30 @@ document.addEventListener('DOMContentLoaded', function () {
     const habitLoggedCount = habitData.filter((v) => v != null).length;
     $('habitsTrendSub').textContent = habitLoggedCount ? (habitLoggedCount + ' of ' + dates.length + ' days logged') : 'No habits logged in this range';
 
+    // Pain/discomfort (habits.html's own nightly check-in, stored under
+    // entriesByDate[date]._pain — see that page's own header comment on
+    // this reserved key) — purely informational, never scored, but real
+    // signal for Find Patterns to correlate against training load. Reuses
+    // the SAME entriesByDate this function already fetched above for the
+    // score chart, so this adds zero network calls of its own. Only
+    // days with an explicit hasPain:true entry are included (matching
+    // this whole feature's "real points only, nulls dropped" convention
+    // — a day with no entry, or an explicit "No pain", carries no signal
+    // worth sending to the model either way).
+    const painData = Object.keys(entriesByDate)
+      .filter((dk) => dk >= fromKey && dk <= toKey && entriesByDate[dk] && entriesByDate[dk]._pain && entriesByDate[dk]._pain.hasPain === true)
+      .sort()
+      .map((dk) => {
+        const p = entriesByDate[dk]._pain;
+        return { date: dk, area: (p.area === 'Other' && p.otherArea) ? p.otherArea : p.area, severity: p.severity };
+      });
+
     // Returned (in addition to the existing renderChart/sub-label side
     // effects above, both unchanged) so "Find Patterns" can reuse this
     // exact computation instead of re-deriving it — see that feature's
     // own comment near loadAll(). dates/data/habitData are already
     // aligned 1:1, exactly as rendered.
-    return { dates, scoreData: data, habitData };
+    return { dates, scoreData: data, habitData, painData };
   }
 
   // =============================================================
@@ -954,6 +972,7 @@ document.addEventListener('DOMContentLoaded', function () {
           distance: activities.distance,
           pace: activities.pace,
         },
+        pain: score.painData,
       };
       const r = await fetch('/api/training?mode=find-patterns&secret=' + encodeURIComponent(secret), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },

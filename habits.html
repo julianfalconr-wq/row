@@ -229,6 +229,21 @@ body::after {
   background: var(--inset-bg); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px;
 }
 
+/* pain/discomfort — purely informational, reuses .entry-btn/.hf-input
+   for the same visual language as the habit rows above rather than
+   introducing a new button style. */
+.pain-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 11px 0 0;
+}
+.pain-row-label { font-size: 13.5px; color: var(--text-primary); }
+.pain-row-label small { display: block; font-size: 10.5px; color: var(--text-tertiary); font-weight: 400; margin-top: 2px; }
+.pain-toggle { display: flex; gap: 6px; flex-shrink: 0; }
+.pain-detail { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line-soft); display: flex; flex-direction: column; gap: 12px; }
+.pain-field-label { font-size: 10.5px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-tertiary); margin-bottom: 6px; }
+.pain-severity-row { display: flex; gap: 6px; }
+.pain-severity-btn { flex: 1; }
+
 /* habit list editor */
 .habit-config-row {
   display: flex; align-items: center; gap: 8px;
@@ -390,6 +405,11 @@ body::after {
     <div class="section-title" id="entrySectionTitle">Today's Habits</div>
     <div class="gm-card">
       <div id="nightlyEntryList"></div>
+      <!-- Pain/discomfort — purely informational health tracking, NOT
+           part of the point-scoring habit system (see renderPainEntry()/
+           the Save handler's own comments below for why it lives in the
+           same entries blob but is never touched by scoreManualHabitsForDate). -->
+      <div id="painEntryWrap"></div>
       <div class="save-btn-row">
         <button type="button" class="save-btn" id="nightlyEntrySaveBtn">Save</button>
         <span class="save-confirm" id="nightlyEntryConfirm">Saved ✓</span>
@@ -805,6 +825,97 @@ document.addEventListener('DOMContentLoaded', function () {
         else if (btn.dataset.v === 'dec') input.value = String(Math.max(0, cur - 1));
       });
     });
+    renderPainEntry();
+  }
+
+  // ---------- pain/discomfort (health tracking, NOT scored) ----------
+  // Reuses daily_habits' existing date-keyed entries blob (see
+  // saveDailyHabits above) under a reserved "_pain" key, rather than a
+  // new table/resource — habit ids are always either the fixed seed
+  // ids (sleep_wake, no_fap, ...) or "custom_<timestamp>_<random>" (see
+  // the habit editor's save handler), so "_pain" can never collide
+  // with a real habit id. scoreManualHabitsForDate/weekOccurrenceCount
+  // (score-lib.js) only ever iterate habitConfig.habits and index into
+  // an entry by habit.id, so this key is simply never visited by the
+  // scoring path — confirmed by reading that code, not assumed. This
+  // is intentionally the ONLY new storage this feature needed.
+  const PAIN_AREAS = ['Knee', 'Ankle', 'Shin', 'Hip', 'Shoulder', 'Lower back', 'Other'];
+  // draft (optional): an in-progress _pain record to render instead of
+  // the last-saved one — used only while the user is actively toggling
+  // within THIS render cycle (see the click handler below), never
+  // written into entriesByDate. This matches the habit rows' own
+  // convention exactly: their DOM input values are the live draft,
+  // entriesByDate only gets updated once Save is actually clicked (see
+  // readPainEntryFromForm() below, used the same way the habit rows'
+  // own querySelectorAll('.entry-habit-controls') loop already is) —
+  // so navigating to another day and back without saving correctly
+  // shows the real last-saved value, not an abandoned draft.
+  function renderPainEntry(draft) {
+    const existing = draft !== undefined ? draft : ((entriesByDate[viewDateKey] || {})._pain || null);
+    const hasPain = existing ? existing.hasPain : null; // null = untouched, true/false = an explicit answer
+    const area = (existing && existing.area) || PAIN_AREAS[0];
+    const otherArea = (existing && existing.otherArea) || '';
+    const severity = (existing && existing.severity) || 3;
+    const detailHtml = hasPain ? (
+      '<div class="pain-detail" id="painDetail">' +
+        '<div><div class="pain-field-label">Area</div>' +
+        '<select id="painArea" class="hf-input">' + PAIN_AREAS.map((a) => '<option value="' + escapeHtml(a) + '"' + (a === area ? ' selected' : '') + '>' + escapeHtml(a) + '</option>').join('') + '</select>' +
+        '<input type="text" id="painOtherArea" class="hf-input" placeholder="Describe the area" style="margin-top:8px;' + (area === 'Other' ? '' : 'display:none;') + '" value="' + escapeHtml(otherArea) + '"></div>' +
+        '<div><div class="pain-field-label">Severity</div>' +
+        '<div class="pain-severity-row" id="painSeverityRow">' +
+        [1, 2, 3, 4, 5].map((n) => '<button type="button" class="entry-btn pain-severity-btn' + (n === severity ? ' active' : '') + '" data-severity="' + n + '">' + n + '</button>').join('') +
+        '</div></div>' +
+      '</div>'
+    ) : '';
+    $('painEntryWrap').innerHTML =
+      '<div class="pain-row">' +
+        '<span class="pain-row-label">Any pain/discomfort today?<small>Purely informational — never affects your score</small></span>' +
+        '<div class="pain-toggle" id="painToggle">' +
+          '<button type="button" class="entry-btn' + (hasPain === false ? ' active' : '') + '" data-pain="no">No</button>' +
+          '<button type="button" class="entry-btn' + (hasPain === true ? ' active' : '') + '" data-pain="yes">Log pain</button>' +
+        '</div>' +
+      '</div>' + detailHtml;
+    $('painToggle').querySelectorAll('button').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        // Re-render with the new toggle state as a DRAFT (existing
+        // area/severity preserved if already filled in) so switching to
+        // "Log pain" reveals the detail fields immediately — nothing
+        // persisted anywhere until Save.
+        const wasYesAlready = hasPain === true;
+        const nextDraft = btn.dataset.pain === 'yes'
+          ? { hasPain: true, area: wasYesAlready ? area : PAIN_AREAS[0], otherArea: wasYesAlready ? otherArea : '', severity: wasYesAlready ? severity : 3 }
+          : { hasPain: false };
+        renderPainEntry(nextDraft);
+      });
+    });
+    if (hasPain) {
+      $('painArea').addEventListener('change', () => {
+        $('painOtherArea').style.display = $('painArea').value === 'Other' ? '' : 'none';
+      });
+      $('painSeverityRow').addEventListener('click', (e) => {
+        const btn = e.target.closest('button');
+        if (!btn) return;
+        $('painSeverityRow').querySelectorAll('button').forEach((b) => b.classList.remove('active'));
+        btn.classList.add('active');
+      });
+    }
+  }
+  // Reads the pain section's current DOM state at Save time — same
+  // pattern the habit rows below use (their own querySelectorAll loop
+  // right below this). Returns undefined (key omitted entirely, same
+  // "unlogged" convention as an unanswered habit) if the toggle was
+  // never touched this session AND nothing was previously saved.
+  function readPainEntryFromForm() {
+    const toggle = $('painToggle');
+    if (!toggle) return undefined;
+    const active = toggle.querySelector('button.active');
+    if (!active) return (entriesByDate[viewDateKey] || {})._pain || undefined;
+    if (active.dataset.pain === 'no') return { hasPain: false };
+    const area = $('painArea') ? $('painArea').value : PAIN_AREAS[0];
+    const otherArea = $('painOtherArea') ? $('painOtherArea').value.trim() : '';
+    const severityBtn = $('painSeverityRow') ? $('painSeverityRow').querySelector('button.active') : null;
+    const severity = severityBtn ? Number(severityBtn.dataset.severity) : 3;
+    return { hasPain: true, area, otherArea: area === 'Other' ? otherArea : '', severity };
   }
   $('nightlyEntrySaveBtn').addEventListener('click', async () => {
     const entries = {};
@@ -816,6 +927,8 @@ document.addEventListener('DOMContentLoaded', function () {
       if (!input || input.value === '') return; // left unanswered — stays "unlogged"
       entries[habitId] = { value: Number(input.value) || 0 };
     });
+    const pain = readPainEntryFromForm();
+    if (pain !== undefined) entries._pain = pain;
     const btn = $('nightlyEntrySaveBtn');
     btn.disabled = true;
     try {

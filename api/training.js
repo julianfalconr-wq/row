@@ -1030,6 +1030,22 @@ function sanitizeActivitySeries(raw, valueKey) {
     .filter((e) => e && typeof e.date === 'string' && FIND_PATTERNS_DATE_RE.test(e.date) && typeof e[valueKey] === 'number' && isFinite(e[valueKey]))
     .map((e) => ({ date: e.date, [valueKey]: Math.round(e[valueKey] * 100) / 100 }));
 }
+// Pain/discomfort — habits.html's own nightly check-in (purely
+// informational health tracking, never scored — see that page's own
+// header comment on the reserved entries._pain key). find-patterns
+// only, not weekly-review — this wasn't asked for there, and adding it
+// unrequested to a second prompt is scope creep this file's own
+// established discipline (see every other mode's own narrow, explicit
+// inputs) argues against. area is free text capped at 40 chars (the
+// client sends one of a fixed preset or a short "Other" description,
+// but nothing here assumes which), severity is clamped to 1-5 — the
+// client's own scale — rather than trusting whatever number arrives.
+function sanitizePainSeries(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw.slice(0, 200)
+    .filter((e) => e && typeof e.date === 'string' && FIND_PATTERNS_DATE_RE.test(e.date) && typeof e.area === 'string' && e.area.trim())
+    .map((e) => ({ date: e.date, area: e.area.trim().slice(0, 40), severity: Math.max(1, Math.min(5, Math.round(numOrNull(e.severity) || 1))) }));
+}
 
 // totalPoints across every domain — the honesty instructions below
 // are calibrated against this, not just the date range, since a wide
@@ -1044,9 +1060,16 @@ function buildFindPatternsSystemPrompt(days, totalPoints) {
     'its own slice of this. This is exploratory analysis of the user\'s OWN real logged numbers, not general ' +
     'health advice — never suggest what they should do, only report what the data itself actually shows.\n\n' +
     'You will receive several series, each as a list of {date, value} (or {weekStart, sessions} for ' +
-    'strength, {date, km}/{date, minPerKm} for activities) — ONLY real logged points are included (no ' +
-    'nulls/gaps), so a short list for a given domain means that domain simply doesn\'t have much real data ' +
-    'in this range, not that you should fill in the blanks.\n\n' +
+    'strength, {date, km}/{date, minPerKm} for activities, {date, area, severity 1-5} for pain/discomfort) — ' +
+    'ONLY real logged points are included (no nulls/gaps), so a short list for a given domain means that ' +
+    'domain simply doesn\'t have much real data in this range, not that you should fill in the blanks. ' +
+    'pain is a genuinely different kind of signal from the rest — a day with NO entry in it is NOT "no pain ' +
+    'confirmed", just nothing logged (the user only logs it when something\'s actually bothering them), so ' +
+    'never treat its absence as evidence of anything; only ever reason from the pain days that ARE present, ' +
+    'e.g. correlating them against training load/volume, WHOOP recovery, or which specific activity type was ' +
+    'logged on/around that date — a real overuse-injury-relevant pattern here (e.g. "3 of your 4 logged knee ' +
+    'pain days followed a long run the day before") is exactly the kind of cross-domain finding this feature ' +
+    'exists for.\n\n' +
     'CRITICAL — DO NOT FABRICATE: only report a correlation you can point to SPECIFIC real numbers and ' +
     'dates for, from the data actually given to you. Every finding must cite at least one real number/date ' +
     'from the input (e.g. "your 3 highest-recovery days this range (82%, 79%, 77%) were all days you also ' +
@@ -1107,13 +1130,15 @@ async function handleFindPatterns(req, res, apiKey, body) {
       distance: sanitizeActivitySeries(activities.distance, 'km'),
       pace: sanitizeActivitySeries(activities.pace, 'minPerKm'),
     },
+    pain: sanitizePainSeries(body.pain),
   };
 
   const totalPoints = context.score.length + context.habits.length + context.weight.length
     + context.nutrition.protein.length + context.nutrition.calories.length
     + context.whoop.recovery.length + context.whoop.sleep.length
     + context.strength.reduce((s, w) => s + (w.sessions > 0 ? 1 : 0), 0)
-    + context.activities.distance.length + context.activities.pace.length;
+    + context.activities.distance.length + context.activities.pace.length
+    + context.pain.length;
 
   // This is genuinely open-ended cross-domain reasoning over up to ~10
   // series at once (not a single-field lookup like handleToday's), so
