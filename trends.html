@@ -64,7 +64,6 @@
   --btn-primary-a: #FFFFFF;
   --btn-primary-b: #E8E5DD;
   --btn-primary-text: #0A0A0B;
-  --glow-opacity: 1;
   --font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
@@ -83,7 +82,6 @@
   --btn-primary-a: #141416;
   --btn-primary-b: #2B2A30;
   --btn-primary-text: #FAFAFA;
-  --glow-opacity: 0.35;
 }
 * { box-sizing: border-box; }
 html, body {
@@ -102,31 +100,8 @@ body {
   overflow-x: hidden;
   padding: max(28px, env(safe-area-inset-top)) 20px 60px;
 }
-body::before {
-  content: '';
-  position: fixed; inset: 0;
-  background:
-    radial-gradient(circle at 82% 14%, rgba(23, 232, 143, 0.14), transparent 45%),
-    radial-gradient(circle at 18% 90%, rgba(180, 180, 200, 0.06), transparent 50%);
-  filter: blur(40px);
-  opacity: var(--glow-opacity);
-  pointer-events: none;
-  z-index: -2;
-  animation: drift 36s ease-in-out infinite alternate;
-}
-body::after {
-  content: '';
-  position: fixed; inset: 0;
-  background-image: radial-gradient(rgba(255,255,255,0.014) 1px, transparent 1px);
-  background-size: 3px 3px;
-  opacity: var(--glow-opacity);
-  pointer-events: none;
-  z-index: -1;
-}
-@keyframes drift {
-  0%   { transform: translate3d(0,0,0); }
-  100% { transform: translate3d(-22px, 14px, 0); }
-}
+/* Ambient background glow now lives in topbar.js (shared across every
+   page) so it's not maintained as N independently-drifting copies. */
 
 .page { max-width: 1100px; margin: 0 auto; }
 

@@ -439,6 +439,47 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
 }
 `;
 
+  // Ambient background glow — was previously copy-pasted per page (main.html,
+  // habits.html, trends.html, health.html, finance.html), each copy having
+  // drifted slightly out of sync with the others (a missing animation here,
+  // a different accent color there, mismatched z-index layering). gym.html,
+  // po-water.html and cronometer.html never had it at all. Consolidated here
+  // as the single shared version (main.html's own, the most complete/correct
+  // of the copies — proper z-index stacking, animated drift) so every page
+  // gets the same glow. Kept as literal values, same reasoning as `css`
+  // above: not every page defines the CSS variables the old per-page
+  // versions relied on (health.html used --accent-glow, others used
+  // --glow-opacity, gym.html/po-water.html/cronometer.html defined neither).
+  const glowCss = `
+body::before {
+  content: '';
+  position: fixed; inset: 0;
+  background:
+    radial-gradient(circle at 82% 14%, rgba(23, 232, 143, 0.14), transparent 45%),
+    radial-gradient(circle at 18% 90%, rgba(180, 180, 200, 0.06), transparent 50%);
+  filter: blur(40px);
+  opacity: 1;
+  pointer-events: none;
+  z-index: -2;
+  animation: row-glow-drift 36s ease-in-out infinite alternate;
+}
+body::after {
+  content: '';
+  position: fixed; inset: 0;
+  background-image: radial-gradient(rgba(255,255,255,0.014) 1px, transparent 1px);
+  background-size: 3px 3px;
+  opacity: 1;
+  pointer-events: none;
+  z-index: -1;
+}
+html[data-theme="light"] body::before,
+html[data-theme="light"] body::after { opacity: 0.35; }
+@keyframes row-glow-drift {
+  0%   { transform: translate3d(0,0,0); }
+  100% { transform: translate3d(-22px, 14px, 0); }
+}
+`;
+
   const topbarHtml = `
 <header class="topbar" id="topbar" role="navigation" aria-label="Quick actions">
   <div class="topbar-water-wrap">
@@ -574,6 +615,19 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
     const style = document.createElement('style');
     style.id = 'topbar-style';
     style.textContent = css;
+    document.head.appendChild(style);
+  }
+
+  // Skipped inside iframes (the embedded water tracker) — that page never
+  // had a full-viewport ambient glow behind it even standalone, and a
+  // `position: fixed` glow inside a small embedded widget would just look
+  // like a stray colored smear rather than the intended full-page effect.
+  function injectGlowStyle() {
+    if (isEmbedded()) return;
+    if (document.getElementById('topbar-glow-style')) return;
+    const style = document.createElement('style');
+    style.id = 'topbar-glow-style';
+    style.textContent = glowCss;
     document.head.appendChild(style);
   }
 
@@ -2831,6 +2885,7 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
 
   function boot() {
     injectStyle();
+    injectGlowStyle();
     injectChrome();
     injectChat();
     applyChatVisibility();

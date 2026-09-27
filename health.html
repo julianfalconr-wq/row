@@ -102,24 +102,8 @@ body { min-height: 100vh; position: relative; overflow-x: hidden; }
   input, textarea, select { font-size: 16px !important; }
 }
 
-body::before {
-  content: ''; position: fixed; inset: 0;
-  background:
-    radial-gradient(60% 50% at 82% 14%, rgba(224, 118, 88, 0.16) 0%, transparent 60%),
-    radial-gradient(50% 40% at 18% 90%, rgba(180, 180, 200, 0.06) 0%, transparent 60%);
-  filter: blur(40px);
-  opacity: 1;
-  pointer-events: none; z-index: 0;
-  animation: drift 36s ease-in-out infinite alternate;
-}
-html[data-theme="light"] body::before { opacity: 0.35; }
-body::after {
-  content: ''; position: fixed; inset: 0;
-  background-image: radial-gradient(rgba(255,255,255,0.014) 1px, transparent 1px);
-  background-size: 3px 3px;
-  pointer-events: none; z-index: 1;
-}
-@keyframes drift { 0% { transform: translate(0, 0); } 100% { transform: translate(-2%, 2%); } }
+/* Ambient background glow now lives in topbar.js (shared across every
+   page) so it's not maintained as N independently-drifting copies. */
 
 main {
   position: relative; z-index: 2;

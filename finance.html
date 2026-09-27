@@ -89,31 +89,8 @@ html, body {
   min-height: 100%;
 }
 
-/* Backdrop — black with subtle warm + cool washes */
-body::before {
-  content: '';
-  position: fixed;
-  inset: -10%;
-  z-index: -2;
-  background:
-    radial-gradient(60% 45% at 82% 14%, rgba(224, 118, 88, 0.16) 0%, transparent 55%),
-    radial-gradient(55% 45% at 18% 90%, rgba(180, 180, 200, 0.06) 0%, transparent 55%),
-    linear-gradient(180deg, #0A0A0B 0%, #050506 100%);
-  filter: blur(40px) saturate(1.05);
-  opacity: 1;
-  pointer-events: none;
-}
-html[data-theme="light"] body::before { opacity: 0.35; }
-body::after {
-  content: '';
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  background-image: radial-gradient(rgba(255,255,255,0.014) 1px, transparent 1px);
-  background-size: 3px 3px;
-  opacity: 0.7;
-  pointer-events: none;
-}
+/* Ambient background glow now lives in topbar.js (shared across every
+   page) so it's not maintained as N independently-drifting copies. */
 
 .shell {
   max-width: 880px;
