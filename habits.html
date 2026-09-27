@@ -840,10 +840,19 @@ document.addEventListener('DOMContentLoaded', function () {
   // path, just a longer range through the same functions.
   const CONSISTENCY_DAYS = 30;
   const consistencyFromKey = addDaysKey(todayActive, -(CONSISTENCY_DAYS - 1));
+  // dayStatus() below now calls ScoreLib.scoreManualHabitsForDate, whose
+  // weeklyCap branch counts occurrences since that DAY'S OWN Monday
+  // (weekOccurrenceCount) to apply the forgiveness allowance correctly
+  // — for the grid's own first few days, that week's Monday can fall
+  // BEFORE consistencyFromKey if it doesn't land on a Monday itself, so
+  // the fetch starts from THAT Monday instead, not consistencyFromKey
+  // directly, so the forgiveness count is never short a day of real
+  // data at the edge of the grid.
+  const consistencyFetchFromKey = mondayOfKey(consistencyFromKey);
   async function ensureConsistencyDataLoaded() {
-    const fetched = await fetchDailyHabitsRange(consistencyFromKey, todayActive);
+    const fetched = await fetchDailyHabitsRange(consistencyFetchFromKey, todayActive);
     Object.assign(entriesByDate, fetched);
-    markFetched(consistencyFromKey, todayActive);
+    markFetched(consistencyFetchFromKey, todayActive);
   }
   // Stable per-habit accent, derived from the habit's own id so it
   // never changes across renders/reloads without needing a new stored
@@ -855,16 +864,40 @@ document.addEventListener('DOMContentLoaded', function () {
     for (let i = 0; i < s.length; i++) hash = (hash * 31 + s.charCodeAt(i)) >>> 0;
     return CONSISTENCY_PALETTE[hash % CONSISTENCY_PALETTE.length];
   }
-  // Same fraction rule as everywhere else on this page
-  // (manualHabitFraction / scoreManualHabitsForDate): 'na' if the day
-  // was explicitly marked N/A, 'done' if it hit its daily goal,
-  // 'empty' otherwise — including no entry at all, which reads the
-  // same as a logged miss (there's no 4th "unknown" state in the spec).
+  // 'na' if the day was explicitly marked N/A, 'done' if the day
+  // scored full points, 'empty' otherwise — including no entry at all,
+  // which reads the same as a logged miss (there's no 4th "unknown"
+  // state in the spec). Routed through ScoreLib.scoreManualHabitsForDate
+  // itself (a single-habit habitConfig) rather than calling
+  // manualHabitFraction directly — that direct call used to be wrong
+  // for a weeklyCap/zeroTolerance Quit habit the exact same way the
+  // main score was, before that got fixed via score-lib.js: it read
+  // "hit dailyGoal" (a Build-habit concept) instead of "did the bad
+  // thing happen, and if so is it still within this week's forgiven
+  // allowance" — a "No fap" day within its weeklyCap's allowedPerWeek
+  // showed as a broken streak, and (via the 0-is-falsy dailyGoal
+  // fallback) an actual slip could show as a streak day. Reusing the
+  // real scoring function means dayStatus automatically stays correct
+  // for every habit type, present and future, with zero duplicated
+  // logic.
+  //
+  // Checks earnedPts >= points, NOT status === 'ok' — a weeklyCap day
+  // that's still within that week's forgiven allowance DOES earn full
+  // points (earnedPts === points) but scoreManualHabitsForDate labels
+  // its status 'partial' regardless of whether the day was actually
+  // reduced (that label only distinguishes "some occurrence logged"
+  // from "abstained", not "forgiven" from "genuinely over cap") —
+  // confirmed live: a forgiven day returned earnedPts:15/points:15
+  // with status:'partial', which a status-string check would have
+  // wrongly treated as a streak break. earnedPts is the actual number
+  // the score awarded that day, which is what a streak should track.
   function dayStatus(habit, dateKey) {
     const e = entriesByDate[dateKey] && entriesByDate[dateKey][habit.id];
     if (e && e.na === true) return 'na';
-    if (e && ScoreLib.manualHabitFraction(habit, e.value) >= 1) return 'done';
-    return 'empty';
+    if (!e) return 'empty';
+    const result = ScoreLib.scoreManualHabitsForDate({ habits: [habit] }, entriesByDate, dateKey, mondayOfKey(dateKey));
+    const entry = result.breakdown[0];
+    return (entry && entry.points > 0 && entry.earnedPts >= entry.points) ? 'done' : 'empty';
   }
   // N/A days are skip-neutral for both streaks: they neither extend
   // nor break a run, and they're excluded from the completion-%
