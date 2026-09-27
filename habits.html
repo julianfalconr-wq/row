@@ -685,20 +685,21 @@ document.addEventListener('DOMContentLoaded', function () {
       default: return v >= t;
     }
   }
-  // Takes the habit itself now (not just its id) — needs dailyGoal to
-  // judge "occurred" the same fraction-based way manualHabitFraction
-  // does, since entries can now be either a legacy boolean (true/false,
-  // from before this migration) or a new number typed into the unified
-  // stepper. Falling short of dailyGoal (fraction < 1) is "occurred"
-  // either way: Number(false)=0 -> 0/1=0 -> <1; Number(true)=1 -> 1/1=1
-  // -> not <1; a new "0" entry -> 0/1=0 -> <1 — all three read as
-  // intended without special-casing which format a given day's entry
-  // happens to be in.
+  // Only ever called for a weeklyCap-configured Quit habit (e.g. "No
+  // fap") — "occurred" here means the bad behavior happened that day,
+  // a plain Number(entryVal) > 0 check, completely independent of
+  // dailyGoal. See main.html's identical copy for the full reasoning:
+  // this used to go through manualHabitFraction (entryVal / dailyGoal),
+  // which inverted the result once a weeklyCap habit's dailyGoal could
+  // legitimately be 0 — confirmed live to exactly match reported
+  // backwards scoring (logging 0/abstained penalized, logging 1/slipped
+  // scored full points). Still correctly handles a legacy boolean
+  // entry: Number(true)=1 (occurred), Number(false)=0 (abstained).
   function weekOccurrenceCount(habit, entriesByDate, fromKey, toKey) {
     let n = 0;
     datesFromTo(fromKey, toKey).forEach((k) => {
       const e = entriesByDate[k] && entriesByDate[k][habit.id];
-      if (e && e.na !== true && manualHabitFraction(habit, e.value) < 1) n++;
+      if (e && e.na !== true && Number(e.value) > 0) n++;
     });
     return n;
   }
@@ -721,18 +722,27 @@ document.addEventListener('DOMContentLoaded', function () {
       if (advanced && advanced.weeklyCap) {
         const cfg = advanced.weeklyCap;
         possible += h.points;
-        // "Abstained today" = hit the daily goal (fraction 1), same
-        // fraction check as everywhere else — handles both a legacy
-        // boolean {value:true} and a new numeric {value:1} entry.
-        if (manualHabitFraction(h, e.value) >= 1) { earned += h.points; return; }
+        // Raw value check, not manualHabitFraction/dailyGoal — see
+        // weekOccurrenceCount's own comment above for why.
+        if (Number(e.value) <= 0) { earned += h.points; return; }
         const countThroughToday = weekOccurrenceCount(h, entriesByDate, weekMondayActiveKey, dateActiveKey);
         const over = Math.max(0, countThroughToday - (cfg.allowedPerWeek || 0));
         earned += Math.max(0, h.points - over * (cfg.dailyPenalty || 0));
         return;
       }
+      // Same class of bug as weeklyCap above — see main.html's identical
+      // copy for the full reasoning. zeroTolerance is a full-loss-on-any-
+      // occurrence rule, not a fractional goal, so it needs the direct
+      // Number(e.value) > 0 check instead of manualHabitFraction.
+      if (advanced && advanced.zeroTolerance) {
+        possible += h.points;
+        const violated = Number(e.value) > 0;
+        if (violated) { flags.push(h.name); return; }
+        earned += h.points;
+        return;
+      }
       const frac = manualHabitFraction(h, e.value);
       earned += frac * h.points; possible += h.points;
-      if (advanced && advanced.zeroTolerance && frac === 0) flags.push(h.name);
     });
     return { earned, possible, flags };
   }

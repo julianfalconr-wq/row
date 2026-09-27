@@ -3903,20 +3903,27 @@ document.addEventListener('DOMContentLoaded', function () {
       return { sleep: { available: false }, recovery: { available: false } };
     }
   }
-  // Takes the habit itself now (not just its id) — needs dailyGoal to
-  // judge "occurred" the same fraction-based way manualHabitFraction
-  // does, since entries can now be either a legacy boolean (true/false,
-  // from before the Phase 1 migration) or a new number typed into the
-  // unified stepper. Falling short of dailyGoal (fraction < 1) is
-  // "occurred" either way: Number(false)=0 -> 0/1=0 -> <1; Number(true)
-  // =1 -> 1/1=1 -> not <1; a new "0" entry -> 0/1=0 -> <1 — all three
-  // read as intended without special-casing which format a given day's
-  // entry happens to be in.
+  // Only ever called for a weeklyCap-configured Quit habit (e.g. "No
+  // fap") — "occurred" here means the bad behavior happened that day,
+  // a plain Number(entryVal) > 0 check, completely independent of
+  // dailyGoal. This USED to go through manualHabitFraction (entryVal /
+  // dailyGoal), which was fine back when every habit's dailyGoal was
+  // forced to a minimum of 1 — but a weeklyCap habit's dailyGoal is
+  // meaningless (its real rule is "abstain, with N forgiven slips per
+  // week", not "reach a target amount"), and once Quit habits could
+  // save a real dailyGoal of 0 (see the habit-editor fix), dividing by
+  // it inverted the result entirely: logging 0 (abstained) computed
+  // fraction 0 (< 1, wrongly read as "occurred"), while logging 1 (an
+  // actual slip) computed fraction 1 via the 0-is-falsy "|| 1" divisor
+  // fallback (>= 1, wrongly read as "abstained") — confirmed live,
+  // this exactly matched the reported backwards scoring. Still
+  // correctly handles a legacy boolean entry: Number(true)=1 (occurred),
+  // Number(false)=0 (abstained).
   function weekOccurrenceCount(habit, entriesByDate, fromKey, toKey) {
     let n = 0;
     datesFromTo(fromKey, toKey).forEach((k) => {
       const e = entriesByDate[k] && entriesByDate[k][habit.id];
-      if (e && e.na !== true && manualHabitFraction(habit, e.value) < 1) n++;
+      if (e && e.na !== true && Number(e.value) > 0) n++;
     });
     return n;
   }
@@ -3944,7 +3951,10 @@ document.addEventListener('DOMContentLoaded', function () {
       if (advanced && advanced.weeklyCap) {
         const cfg = advanced.weeklyCap;
         possible += h.points;
-        if (manualHabitFraction(h, e.value) >= 1) { // abstained today (hit the daily goal — legacy boolean true or a new numeric entry, either way)
+        // Same reasoning as weekOccurrenceCount above — a raw value
+        // check, not manualHabitFraction/dailyGoal, which is meaningless
+        // for this combination and previously inverted the scoring.
+        if (Number(e.value) <= 0) { // abstained today
           earned += h.points;
           breakdown.push({ id: h.id, label: h.name, points: h.points, earnedPts: h.points, status: 'ok' });
         } else {
@@ -3957,12 +3967,31 @@ document.addEventListener('DOMContentLoaded', function () {
         return;
       }
 
+      // Same class of bug as weeklyCap above, found while regression-
+      // testing that fix: zeroTolerance is ALSO a Quit-type rule ("any
+      // occurrence at all is a violation"), so it needs the same direct
+      // Number(e.value) > 0 check instead of manualHabitFraction/
+      // dailyGoal — a "fraction" of a goal is meaningless here too, and
+      // scoring gradually (frac * points) is doubly wrong on top of
+      // that, since zero tolerance means a violation is a FULL loss of
+      // points that day, not a partial one. Confirmed live: logging 0
+      // (abstained) was being flagged as the violation and scored 0
+      // points, while logging 1 (an actual violation) scored full
+      // points — the exact mirror of the weeklyCap bug.
+      if (advanced && advanced.zeroTolerance) {
+        possible += h.points;
+        const violated = Number(e.value) > 0;
+        const pts = violated ? 0 : h.points;
+        earned += pts;
+        if (violated) flags.push(h.name);
+        breakdown.push({ id: h.id, label: h.name, points: h.points, earnedPts: pts, status: violated ? 'zero_tolerance_violation' : 'ok' });
+        return;
+      }
+
       const frac = manualHabitFraction(h, e.value);
       const pts = frac * h.points;
       earned += pts; possible += h.points;
-      const zt = !!(advanced && advanced.zeroTolerance) && frac === 0;
-      if (zt) flags.push(h.name);
-      breakdown.push({ id: h.id, label: h.name, points: h.points, earnedPts: pts, status: zt ? 'zero_tolerance_violation' : (pts >= h.points ? 'ok' : (pts <= 0 ? 'zero' : 'partial')) });
+      breakdown.push({ id: h.id, label: h.name, points: h.points, earnedPts: pts, status: pts >= h.points ? 'ok' : (pts <= 0 ? 'zero' : 'partial') });
     });
     return { earned, possible, breakdown, flags };
   }
