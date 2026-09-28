@@ -354,18 +354,37 @@ body { min-height: 100vh; position: relative; overflow-x: hidden; }
 .ru-ring--lg { width: 132px; height: 132px; }
 .ru-ring--lg .ru-ring-num { font-size: 30px; }
 
-/* ---- Buttons ---- */
+/* ---- Buttons ----
+   .save-btn matches the ONE real pre-redesign implementation exactly
+   (main.html/habits.html/index.html each had a byte-identical local
+   copy of this — padding, radius, font-size, the hover lift, all the
+   same; verified against the pre-redesign git tag). Width is
+   deliberately NOT 100% here: an earlier version of this rule set
+   width:100%, on the assumption a primary save/submit button should
+   default to full-width — but checked against the pre-redesign
+   baseline screenshot and none of the app's 7 real .save-btn
+   instances were ever full-width, including "Generate today's plan"
+   (confirmed auto-width in the Step-0 baseline capture, despite
+   looking plausible as a full-width CTA). That width:100% default was
+   this file's own mistake, not a real design requirement — it broke
+   the two instances that share a .save-btn-row with a sibling button
+   (main.html's "Create selected events"+Cancel, habits.html's
+   "Save"+Delete) by forcing them to compete for 100%-of-row space
+   each. Reverted to match the original; no modifier class was needed
+   once the actual default was corrected, since nothing in the app
+   ever wanted full-width in the first place. */
 .save-btn {
-  width: 100%; padding: 13px; border: none; border-radius: var(--radius-md);
+  padding: 11px 22px; border: none; border-radius: 12px;
   background: linear-gradient(180deg, var(--btn-primary-a), var(--btn-primary-b));
   color: var(--btn-primary-text);
-  font-family: inherit; font-size: var(--text-base); font-weight: 700;
+  font-family: inherit; font-size: 13px; font-weight: 700;
   cursor: pointer; -webkit-tap-highlight-color: transparent;
-  transition: transform var(--duration-fast) var(--ease-standard), opacity var(--duration-fast);
+  transition: transform var(--duration-fast) var(--ease-standard), filter var(--duration-fast);
 }
-.save-btn:active { transform: scale(0.98); }
+.save-btn:hover { filter: brightness(1.06); transform: translateY(-1px); }
+.save-btn:active { transform: translateY(0); }
 .save-btn:disabled { opacity: 0.5; cursor: default; }
-.save-btn-row { display: flex; gap: var(--space-3); }
+.save-btn-row { display: flex; align-items: center; gap: var(--space-3); }
 .btn-outline {
   padding: 11px 22px; border-radius: var(--radius-md); border: 1px solid var(--border-hairline);
   background: transparent; color: var(--text-secondary);

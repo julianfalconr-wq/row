@@ -178,16 +178,14 @@ body {
 .height-ftin { display: flex; gap: 8px; }
 .height-ftin input { flex: 1; }
 
-.save-btn-row { display: flex; align-items: center; gap: 12px; margin-top: 4px; }
-.save-btn {
-  padding: 11px 22px; border: 0; border-radius: 12px;
-  background: linear-gradient(180deg, var(--btn-primary-a) 0%, var(--btn-primary-b) 100%);
-  color: var(--btn-primary-text);
-  font-family: inherit; font-size: 13px; font-weight: 700; cursor: pointer;
-  transition: transform 0.1s, filter 0.15s;
-}
-.save-btn:hover { filter: brightness(1.06); transform: translateY(-1px); }
-.save-btn:active { transform: translateY(0); }
+/* .save-btn-row's own display/align/gap and .save-btn now come from
+   row-ui.css's shared rules (byte-identical to what was here — this
+   page's own copy was one of three duplicates of the exact same
+   pre-redesign implementation; the shared version also adds
+   :disabled handling this copy never had). margin-top:4px is real
+   page-specific spacing row-ui.css's shared row doesn't set, kept
+   local. */
+.save-btn-row { margin-top: 4px; }
 .save-confirm {
   font-size: 12.5px; font-weight: 700; color: var(--success);
   opacity: 0; transition: opacity 0.3s ease;
