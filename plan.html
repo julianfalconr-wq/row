@@ -6,14 +6,6 @@
      comment. Matches main.html/gym.html/trends.html's exact head
      ordering. -->
 <script src="lock.js"></script>
-<script>
-(function () {
-  try {
-    var t = localStorage.getItem('dashboard:theme');
-    if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
-  } catch (e) {}
-})();
-</script>
 <!-- Reached from main.html's new "Plan" card, not the bottom tab bar
      (see that card's own comment for why) — so this needs the shared
      topbar's back button. Must be set BEFORE topbar.js runs (see
@@ -39,48 +31,29 @@
      load — see trends.html's own comment on why this stays in sync
      deliberately. -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js" defer></script>
+<!-- row-charts.js: the one shared Chart.js styling helper — see its
+     own header comment / main.html-trends.html's <head> pattern. -->
+<script src="row-charts.js"></script>
+<!-- row-ui.css: the shared design system — see main.html's own <head>
+     comment (same pattern). Dark theme only; the theme-init script and
+     :root[data-theme="light"] block this replaced are both gone. -->
+<link rel="stylesheet" href="row-ui.css">
 <style>
-/* Design tokens copied verbatim from trends.html (itself copied from
-   main.html) — same scheme, so this page matches the rest of the app
-   rather than introducing a fourth. */
+/* Same alias approach as main.html/trends.html's migrations (identical
+   token set). --glow-opacity dropped entirely — a leftover from before
+   the ambient glow moved into topbar.js as a self-contained,
+   literal-value stylesheet; nothing reads this variable anymore. */
 :root {
-  --surface-1: #050506;
-  --surface-2: #121214;
-  --inset-bg: rgba(0,0,0,0.30);
-  --line: rgba(255,255,255,0.09);
-  --line-soft: rgba(255,255,255,0.06);
-  --text-primary: #FAFAFA;
-  --text-secondary: #A5A3A0;
-  --text-tertiary: #6E6C68;
-  --success: #17E88F;
-  --warning: #FFC93C;
-  --danger: #FF4D5E;
-  --shadow-card: 0 14px 34px rgba(0,0,0,0.45);
+  --surface-1: var(--bg-canvas);
+  --surface-2: var(--surface-card);
+  --inset-bg: var(--surface-inset);
+  --line: var(--border-hairline);
+  --line-soft: var(--border-soft);
+  --success: var(--accent-green);
+  --warning: var(--accent-amber);
+  --danger: var(--accent-coral);
   --title-grad-a: #FFFFFF;
   --title-grad-b: #C7C4BC;
-  --btn-primary-a: #FFFFFF;
-  --btn-primary-b: #E8E5DD;
-  --btn-primary-text: #0A0A0B;
-  --glow-opacity: 1;
-  --font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-}
-:root[data-theme="light"] {
-  --surface-1: #F3F3F1;
-  --surface-2: #FFFFFF;
-  --inset-bg: rgba(0,0,0,0.035);
-  --line: rgba(15,15,20,0.10);
-  --line-soft: rgba(15,15,20,0.07);
-  --text-primary: #141416;
-  --text-secondary: #55545C;
-  --text-tertiary: #8B8A90;
-  --shadow-card: 0 10px 26px rgba(20,20,26,0.08);
-  --title-grad-a: #141416;
-  --title-grad-b: #4A4952;
-  --btn-primary-a: #141416;
-  --btn-primary-b: #2B2A30;
-  --btn-primary-text: #FAFAFA;
-  --glow-opacity: 0.35;
 }
 * { box-sizing: border-box; }
 html, body {
@@ -109,31 +82,15 @@ body {
 @media (max-width: 480px) {
   input, textarea, select { font-size: 16px !important; }
 }
-body::before {
-  content: '';
-  position: fixed; inset: 0;
-  background:
-    radial-gradient(circle at 82% 14%, rgba(23, 232, 143, 0.14), transparent 45%),
-    radial-gradient(circle at 18% 90%, rgba(180, 180, 200, 0.06), transparent 50%);
-  filter: blur(40px);
-  opacity: var(--glow-opacity);
-  pointer-events: none;
-  z-index: -2;
-  animation: drift 36s ease-in-out infinite alternate;
-}
-body::after {
-  content: '';
-  position: fixed; inset: 0;
-  background-image: radial-gradient(rgba(255,255,255,0.014) 1px, transparent 1px);
-  background-size: 3px 3px;
-  opacity: var(--glow-opacity);
-  pointer-events: none;
-  z-index: -1;
-}
-@keyframes drift {
-  0%   { transform: translate3d(0,0,0); }
-  100% { transform: translate3d(-22px, 14px, 0); }
-}
+/* This page had its own body::before/::after glow, missed by the
+   earlier project-wide glow consolidation into topbar.js (that pass's
+   own page list didn't include plan.html) — and it was the exact
+   negative-z-index-pseudo-element approach later found to render
+   completely invisible on every page in production (silently painted
+   underneath body's own background — see topbar.js's own header
+   comment on the real fix). Removed entirely; topbar.js's shared,
+   verified-working glow (background-image layers on body itself)
+   already covers every page now, this one included. */
 
 .page { max-width: 720px; margin: 0 auto; }
 
@@ -547,70 +504,33 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
   // =============================================================
-  // Chart — same renderChart() shape/visual language as trends.html's
-  // own (line, tension 0.3, thin border, theme-aware, spanGaps:false
-  // so a real gap in logged data shows as a visible break, never
-  // bridged), reused directly for consistency rather than a new
-  // pattern for this one chart.
+  // Chart — delegates to row-charts.js's shared window.RowCharts.render,
+  // same as trends.html's own migration. animation:false was already
+  // this chart's own deliberate choice (see row-charts.js's header
+  // comment for the full reasoning, copied from here) and stays true
+  // now that it's the shared default. spanGaps:true on the dashed
+  // "Target" dataset is preserved via the new per-dataset ds.spanGaps
+  // override row-charts.js added specifically for this — a reference
+  // trajectory line, not logged data, so it should stay continuous
+  // even where a future week has no computed target yet.
   // =============================================================
   let chartInstance = null;
-  function themeColor(varName, fallback) {
-    const v = getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
-    return v || fallback;
-  }
   function renderPlanChart(labels, targetData, actualData) {
-    if (typeof window.Chart === 'undefined') return; // CDN failed to load — chart just doesn't render, no fake fallback
     const canvas = $('planChart');
     if (!canvas) return;
     if (chartInstance) chartInstance.destroy();
-    const tickColor = themeColor('--text-tertiary', '#76746E');
-    const gridColor = themeColor('--line-soft', 'rgba(255,255,255,0.06)');
-    const successColor = themeColor('--success', '#17E88F');
-    chartInstance = new window.Chart(canvas.getContext('2d'), {
+    const tickColor = getComputedStyle(document.documentElement).getPropertyValue('--text-tertiary').trim() || '#76746E';
+    const inst = window.RowCharts && window.RowCharts.render(canvas, {
       type: 'line',
-      data: {
-        labels,
-        datasets: [
-          {
-            label: 'Target', data: targetData, borderColor: tickColor, backgroundColor: 'transparent',
-            borderDash: [4, 4], borderWidth: 1.5, pointRadius: 0, tension: 0.2, spanGaps: true,
-          },
-          {
-            label: 'Actual', data: actualData, borderColor: successColor, backgroundColor: successColor + '26',
-            borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, pointBackgroundColor: successColor,
-            tension: 0.3, fill: true, spanGaps: false,
-          },
-        ],
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        // Unlike Trends' charts (an exploratory, frequently-re-rendered
-        // surface where the animated draw-in is a nice touch), this
-        // chart renders once on a page whose only purpose IS the
-        // chart — a "grow in" animation just delays the user seeing
-        // real data for no benefit. Also sidesteps a real class of
-        // risk, not just a cosmetic one: Chart.js's default animation
-        // advances via requestAnimationFrame, which browsers can
-        // throttle or fully suspend for a backgrounded/non-visible tab
-        // — confirmed directly (chartInstance.getDatasetMeta().data[i].y
-        // stayed frozen at the animation's start position, never
-        // advancing to the real value, even after several real
-        // seconds) in this project's own headless-browser verification
-        // environment. A standalone PWA reopened from the home screen
-        // (this app's primary real-world usage, per the "freshness
-        // guard" work earlier this project) can plausibly hit the same
-        // browser behavior. animation:false draws the final, correct
-        // state in one paint, with no window for that to ever happen.
-        animation: false,
-        interaction: { mode: 'index', intersect: false },
-        plugins: { legend: { display: true, labels: { color: tickColor, font: { size: 10 }, boxWidth: 10 } } },
-        scales: {
-          x: { ticks: { color: tickColor, font: { size: 10 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 7 }, grid: { color: gridColor } },
-          y: { ticks: { color: tickColor, font: { size: 10 } }, grid: { color: gridColor } },
-        },
-      },
+      labels,
+      legend: true,
+      datasets: [
+        { label: 'Target', data: targetData, color: tickColor, dashed: true, spanGaps: true, fill: false },
+        { label: 'Actual', data: actualData, color: getComputedStyle(document.documentElement).getPropertyValue('--success').trim() || '#17E88F' },
+      ],
+      maxTicksX: 7,
     });
+    if (inst) chartInstance = inst;
   }
 
   // =============================================================

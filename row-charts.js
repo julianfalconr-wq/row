@@ -18,9 +18,11 @@
 // and now applied UNIFORMLY (previously animation:false was only on
 // plan.html's chart, not trends.html's — see this file's own
 // migration commit for why that's now applied everywhere instead):
-//   - spanGaps: false, always. A `null` in a data array is a real
-//     "nothing was logged this day" and must render as a visible
-//     break in the line — never bridged, matching this app's
+//   - spanGaps: false by default (opt into true per-dataset via
+//     ds.spanGaps — the one legitimate case is a dashed reference/
+//     target line, not logged data). A `null` in real logged data is
+//     a genuine "nothing was logged this day" and must render as a
+//     visible break in the line — never bridged, matching this app's
 //     "no data = null, not zero, not guessed" principle used
 //     everywhere else.
 //   - animation: false, always. Chart.js's default animation advances
@@ -37,7 +39,7 @@
 //   {
 //     type: 'line' | 'bar',
 //     labels: [...],
-//     datasets: [{ label, data, color?, dashed?, fill? }],
+//     datasets: [{ label, data, color?, dashed?, fill?, spanGaps? }],
 //     // color defaults to the semantic accent (cyan) if omitted;
 //     // pass a literal hex (e.g. from a page's own --accent-* token,
 //     // read via getComputedStyle) for a specific series.
@@ -118,7 +120,13 @@
         shadowBlur: type === 'line' && !ds.dashed ? 6 : undefined,
         tension: type === 'line' ? 0.4 : 0,
         fill: type === 'line' ? (ds.fill !== false && isSingleLine) : false,
-        spanGaps: false, // never bridge a real gap — see header comment
+        // Defaults to false (never bridge a real gap — see header
+        // comment) but a dataset can opt into true via ds.spanGaps —
+        // plan.html's dashed "Target" trajectory line is the one
+        // legitimate case: a reference line, not logged data, so a
+        // future week with no computed target yet should still read
+        // as a continuous line rather than an artificial break.
+        spanGaps: ds.spanGaps === true,
         borderRadius: type === 'bar' ? 6 : undefined, // rounded bar tops
         borderSkipped: type === 'bar' ? false : undefined,
       };
