@@ -108,8 +108,12 @@ body { min-height: 100vh; position: relative; overflow-x: hidden; }
 main {
   position: relative; z-index: 2;
   max-width: 720px; margin: 0 auto;
-  padding: 56px 20px 80px;
-  padding-top: max(56px, env(safe-area-inset-top, 56px));
+  /* Top clearance from the shared topbar now lives in topbar.js's own
+     .topbar margin-bottom (the topbar's own padding already resolves
+     env(safe-area-inset-top) into its height) — this used to duplicate
+     both of those here, stacking on top of a topbar that didn't reserve
+     any space of its own. */
+  padding: 0 20px 80px;
 }
 
 .section-title {

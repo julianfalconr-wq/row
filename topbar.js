@@ -35,6 +35,18 @@
   background: #0a0a0b;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+  /* The one shared gap between the topbar and whatever page content
+     follows it. injectChrome() always inserts #topbar as body's first
+     child (see below), so this margin is the ONLY thing standing
+     between the topbar and each page's own first element — before this,
+     that gap was 0px on main/habits/trends/cronometer/plan.html (a
+     generic .page wrapper with no padding-top of its own), while
+     health.html/gym.html separately reinvented it via their own
+     top-padding. Centralizing it here means every page gets the same
+     gap without needing its own hack, and the topbar's own padding-top
+     already resolves env(safe-area-inset-top) into its height, so this
+     value doesn't need to duplicate that. */
+  margin-bottom: 20px;
 }
 .topbar-water-wrap { display: flex; align-items: stretch; }
 .topbar-water-pill {

@@ -170,7 +170,13 @@ html, body {
 .po-shell {
   width: 100%; max-width: min(720px, 100vw);
   margin: 0 auto;
-  padding: max(24px, env(safe-area-inset-top)) 16px calc(40px + env(safe-area-inset-bottom));
+  /* Top clearance from the shared topbar now lives in topbar.js's own
+     .topbar margin-bottom (the topbar's own padding already resolves
+     env(safe-area-inset-top) into its height) — this used to duplicate
+     both of those here, stacking on top of a topbar that didn't reserve
+     any space of its own. Bottom padding is unrelated (clears the
+     bottom tab bar/home indicator) and is untouched. */
+  padding: 0 16px calc(40px + env(safe-area-inset-bottom));
   box-sizing: border-box;
 }
 /* Defeat the default `min-width: auto` on flex/grid items — without
@@ -1112,7 +1118,7 @@ img, video, canvas, svg { max-width: 100%; }
 
 @media (max-width: 480px) {
   /* === Mobile / iPhone polish === */
-  .po-shell { padding: max(14px, env(safe-area-inset-top)) 10px calc(32px + env(safe-area-inset-bottom)); }
+  .po-shell { padding: 0 10px calc(32px + env(safe-area-inset-bottom)); }
 
   /* Header — smaller title so the gear button never gets clipped */
   .po-title { font-size: 18px; letter-spacing: -0.01em; }
