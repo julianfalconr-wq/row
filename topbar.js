@@ -159,20 +159,30 @@ body.has-bottombar {
   body.has-bottombar { padding-bottom: 0 !important; padding-left: 220px !important; }
   .bottombar {
     top: 0; bottom: 0; left: 0; right: auto; width: 220px;
-    flex-direction: column; justify-content: flex-start; align-items: stretch;
-    gap: var(--space-1, 4px);
+    flex-direction: column; justify-content: center; align-items: stretch;
+    gap: var(--space-3, 12px);
     padding: max(24px, env(safe-area-inset-top)) var(--space-3, 12px) 24px;
     border-top: none; border-right: 1px solid var(--border-hairline, rgba(255, 255, 255, 0.08));
   }
+  /* Icon-only per direct feedback: text labels add width a
+     center-anchored column doesn't need, and the icon alone (at this
+     size, with the active pill below) already reads unambiguously —
+     verified by tabbing through every destination at 1024/1280/1440px. */
   .bottombar-tab {
-    flex: none; flex-direction: row; justify-content: flex-start;
-    gap: var(--space-3, 12px); padding: 10px 14px;
-    border-radius: var(--radius-sm, 10px);
+    flex: none; flex-direction: row; justify-content: center; align-items: center;
+    width: 52px; height: 52px; margin: 0 auto;
+    padding: 0;
+    border-radius: var(--radius-md, 14px);
     font-size: var(--text-base, 14px); font-weight: 600; letter-spacing: normal;
   }
+  .bottombar-tab span { display: none; }
   .bottombar-tab:hover { background: var(--surface-card, rgba(255,255,255,0.04)); color: var(--text-primary); }
+  /* Active state must carry all the meaning text used to: filled
+     accent background pill (not just a color change) plus the icon
+     itself switching to the accent color — together these stay
+     unambiguous with no label at all. */
   .bottombar-tab.active { background: var(--accent-cyan-dim, rgba(34,211,238,0.14)); color: var(--accent-cyan, #22D3EE); }
-  .bottombar-tab-icon { width: 20px; height: 20px; }
+  .bottombar-tab-icon { width: 26px; height: 26px; }
 }
 @media (max-width: 480px) {
   .topbar { padding-left: 10px; padding-right: 10px; gap: 6px; }
@@ -267,6 +277,21 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
 .chat-fab.is-open { display: none; }
 @media (max-width: 480px) {
   .chat-fab { width: 48px; height: 48px; left: 14px; bottom: calc(80px + env(safe-area-inset-bottom)); }
+}
+/* The chat FAB is position:fixed at left:16px — which the sidebar
+   above now occupies entirely at this same breakpoint (its own
+   left:0, width:220px). Floated it just outside the sidebar's right
+   edge instead of leaving it stacked on top of (and visually
+   competing with) the bottom nav icon — found live: at 1440px the FAB
+   was rendering directly over the last sidebar tab, technically
+   visible (higher z-index) but obscuring real navigation underneath
+   it. Placed AFTER the base .chat-fab rule above (not grouped with
+   the other >=1024px rules earlier in this file) — same specificity,
+   so source order decides, and a first attempt at this same fix
+   placed before the base rule was silently overridden by it; verified
+   live via getComputedStyle before and after moving it. */
+@media (min-width: 1024px) {
+  .chat-fab { left: calc(220px + 20px); }
 }
 .chat-modal-bg {
   display: none; position: fixed; inset: 0;
