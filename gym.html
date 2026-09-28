@@ -143,7 +143,7 @@ const CONFIG = {
      resolve directly — redeclaring it as var(--border-strong) here
      would be a circular self-reference (computes to invalid/unset,
      confirmed live before removing this line). */
-  --accent: #ffffff;
+  --accent: var(--btn-primary-a);
   --good: var(--accent-green);
   --warn: var(--accent-amber);
   --bad: var(--accent-coral);
@@ -253,7 +253,7 @@ img, video, canvas, svg { max-width: 100%; }
   padding: 6px 12px;
   background: rgba(255,255,255,0.04);
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   color: var(--text-2);
   font-family: var(--font-mono);
   font-size: 11px; font-weight: 700; letter-spacing: 0.10em;
@@ -291,8 +291,8 @@ img, video, canvas, svg { max-width: 100%; }
 }
 .training-tab:hover { color: var(--text-2); }
 .training-tab.active {
-  background: linear-gradient(180deg, #ffffff 0%, #e8e5dd 100%);
-  color: #0a0a0b;
+  background: linear-gradient(180deg, var(--btn-primary-a) 0%, var(--btn-primary-b) 100%);
+  color: var(--btn-primary-text);
   box-shadow: inset 0 1px 0 rgba(255,255,255,0.5), 0 4px 12px rgba(0,0,0,0.35);
 }
 .training-panel { display: none; }
@@ -320,11 +320,11 @@ img, video, canvas, svg { max-width: 100%; }
   display: flex; justify-content: space-between; font-size: 11.5px; color: var(--text-2); font-weight: 600;
 }
 .tp-progress-track {
-  height: 8px; border-radius: 999px; background: rgba(255,255,255,0.06); overflow: hidden;
+  height: 8px; border-radius: var(--radius-pill); background: rgba(255,255,255,0.06); overflow: hidden;
 }
 .tp-progress-fill {
-  height: 100%; border-radius: 999px;
-  background: linear-gradient(90deg, #6ee7b7, #7DD3FC);
+  height: 100%; border-radius: var(--radius-pill);
+  background: linear-gradient(90deg, var(--good), #7DD3FC);
   transition: width 0.3s ease;
 }
 .tp-plan-grid { display: grid; grid-template-columns: 1fr; gap: 10px; }
@@ -419,14 +419,14 @@ img, video, canvas, svg { max-width: 100%; }
 .whoop-import-list { display: flex; flex-direction: column; gap: 8px; max-height: 50vh; overflow-y: auto; margin-bottom: 4px; }
 .whoop-import-row {
   display: flex; align-items: flex-start; gap: 10px; padding: 10px;
-  background: rgba(255,255,255,0.025); border: 1px solid var(--border); border-radius: 10px; cursor: pointer;
+  background: rgba(255,255,255,0.025); border: 1px solid var(--border); border-radius: var(--radius-sm); cursor: pointer;
 }
 .whoop-import-row input[type="checkbox"] { margin-top: 2px; flex-shrink: 0; width: 16px; height: 16px; }
 .whoop-import-main { min-width: 0; }
 .whoop-import-title { font-size: 13.5px; font-weight: 700; color: var(--text-1); }
 .whoop-import-new-badge {
   font-size: 9.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--good);
-  background: rgba(110,231,183,0.12); border-radius: 999px; padding: 2px 7px; margin-left: 6px;
+  background: rgba(110,231,183,0.12); border-radius: var(--radius-pill); padding: 2px 7px; margin-left: 6px;
 }
 .whoop-import-sub { font-size: 11.5px; color: var(--text-3); margin-top: 2px; }
 .whoop-import-empty { font-size: 13px; color: var(--text-3); text-align: center; padding: 20px 0; }
@@ -460,7 +460,7 @@ img, video, canvas, svg { max-width: 100%; }
 }
 .run-effort-pill:hover { background: rgba(255,255,255,0.06); color: var(--text-1); }
 .run-effort-pill.active {
-  background: linear-gradient(180deg, #ffffff 0%, #e8e5dd 100%); color: #0a0a0b;
+  background: linear-gradient(180deg, var(--btn-primary-a) 0%, var(--btn-primary-b) 100%); color: var(--btn-primary-text);
   border-color: transparent; font-weight: 800;
 }
 .run-history-title {
@@ -478,7 +478,7 @@ img, video, canvas, svg { max-width: 100%; }
 .run-history-notes { font-size: 11.5px; color: var(--text-3); margin-top: 2px; max-width: 220px; }
 .run-history-effort {
   font-size: 11px; font-weight: 700; color: var(--text-2);
-  background: rgba(255,255,255,0.06); border-radius: 999px; padding: 4px 9px; flex-shrink: 0;
+  background: rgba(255,255,255,0.06); border-radius: var(--radius-pill); padding: 4px 9px; flex-shrink: 0;
 }
 .run-history-del {
   width: 28px; height: 28px; display: flex; align-items: center; justify-content: center;
@@ -505,7 +505,7 @@ img, video, canvas, svg { max-width: 100%; }
   display: flex; align-items: center; justify-content: center;
   background: rgba(255,255,255,0.04);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-sm);
   color: var(--text-2);
   cursor: pointer;
   transition: background 0.18s, color 0.18s, border-color 0.18s;
@@ -566,8 +566,8 @@ img, video, canvas, svg { max-width: 100%; }
 }
 .po-seg-btn:hover { color: var(--text-2); background: rgba(255,255,255,0.04); }
 .po-seg-btn.active {
-  background: linear-gradient(180deg, #ffffff 0%, #e8e5dd 100%);
-  color: #0a0a0b;
+  background: linear-gradient(180deg, var(--btn-primary-a) 0%, var(--btn-primary-b) 100%);
+  color: var(--btn-primary-text);
   box-shadow: inset 0 1px 0 rgba(255,255,255,0.5), 0 4px 12px rgba(0,0,0,0.35);
 }
 
@@ -640,7 +640,7 @@ img, video, canvas, svg { max-width: 100%; }
   padding: 11px 14px;
   background: rgba(255,255,255,0.025);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-sm);
   margin-bottom: 12px; font-size: 12px;
 }
 .po-last-set.show { display: flex; }
@@ -735,8 +735,8 @@ img, video, canvas, svg { max-width: 100%; }
 }
 .po-reps-pill:hover { background: rgba(255,255,255,0.06); color: var(--text-1); }
 .po-reps-pill.active {
-  background: linear-gradient(180deg, #ffffff 0%, #e8e5dd 100%);
-  color: #0a0a0b; border-color: transparent;
+  background: linear-gradient(180deg, var(--btn-primary-a) 0%, var(--btn-primary-b) 100%);
+  color: var(--btn-primary-text); border-color: transparent;
   font-weight: 800;
 }
 
@@ -744,8 +744,8 @@ img, video, canvas, svg { max-width: 100%; }
 .po-btn-primary {
   width: 100%; padding: 14px;
   border: 1px solid rgba(255,255,255,0.85);
-  background: linear-gradient(180deg, #ffffff 0%, #e8e5dd 100%);
-  color: #0a0a0b; border-radius: 12px;
+  background: linear-gradient(180deg, var(--btn-primary-a) 0%, var(--btn-primary-b) 100%);
+  color: var(--btn-primary-text); border-radius: 12px;
   font-family: inherit; font-size: 14px; font-weight: 700;
   cursor: pointer;
   box-shadow: inset 0 1px 0 rgba(255,255,255,0.55), 0 4px 14px rgba(0,0,0,0.40);
@@ -768,7 +768,7 @@ img, video, canvas, svg { max-width: 100%; }
 
 /* ----- Prescription card ----- */
 .po-rx-card {
-  padding: 18px 20px; border-radius: 14px;
+  padding: 18px 20px; border-radius: var(--radius-md);
   background: rgba(255,255,255,0.025);
   border: 1px solid var(--border);
   position: relative;
@@ -785,7 +785,7 @@ img, video, canvas, svg { max-width: 100%; }
 }
 .po-accent { color: var(--text-1); }
 .po-rx-tag {
-  display: inline-block; padding: 4px 10px; border-radius: 999px;
+  display: inline-block; padding: 4px 10px; border-radius: var(--radius-pill);
   font-size: 10px; font-weight: 700; letter-spacing: 0.08em;
   text-transform: uppercase;
   background: rgba(255,255,255,0.06); color: var(--text-2);
@@ -864,7 +864,7 @@ img, video, canvas, svg { max-width: 100%; }
   display: flex; gap: 4px;
   background: rgba(255,255,255,0.04);
   border: 1px solid var(--border);
-  border-radius: 10px; padding: 3px;
+  border-radius: var(--radius-sm); padding: 3px;
 }
 .po-modal-seg button {
   flex: 1; padding: 9px; border: none; background: transparent;
@@ -874,8 +874,8 @@ img, video, canvas, svg { max-width: 100%; }
   -webkit-tap-highlight-color: transparent;
 }
 .po-modal-seg button.active {
-  background: linear-gradient(180deg, #ffffff 0%, #e8e5dd 100%);
-  color: #0a0a0b;
+  background: linear-gradient(180deg, var(--btn-primary-a) 0%, var(--btn-primary-b) 100%);
+  color: var(--btn-primary-text);
 }
 .po-bw-toggle {
   display: flex; align-items: center; gap: 8px;
@@ -940,7 +940,7 @@ img, video, canvas, svg { max-width: 100%; }
   display: flex; align-items: center; gap: 6px;
   padding: 6px 8px;
   background: rgba(255,255,255,0.02);
-  border-radius: 6px;
+  border-radius: var(--radius-xs);
 }
 .po-day-ex-name {
   flex: 1; min-width: 0; font-size: 12px; color: var(--text-2);
@@ -961,7 +961,7 @@ img, video, canvas, svg { max-width: 100%; }
 .po-day-ex-add {
   width: 100%; margin-top: 2px; padding: 7px;
   background: transparent; border: 1px dashed var(--border);
-  border-radius: 6px; color: var(--text-3);
+  border-radius: var(--radius-xs); color: var(--text-3);
   font-family: inherit; font-size: 11.5px; cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
@@ -972,13 +972,13 @@ img, video, canvas, svg { max-width: 100%; }
 .po-routine-suggestion {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
   background: rgba(110,231,183,0.08); border: 1px solid rgba(110,231,183,0.25);
-  border-radius: 10px; padding: 10px 12px; margin-bottom: 12px; font-size: 12.5px; color: var(--text-1);
+  border-radius: var(--radius-sm); padding: 10px 12px; margin-bottom: 12px; font-size: 12.5px; color: var(--text-1);
 }
 .po-routine-suggestion-btn { flex-shrink: 0; padding: 7px 14px; font-size: 12px; }
 .po-routine-list { display: flex; flex-direction: column; gap: 8px; }
 .po-routine-row {
   display: flex; align-items: center; gap: 10px;
-  padding: 10px 12px; background: rgba(255,255,255,0.025); border: 1px solid var(--border); border-radius: 10px;
+  padding: 10px 12px; background: rgba(255,255,255,0.025); border: 1px solid var(--border); border-radius: var(--radius-sm);
 }
 .po-routine-main { flex: 1; min-width: 0; }
 .po-routine-name { font-size: 13.5px; font-weight: 700; color: var(--text-1); }
@@ -997,7 +997,7 @@ img, video, canvas, svg { max-width: 100%; }
   -webkit-tap-highlight-color: transparent;
 }
 .po-day-multi-seg button.active {
-  background: linear-gradient(180deg, #ffffff 0%, #e8e5dd 100%); color: #0a0a0b; border-color: transparent;
+  background: linear-gradient(180deg, var(--btn-primary-a) 0%, var(--btn-primary-b) 100%); color: var(--btn-primary-text); border-color: transparent;
 }
 
 .po-routine-add-ex-row { display: flex; gap: 8px; margin-top: 8px; }
@@ -1018,11 +1018,11 @@ img, video, canvas, svg { max-width: 100%; }
    cascade and renders these at its much larger font-size. */
 .po-routine-set-row input[type="number"] {
   width: 52px; background: rgba(255,255,255,0.04); border: 1px solid var(--border); color: var(--text-1);
-  font-family: inherit; font-size: 12px; padding: 5px 6px; border-radius: 6px; text-align: center;
+  font-family: inherit; font-size: 12px; padding: 5px 6px; border-radius: var(--radius-xs); text-align: center;
 }
 .po-routine-add-set-btn {
   align-self: flex-start; margin-top: 2px; padding: 4px 10px; font-size: 11px;
-  background: transparent; border: 1px dashed var(--border); border-radius: 6px; color: var(--text-3); cursor: pointer;
+  background: transparent; border: 1px dashed var(--border); border-radius: var(--radius-xs); color: var(--text-3); cursor: pointer;
 }
 .po-routine-add-set-btn:hover { color: var(--text-1); border-color: var(--text-3); }
 
@@ -1037,7 +1037,7 @@ img, video, canvas, svg { max-width: 100%; }
 .po-routine-run-planned { flex: 1; min-width: 0; font-size: 12px; color: var(--text-3); }
 .po-routine-run-set-row input {
   width: 56px; background: rgba(255,255,255,0.04); border: 1px solid var(--border); color: var(--text-1);
-  font-family: inherit; font-size: 13px; padding: 6px; border-radius: 6px; text-align: center; flex-shrink: 0;
+  font-family: inherit; font-size: 13px; padding: 6px; border-radius: var(--radius-xs); text-align: center; flex-shrink: 0;
 }
 .po-routine-run-set-row input:disabled { opacity: 0.5; }
 .po-routine-run-log-btn {
@@ -1084,14 +1084,14 @@ img, video, canvas, svg { max-width: 100%; }
 .rot-row .rot-mini-del:hover { color: var(--bad); }
 .rot-row .rot-today-tag {
   font-size: 8px; font-weight: 800; letter-spacing: 0.10em;
-  color: var(--good); padding: 2px 6px; border-radius: 999px;
+  color: var(--good); padding: 2px 6px; border-radius: var(--radius-pill);
   background: rgba(110,231,183,0.16);
 }
 .rot-row .rot-today-btn {
   background: rgba(255,255,255,0.04);
   border: 1px solid var(--border);
   color: var(--text-3); font-size: 9px; font-weight: 700;
-  letter-spacing: 0.06em; padding: 4px 8px; border-radius: 999px;
+  letter-spacing: 0.06em; padding: 4px 8px; border-radius: var(--radius-pill);
   cursor: pointer; text-transform: uppercase;
   -webkit-tap-highlight-color: transparent;
 }
@@ -1165,7 +1165,7 @@ img, video, canvas, svg { max-width: 100%; }
 .po-tw {
   background: rgba(255,255,255,0.025);
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: var(--radius-md);
   padding: 16px;
 }
 .po-tw-head {
@@ -1191,8 +1191,8 @@ img, video, canvas, svg { max-width: 100%; }
 .po-tw-summary-sep { color: var(--text-4); margin: 0 4px; }
 .po-tw-summary-vol { font-size: 13px; color: var(--text-2); font-weight: 500; }
 .po-tw-done-btn {
-  background: linear-gradient(180deg, #ffffff 0%, #e8e5dd 100%);
-  color: #0a0a0b; border: none; border-radius: 999px;
+  background: linear-gradient(180deg, var(--btn-primary-a) 0%, var(--btn-primary-b) 100%);
+  color: var(--btn-primary-text); border: none; border-radius: var(--radius-pill);
   padding: 9px 16px;
   font-family: inherit; font-size: 12px; font-weight: 700;
   cursor: pointer;
@@ -1214,7 +1214,7 @@ img, video, canvas, svg { max-width: 100%; }
   padding: 10px 12px;
   background: rgba(255,255,255,0.025);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-sm);
   font-size: 13px;
 }
 .po-tw-row-name { font-weight: 600; color: var(--text-1); }
@@ -1233,7 +1233,7 @@ img, video, canvas, svg { max-width: 100%; }
   width: 100%; margin-top: 10px;
   display: flex; align-items: center; justify-content: space-between;
   background: transparent; border: 1px solid var(--border);
-  color: var(--text-2); border-radius: 10px;
+  color: var(--text-2); border-radius: var(--radius-sm);
   padding: 11px 14px; cursor: pointer;
   font-family: inherit; font-size: 12px; font-weight: 600;
   letter-spacing: 0.04em;
@@ -1243,7 +1243,7 @@ img, video, canvas, svg { max-width: 100%; }
 .po-tw-past-count {
   display: inline-block; margin-left: 6px;
   background: rgba(255,255,255,0.06); color: var(--text-2);
-  padding: 1px 7px; border-radius: 999px;
+  padding: 1px 7px; border-radius: var(--radius-pill);
   font-size: 11px; font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
@@ -1260,7 +1260,7 @@ img, video, canvas, svg { max-width: 100%; }
 .po-tw-past-day {
   background: rgba(255,255,255,0.025);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-sm);
   padding: 10px 12px;
 }
 .po-tw-past-day-h {
@@ -1277,7 +1277,7 @@ img, video, canvas, svg { max-width: 100%; }
   font-variant-numeric: tabular-nums;
 }
 .po-tw-past-day-done {
-  display: inline-block; padding: 2px 7px; border-radius: 999px;
+  display: inline-block; padding: 2px 7px; border-radius: var(--radius-pill);
   background: rgba(110,231,183,0.14); color: var(--good);
   font-size: 9px; font-weight: 800; letter-spacing: 0.08em;
 }
@@ -1449,7 +1449,7 @@ img, video, canvas, svg { max-width: 100%; }
 .wt-input {
   background: rgba(255,255,255,0.05);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-sm);
   color: var(--text-1);
   font-family: inherit; font-size: 16px; font-weight: 500;
   padding: 11px 13px; width: 100%; outline: none;
@@ -1458,7 +1458,7 @@ img, video, canvas, svg { max-width: 100%; }
 .wt-unit-static { color: var(--text-3); font-size: 13px; }
 .wt-save-btn {
   background: var(--good); color: #000;
-  border: none; border-radius: 10px;
+  border: none; border-radius: var(--radius-sm);
   padding: 11px 18px; font-family: inherit;
   font-size: 13px; font-weight: 700; cursor: pointer;
   -webkit-tap-highlight-color: transparent;
@@ -1624,7 +1624,7 @@ img, video, canvas, svg { max-width: 100%; }
 .wt-viewer-btn {
   background: transparent; border: 1px solid var(--border);
   font-family: inherit; font-size: 14px; font-weight: 500;
-  padding: 12px; cursor: pointer; border-radius: 10px;
+  padding: 12px; cursor: pointer; border-radius: var(--radius-sm);
   -webkit-tap-highlight-color: transparent;
 }
 .wt-viewer-close { color: var(--text-1); }
@@ -1659,7 +1659,7 @@ img, video, canvas, svg { max-width: 100%; }
 }
 .wt-compare-side img {
   max-width: 100%; max-height: calc(100% - 28px);
-  object-fit: contain; border-radius: 6px;
+  object-fit: contain; border-radius: var(--radius-xs);
 }
 .wt-compare-meta-line {
   margin-top: 6px;
@@ -1826,8 +1826,8 @@ img, video, canvas, svg { max-width: 100%; }
         <svg class="wt-chart" viewBox="0 0 320 130" preserveAspectRatio="none">
           <defs>
             <linearGradient id="wtFill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stop-color="#6ee7b7" stop-opacity="0.25"/>
-              <stop offset="100%" stop-color="#6ee7b7" stop-opacity="0"/>
+              <stop offset="0%" stop-color="var(--good)" stop-opacity="0.25"/>
+              <stop offset="100%" stop-color="var(--good)" stop-opacity="0"/>
             </linearGradient>
             <filter id="wtGlow"><feGaussianBlur stdDeviation="1.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
           </defs>
