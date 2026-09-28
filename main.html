@@ -1211,29 +1211,15 @@ body {
 
 /* ===== Modal shell (mirrors index.html's settings modal exactly, so
    both pages' gear-icon modals look identical) ===== */
-.modal-bg {
-  display: none; position: fixed; inset: 0;
-  background: rgba(0,0,0,0.65); backdrop-filter: blur(6px);
-  z-index: 200; align-items: center; justify-content: center; padding: 20px;
-}
-.modal-bg.show { display: flex; }
-.modal {
-  width: 100%; max-width: 480px;
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  border-radius: 16px;
-  padding: 22px; max-height: 88vh; overflow-y: auto;
-  box-shadow: var(--shadow-card);
-}
-.modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
-.modal-head h3 { margin: 0; font-size: 17px; font-weight: 700; color: var(--text-primary); }
-.modal-close {
-  width: 30px; height: 30px; border-radius: 50%;
-  border: 1px solid var(--line); background: transparent;
-  color: var(--text-tertiary); font-size: 16px; cursor: pointer;
-  display: inline-flex; align-items: center; justify-content: center;
-}
-.modal-close:hover { color: var(--text-primary); border-color: var(--text-tertiary); }
+/* .modal-bg/.modal/.modal-head/.modal-close now come from row-ui.css's
+   shared modal component (bottom sheet on phone, centered dialog on
+   desktop) — this page's own copy was byte-near-identical to
+   habits.html's (max-width 480 vs 440, the only real difference,
+   preserved below via each modal's own inline style where it
+   mattered) and was always a centered dialog at every width; the
+   phone bottom-sheet presentation is new here specifically, per
+   explicit request to migrate onto the shared component's existing
+   breakpoint-based behavior. */
 .set-section { margin-bottom: 20px; }
 .set-section h4 {
   margin: 0 0 10px; font-size: 10.5px; font-weight: 800;

@@ -852,35 +852,13 @@ img, video, canvas, svg { max-width: 100%; }
 .po-hist-del:hover { color: var(--bad); }
 
 /* ----- Modals ----- */
-.po-modal-bg {
-  display: none; position: fixed; inset: 0;
-  background: rgba(0,0,0,0.65); backdrop-filter: blur(6px);
-  z-index: 100; align-items: center; justify-content: center;
-  padding: 24px;
-}
-.po-modal-bg.show { display: flex; }
-/* The Add/Edit Exercise modal can now be opened from INSIDE the
-   Settings modal (Routine editor's "+ Add exercise to <Day>" / edit
-   buttons), stacking two .po-modal-bg overlays at once. Both share the
-   same z-index (100) and #exModalBg comes first in the DOM, so with no
-   override the later #setModalBg would paint on top and hide it
-   entirely — clicking "+ Add exercise" would visibly do nothing even
-   though the modal was opening correctly underneath. Raising it above
-   the base tier fixes the stacking without needing to close/reopen
-   Settings: its own backdrop covers Settings while open, and Settings
-   reappears untouched once this modal closes.
-   Reset back to 100 if the modal is renamed/restructured later. */
+/* .po-modal-bg/.po-modal (backdrop + card shell) now come from
+   row-ui.css's shared rules — bottom sheet on phone, centered dialog
+   on desktop, same base z-index (100). The #exModalBg stacking
+   override below still applies on top of that shared base exactly as
+   before — nothing about the two-modals-open-at-once interaction
+   changed, only the shell each one draws with. */
 #exModalBg { z-index: 150; }
-.po-modal {
-  width: 100%; max-width: 420px;
-  background: var(--bg-card);
-  border: 1px solid var(--border-strong);
-  border-radius: 16px;
-  padding: 22px; max-height: 88vh; overflow-y: auto;
-}
-.po-modal h3 {
-  margin: 0 0 16px; font-size: 17px; font-weight: 700;
-}
 .po-modal .po-field { margin-bottom: 12px; }
 .po-modal-seg {
   display: flex; gap: 4px;

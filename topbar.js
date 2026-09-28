@@ -302,20 +302,39 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
 @media (min-width: 1024px) {
   .chat-fab { left: calc(76px + 20px); }
 }
+/* Bottom sheet on phone/tablet, centered dialog on desktop — same
+   presentation pattern as .modal-bg/.modal and gym.html's .po-modal-bg/
+   .po-modal, applied here to ONLY the backdrop positioning and the
+   panel's own outer radius/margins. Deliberately NOT switched onto
+   the generic .modal recipe (width:100%; overflow-y:auto on the whole
+   box): .chat-modal's display:flex; flex-direction:column; height:
+   min(640px,88vh) below is a real, different structure — a fixed
+   header, a message list that scrolls on its own, and an input bar
+   pinned to the bottom — and forcing the whole panel to scroll as one
+   block would break that (the input would scroll away with old
+   messages instead of staying put). Kept untouched. */
 .chat-modal-bg {
   display: none; position: fixed; inset: 0;
   background: rgba(0,0,0,0.65); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
-  z-index: 300; align-items: center; justify-content: center; padding: 20px;
+  z-index: 300; align-items: flex-end; justify-content: center; padding: 0;
 }
 .chat-modal-bg.show { display: flex; }
+@media (min-width: 1024px) {
+  .chat-modal-bg { align-items: center; padding: 20px; }
+}
 .chat-modal {
   display: flex; flex-direction: column;
   width: 100%; max-width: 480px;
   height: min(640px, 88vh); max-height: 88vh;
   background: #121214;
   border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 16px;
+  /* Rounded top only while bottom-anchored (phone/tablet); desktop's
+     centered position gets all four corners back below. */
+  border-radius: 16px 16px 0 0;
   overflow: hidden;
+}
+@media (min-width: 1024px) {
+  .chat-modal { border-radius: 16px; }
 }
 .chat-modal-head {
   display: flex; align-items: center; justify-content: space-between;

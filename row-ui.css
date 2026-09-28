@@ -95,11 +95,15 @@
                                       generic card class name, kept
      .chip                           removable/tag chip
      .ru-empty                       empty state
-     .ru-modal-bg / .ru-modal / .ru-sheet
+     .modal-bg / .modal / .modal-head / .modal-close
                                       ONE modal implementation — bottom
                                       sheet on phone, centered dialog
                                       on desktop, switching purely via
-                                      the breakpoint below, same markup
+                                      the breakpoint below, same markup.
+                                      Pre-existing names (main.html/
+                                      habits.html already used them),
+                                      kept rather than renamed to a
+                                      ru-* prefix.
      .ru-toast                       toast
      .ru-chart-card                  chart-card wrapper (pairs with
                                       row-charts.js's helper — section 8)
@@ -486,34 +490,87 @@ body { min-height: 100vh; position: relative; overflow-x: hidden; }
 .ru-empty-sub { font-size: var(--text-sm); }
 
 /* ---- Modal / bottom sheet ----
-   ONE implementation: a bottom sheet on phone, a centered dialog on
-   desktop — same markup, presentation switches purely at the 768px
-   breakpoint below. Markup contract:
-     <div class="ru-modal-bg" id="...">
-       <div class="ru-modal">
-         <div class="ru-modal-header">...<button class="btn-icon">×</button></div>
-         <div class="ru-modal-body">...</div>
+   ONE implementation, using the class names main.html/habits.html's
+   own pre-existing modals already established (.modal-bg/.modal/
+   .modal-head/.modal-close) rather than inventing new ones — same
+   reasoning as .gm-card/.save-btn elsewhere in this file: reuse what's
+   already real and working, don't force a rename across every
+   consumer. topbar.js's startModalLock() MODAL_SELECTORS list already
+   includes '.modal-bg' and watches for a .show/.is-open class flip —
+   completely unchanged by this component now living here instead of
+   duplicated per-page.
+   Bottom sheet on phone, centered dialog on desktop — same markup,
+   presentation switches purely at the 1024px breakpoint below
+   (matching this file's own existing sidebar breakpoint, not the
+   768px tablet one — a centered dialog reads fine on a tablet-width
+   phone-layout page, no need for a third variant). Markup contract:
+     <div class="modal-bg" id="...">
+       <div class="modal">
+         <div class="modal-head"><h3>Title</h3><button class="modal-close">×</button></div>
+         ...body content...
        </div>
-     </div>
-   Visibility toggled the same way every existing modal already does
-   (a .show/.is-open class flip — topbar.js's startModalLock() already
-   watches for exactly these two class names app-wide, unchanged). */
-.ru-modal-bg {
+     </div> */
+.modal-bg {
   position: fixed; inset: 0; z-index: var(--z-modal);
-  background: rgba(0, 0, 0, 0.55);
+  background: rgba(0, 0, 0, 0.65);
+  -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
   display: none; align-items: flex-end; justify-content: center;
   padding: 0;
 }
-.ru-modal-bg.show, .ru-modal-bg.is-open { display: flex; }
-.ru-modal {
+.modal-bg.show, .modal-bg.is-open { display: flex; }
+.modal {
   background: var(--surface-2); border: 1px solid var(--border-hairline);
   border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   width: 100%; max-height: 86vh; overflow-y: auto;
   padding: var(--space-5);
   padding-bottom: max(var(--space-5), env(safe-area-inset-bottom));
+  box-shadow: var(--shadow-card);
 }
-.ru-modal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-4); }
-.ru-modal-header h2, .ru-modal-header h3 { margin: 0; font-size: var(--text-lg); color: var(--text-primary); }
+.modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-4); }
+.modal-head h3 { margin: 0; font-size: var(--text-lg); font-weight: 700; color: var(--text-primary); }
+.modal-close {
+  width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0;
+  border: 1px solid var(--border-hairline); background: transparent;
+  color: var(--text-tertiary); font-size: 16px; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.modal-close:hover { color: var(--text-primary); border-color: var(--text-tertiary); }
+
+/* ---- gym.html's own modal family (.po-modal-bg/.po-modal) ----
+   Same bottom-sheet/centered-dialog component as .modal-bg/.modal
+   above, kept as its own separate class pair rather than merged into
+   that one: gym.html has SIX .po-modal-bg instances (exercise, set,
+   rotation, routine builder, routine run, WHOOP import) with a real,
+   delicate stacking interaction — the exercise modal can open FROM
+   INSIDE the routine/settings modal, so #exModalBg overrides z-index
+   to paint above its own parent (see that rule's own comment in
+   gym.html, unchanged) — a markup rename across all six, right by a
+   z-index override that specifically depends on the shared base
+   z-index value, was real risk for no real benefit over just sharing
+   the layout recipe under gym.html's own existing names. Everything
+   below is otherwise the same shell (backdrop, bottom sheet -> dialog,
+   same breakpoint); gym.html's own .po-modal-seg/.po-modal-actions
+   and similar sub-styles stay page-local, unaffected. */
+.po-modal-bg {
+  position: fixed; inset: 0; z-index: 100;
+  background: rgba(0, 0, 0, 0.65);
+  -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+  display: none; align-items: flex-end; justify-content: center;
+  padding: 0;
+}
+.po-modal-bg.show { display: flex; }
+.po-modal {
+  width: 100%; max-height: 86vh; overflow-y: auto;
+  background: var(--bg-card); border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  padding: var(--space-5);
+  padding-bottom: max(var(--space-5), env(safe-area-inset-bottom));
+}
+.po-modal h3 { margin: 0 0 16px; font-size: 17px; font-weight: 700; }
+@media (min-width: 1024px) {
+  .po-modal-bg { align-items: center; padding: 24px; }
+  .po-modal { width: 100%; max-width: 420px; border-radius: var(--radius-lg); max-height: 88vh; padding-bottom: var(--space-5); }
+}
 
 /* ---- Toast ---- */
 .ru-toast {
@@ -549,8 +606,8 @@ body { min-height: 100vh; position: relative; overflow-x: hidden; }
      needed. .page-shell only adds the wider max-width a desktop grid
      wants. */
   .page-shell { max-width: 100%; padding-right: 32px; }
-  .ru-modal-bg { align-items: center; }
-  .ru-modal {
+  .modal-bg { align-items: center; padding: 20px; }
+  .modal {
     border-radius: var(--radius-lg);
     max-width: 480px; max-height: 80vh;
     padding-bottom: var(--space-5);
