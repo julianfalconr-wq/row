@@ -9,64 +9,37 @@
      lesson as daylib.js/RowIcons, applied to something that actually
      needs to block, not just be ready in time). -->
 <script src="lock.js"></script>
-<script>
-(function () {
-  try {
-    var t = localStorage.getItem('dashboard:theme');
-    if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
-  } catch (e) {}
-})();
-</script>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#050506">
 <title>Julian's Dashboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<!-- row-ui.css: the shared design system — see main.html's own <head>
+     comment (same pattern). Dark theme only; the theme-init script and
+     :root[data-theme="light"] block this replaced are both gone. -->
+<link rel="stylesheet" href="row-ui.css">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="sync.js" defer></script>
 <script src="https://unpkg.com/lucide@1.43.0/dist/umd/lucide.js" defer></script>
 <script src="topbar.js" defer></script>
 <style>
+/* Same alias approach as main.html's migration. --glow-opacity dropped
+   entirely — dead since the ambient glow moved into topbar.js as a
+   self-contained, literal-value stylesheet; nothing reads it once this
+   page's own copy (below) is gone. Dark only — the light-theme block
+   this used to pair with is gone. */
 :root {
-  --surface-1: #050506;
-  --surface-2: #121214;
-  --inset-bg: rgba(0,0,0,0.30);
-  --line: rgba(255,255,255,0.09);
-  --line-soft: rgba(255,255,255,0.06);
-  --text-primary: #FAFAFA;
-  --text-secondary: #A5A3A0;
-  --text-tertiary: #6E6C68;
-  --success: #17E88F;
-  --warning: #FFC93C;
-  --danger: #FF4D5E;
-  --shadow-card: 0 14px 34px rgba(0,0,0,0.45);
+  --surface-1: var(--bg-canvas);
+  --surface-2: var(--surface-card);
+  --inset-bg: var(--surface-inset);
+  --line: var(--border-hairline);
+  --line-soft: var(--border-soft);
+  --success: var(--accent-green);
+  --warning: var(--accent-amber);
+  --danger: var(--accent-coral);
   --title-grad-a: #FFFFFF;
   --title-grad-b: #C7C4BC;
-  --btn-primary-a: #FFFFFF;
-  --btn-primary-b: #E8E5DD;
-  --btn-primary-text: #0A0A0B;
-  --glow-opacity: 1;
-  --font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-}
-
-:root[data-theme="light"] {
-  --surface-1: #F3F3F1;
-  --surface-2: #FFFFFF;
-  --inset-bg: rgba(0,0,0,0.035);
-  --line: rgba(15,15,20,0.10);
-  --line-soft: rgba(15,15,20,0.07);
-  --text-primary: #141416;
-  --text-secondary: #55545C;
-  --text-tertiary: #8B8A90;
-  --shadow-card: 0 10px 26px rgba(20,20,26,0.08);
-  --title-grad-a: #141416;
-  --title-grad-b: #4A4952;
-  --btn-primary-a: #141416;
-  --btn-primary-b: #2B2A30;
-  --btn-primary-text: #FAFAFA;
-  --glow-opacity: 0.35;
 }
 
 * { box-sizing: border-box; }
@@ -86,31 +59,13 @@ body {
   overflow-x: hidden;
   padding: max(28px, env(safe-area-inset-top)) 20px 60px;
 }
-body::before {
-  content: '';
-  position: fixed; inset: 0;
-  background:
-    radial-gradient(circle at 82% 14%, rgba(23, 232, 143, 0.14), transparent 45%),
-    radial-gradient(circle at 18% 90%, rgba(180, 180, 200, 0.06), transparent 50%);
-  filter: blur(40px);
-  opacity: var(--glow-opacity);
-  pointer-events: none;
-  z-index: -2;
-  animation: drift 36s ease-in-out infinite alternate;
-}
-body::after {
-  content: '';
-  position: fixed; inset: 0;
-  background-image: radial-gradient(rgba(255,255,255,0.014) 1px, transparent 1px);
-  background-size: 3px 3px;
-  opacity: var(--glow-opacity);
-  pointer-events: none;
-  z-index: -1;
-}
-@keyframes drift {
-  0%   { transform: translate3d(0,0,0); }
-  100% { transform: translate3d(-22px, 14px, 0); }
-}
+/* This page had its own body::before/::after glow, missed by the
+   earlier project-wide glow consolidation into topbar.js — see
+   plan.html's identical finding/fix in this same redesign. Removed
+   entirely; topbar.js's shared, verified-working glow (background-
+   image layers on body itself, not this negative-z-index pseudo-
+   element approach that was found to render invisible in production)
+   already covers this page now. */
 
 .page {
   max-width: 1100px;
