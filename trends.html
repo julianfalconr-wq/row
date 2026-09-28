@@ -5,20 +5,16 @@
 <!-- Not deferred, on purpose and first — see lock.js's own header
      comment. Matches main.html/gym.html's exact head ordering. -->
 <script src="lock.js"></script>
-<script>
-(function () {
-  try {
-    var t = localStorage.getItem('dashboard:theme');
-    if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
-  } catch (e) {}
-})();
-</script>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#050506">
 <title>Trends · Dashboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<!-- row-ui.css: the shared design system — see main.html's own <head>
+     comment (same pattern). Dark theme only; the theme-init script and
+     :root[data-theme="light"] block this replaced are both gone. -->
+<link rel="stylesheet" href="row-ui.css">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="sync.js" defer></script>
 <script src="https://unpkg.com/lucide@1.43.0/dist/umd/lucide.js" defer></script>
@@ -41,47 +37,26 @@
      since charts are this whole page's purpose, unlike the chat's
      occasional inline chart. -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js" defer></script>
+<!-- row-charts.js: the one shared Chart.js styling helper — see its
+     own header comment. Non-deferred like daylib.js/score-lib.js
+     above, so it's ready by the time this page's own renderChart()
+     (which now just wraps window.RowCharts.render) is called. -->
+<script src="row-charts.js"></script>
 <style>
-/* Design tokens copied verbatim from main.html — same scheme (one of
-   three incompatible ones this project uses across pages, per
-   topbar.js's own header comment), so this page matches main.html's
-   look exactly rather than introducing a fourth. */
+/* Same alias approach as main.html's migration (identical token set —
+   this page and main.html/habits.html always shared one scheme). Dark
+   only — the light-theme block this used to pair with is gone. */
 :root {
-  --surface-1: #050506;
-  --surface-2: #121214;
-  --inset-bg: rgba(0,0,0,0.30);
-  --line: rgba(255,255,255,0.09);
-  --line-soft: rgba(255,255,255,0.06);
-  --text-primary: #FAFAFA;
-  --text-secondary: #A5A3A0;
-  --text-tertiary: #6E6C68;
-  --success: #17E88F;
-  --warning: #FFC93C;
-  --danger: #FF4D5E;
-  --shadow-card: 0 14px 34px rgba(0,0,0,0.45);
+  --surface-1: var(--bg-canvas);
+  --surface-2: var(--surface-card);
+  --inset-bg: var(--surface-inset);
+  --line: var(--border-hairline);
+  --line-soft: var(--border-soft);
+  --success: var(--accent-green);
+  --warning: var(--accent-amber);
+  --danger: var(--accent-coral);
   --title-grad-a: #FFFFFF;
   --title-grad-b: #C7C4BC;
-  --btn-primary-a: #FFFFFF;
-  --btn-primary-b: #E8E5DD;
-  --btn-primary-text: #0A0A0B;
-  --font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-}
-:root[data-theme="light"] {
-  --surface-1: #F3F3F1;
-  --surface-2: #FFFFFF;
-  --inset-bg: rgba(0,0,0,0.035);
-  --line: rgba(15,15,20,0.10);
-  --line-soft: rgba(15,15,20,0.07);
-  --text-primary: #141416;
-  --text-secondary: #55545C;
-  --text-tertiary: #8B8A90;
-  --shadow-card: 0 10px 26px rgba(20,20,26,0.08);
-  --title-grad-a: #141416;
-  --title-grad-b: #4A4952;
-  --btn-primary-a: #141416;
-  --btn-primary-b: #2B2A30;
-  --btn-primary-text: #FAFAFA;
 }
 * { box-sizing: border-box; }
 html, body {
@@ -791,65 +766,43 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
   // =============================================================
-  // Chart rendering — same Chart.js version/visual language as
-  // topbar.js's chat chart feature (see its renderChartCanvas()):
-  // line, tension 0.3, thin border, small ticks. Theme-aware (reads
-  // this page's own CSS variables at render time) since main.html
-  // supports a light theme and the chat's own chart never needed to.
-  // spanGaps:false on every dataset is the one non-negotiable option
-  // here — a `null` in the data array must render as a visible break
+  // Chart rendering — delegates to row-charts.js's shared
+  // window.RowCharts.render (smooth curves, gradient area fill,
+  // subtle line glow, rounded bar tops, muted gridlines), same
+  // library/visual language as topbar.js's chat chart feature and
+  // plan.html's chart. This function's own call signature
+  // (canvasId, labels, datasetsSpec, chartType) is UNCHANGED — every
+  // existing call site below still works with zero edits — only the
+  // Chart.js config building moved into the shared helper.
+  //
+  // spanGaps:false and animation:false are both always on inside
+  // RowCharts.render — the former is the one non-negotiable option
+  // here (a `null` in the data array must render as a visible break
   // in the line, never bridged, matching this app's "no data = null,
-  // not zero, not guessed" principle used everywhere else.
+  // not zero, not guessed" principle used everywhere); the latter was
+  // previously true on plan.html's chart only, not this page's — see
+  // row-charts.js's own header comment on why this redesign applies
+  // it uniformly now (its performance rules call for static charts
+  // everywhere, so this page's previous animated draw-in is
+  // intentionally gone).
   // =============================================================
   const chartInstances = {};
-  function themeColor(varName, fallback) {
-    const v = getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
-    return v || fallback;
-  }
   // chartType defaults to 'line' (every one of the original 4 charts);
-  // 'bar' is used for the new weekly strength-session count, matching
-  // topbar.js's own chat-chart feature's bar/line convention
-  // (renderChartCanvas() there) — a per-bucket COUNT reads more
-  // naturally as bars than as a connected line, and unlike the line
-  // charts here a week bucket with zero sessions is a real 0, not a
-  // gap, so spanGaps has no effect on a bar dataset either way.
+  // 'bar' is used for the weekly strength-session count — a per-bucket
+  // COUNT reads more naturally as bars than as a connected line, and
+  // unlike the line charts here a week bucket with zero sessions is a
+  // real 0, not a gap, so spanGaps has no effect on a bar dataset
+  // either way.
   function renderChart(canvasId, labels, datasetsSpec, chartType) {
-    if (typeof window.Chart === 'undefined') return; // CDN failed to load — charts just don't render, no fake fallback data
     const canvas = $(canvasId);
     if (!canvas) return;
     if (chartInstances[canvasId]) chartInstances[canvasId].destroy();
-    const tickColor = themeColor('--text-tertiary', '#76746E');
-    const gridColor = themeColor('--line-soft', 'rgba(255,255,255,0.06)');
-    const type = chartType === 'bar' ? 'bar' : 'line';
-    const datasets = datasetsSpec.map((ds) => ({
-      label: ds.label,
-      data: ds.data,
-      borderColor: ds.color,
-      backgroundColor: type === 'bar' ? ds.color + '99' : ds.color + '26',
-      pointRadius: 2,
-      pointHoverRadius: 4,
-      pointBackgroundColor: ds.color,
-      borderWidth: 2,
-      tension: 0.3,
-      fill: type === 'line' && datasetsSpec.length === 1,
-      spanGaps: false,
-    }));
-    chartInstances[canvasId] = new window.Chart(canvas.getContext('2d'), {
-      type,
-      data: { labels, datasets },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        interaction: { mode: 'index', intersect: false },
-        plugins: {
-          legend: { display: datasets.length > 1, labels: { color: tickColor, font: { size: 10 }, boxWidth: 10 } },
-        },
-        scales: {
-          x: { ticks: { color: tickColor, font: { size: 10 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 8 }, grid: { color: gridColor } },
-          y: { ticks: { color: tickColor, font: { size: 10 } }, grid: { color: gridColor }, beginAtZero: type === 'bar' },
-        },
-      },
+    const inst = window.RowCharts && window.RowCharts.render(canvas, {
+      type: chartType === 'bar' ? 'bar' : 'line',
+      labels,
+      datasets: datasetsSpec.map((ds) => ({ label: ds.label, data: ds.data, color: ds.color })),
     });
+    if (inst) chartInstances[canvasId] = inst;
   }
 
   // =============================================================
