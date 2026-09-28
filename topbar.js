@@ -156,9 +156,17 @@ body.has-bottombar {
    still clipped every page using the older .page class — visually
    confirmed via screenshot before this fix.) ---- */
 @media (min-width: 1024px) {
-  body.has-bottombar { padding-bottom: 0 !important; padding-left: 220px !important; }
+  /* 76px — just enough for the 52px icon button plus the sidebar's own
+     12px side padding (52 + 12 + 12 = 76), not a wide rail. Narrowed
+     from an initial 220px per direct feedback once the icon-only
+     layout shipped: 220px made sense for a text+icon row, but was far
+     more than icon-only content actually needs. Every other reference
+     to the old width (body's own padding-left, the chat FAB's
+     left-offset below) is updated to match — search this file for
+     "76px" to find all three if this ever needs to change again. */
+  body.has-bottombar { padding-bottom: 0 !important; padding-left: 76px !important; }
   .bottombar {
-    top: 0; bottom: 0; left: 0; right: auto; width: 220px;
+    top: 0; bottom: 0; left: 0; right: auto; width: 76px;
     flex-direction: column; justify-content: center; align-items: stretch;
     gap: var(--space-3, 12px);
     padding: max(24px, env(safe-area-inset-top)) var(--space-3, 12px) 24px;
@@ -280,18 +288,19 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
 }
 /* The chat FAB is position:fixed at left:16px — which the sidebar
    above now occupies entirely at this same breakpoint (its own
-   left:0, width:220px). Floated it just outside the sidebar's right
-   edge instead of leaving it stacked on top of (and visually
-   competing with) the bottom nav icon — found live: at 1440px the FAB
-   was rendering directly over the last sidebar tab, technically
-   visible (higher z-index) but obscuring real navigation underneath
-   it. Placed AFTER the base .chat-fab rule above (not grouped with
-   the other >=1024px rules earlier in this file) — same specificity,
-   so source order decides, and a first attempt at this same fix
-   placed before the base rule was silently overridden by it; verified
-   live via getComputedStyle before and after moving it. */
+   left:0, width:76px — see that rule's own comment on where 76px
+   comes from). Floated it just outside the sidebar's right edge
+   instead of leaving it stacked on top of (and visually competing
+   with) the bottom nav icon — found live: at 1440px the FAB was
+   rendering directly over the last sidebar tab, technically visible
+   (higher z-index) but obscuring real navigation underneath it.
+   Placed AFTER the base .chat-fab rule above (not grouped with the
+   other >=1024px rules earlier in this file) — same specificity, so
+   source order decides, and a first attempt at this same fix placed
+   before the base rule was silently overridden by it; verified live
+   via getComputedStyle before and after moving it. */
 @media (min-width: 1024px) {
-  .chat-fab { left: calc(220px + 20px); }
+  .chat-fab { left: calc(76px + 20px); }
 }
 .chat-modal-bg {
   display: none; position: fixed; inset: 0;
