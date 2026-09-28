@@ -144,12 +144,19 @@ body.has-bottombar {
 
 /* ---- Responsive shell: >=1024px turns #bottombar into a fixed left
    sidebar instead — same markup/tabs/active-state (currentPageKey()),
-   only the presentation switches. .page-shell (row-ui.css) reserves
-   room for it via padding-left; pages not yet migrated to .page-shell
-   keep their own max-width container centered in the remaining space,
-   same as before (the sidebar simply overlays the left gutter). ---- */
+   only the presentation switches. The clearance for it lives HERE, on
+   body.has-bottombar itself (the class injectChrome() always adds),
+   rather than on any one page-container class — that way EVERY page's
+   own container (.page-shell, or the pre-existing .page class several
+   pages already share, each with a different max-width) gets it for
+   free with no per-class rule needed, and centered containers
+   (margin:0 auto) correctly center within the space actually left
+   over after the sidebar, not the full viewport underneath it. (A
+   .page-shell-only padding-left first shipped this same day and
+   still clipped every page using the older .page class — visually
+   confirmed via screenshot before this fix.) ---- */
 @media (min-width: 1024px) {
-  body.has-bottombar { padding-bottom: 0 !important; }
+  body.has-bottombar { padding-bottom: 0 !important; padding-left: 220px !important; }
   .bottombar {
     top: 0; bottom: 0; left: 0; right: auto; width: 220px;
     flex-direction: column; justify-content: flex-start; align-items: stretch;

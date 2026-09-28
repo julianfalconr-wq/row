@@ -9,20 +9,22 @@
      lesson as daylib.js/RowIcons, applied to something that actually
      needs to block, not just be ready in time). -->
 <script src="lock.js"></script>
-<script>
-(function () {
-  try {
-    var t = localStorage.getItem('dashboard:theme');
-    if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
-  } catch (e) {}
-})();
-</script>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#050506">
 <title>Julian's Dashboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<!-- row-ui.css: the shared design system, loaded before this page's
+     own <style> block (same load-order discipline as daylib.js/
+     score-lib.js) so its tokens/components are already defined by the
+     time page-local CSS references or builds on them below. Dark
+     theme only — the per-page theme-init script this replaced (which
+     read localStorage's dashboard:theme and set <html data-theme>)
+     and the :root[data-theme="light"] block further down are both
+     gone as part of the same redesign; see row-ui.css's own header
+     comment. -->
+<link rel="stylesheet" href="row-ui.css">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="sync.js" defer></script>
 <script src="https://unpkg.com/lucide@1.43.0/dist/umd/lucide.js" defer></script>
@@ -43,43 +45,26 @@
      window.ScoreLib synchronously, so it must already exist. -->
 <script src="score-lib.js"></script>
 <style>
+/* This page's own token NAMES, kept as thin aliases onto row-ui.css's
+   shared tokens (which now own every actual value) rather than
+   rewritten at every one of this file's hundreds of existing
+   var(--surface-1)-style references — same visual result, one real
+   source of truth, far lower risk for a file this size than a
+   wall-to-wall rename. --title-grad-a/b has no row-ui.css equivalent
+   (a main.html-only title gradient effect) and stays a literal here.
+   Dark only: the light-theme override block this used to pair with is
+   gone (see row-ui.css's own header comment on why app-wide). */
 :root {
-  --surface-1: #050506;
-  --surface-2: #121214;
-  --inset-bg: rgba(0,0,0,0.30);
-  --line: rgba(255,255,255,0.09);
-  --line-soft: rgba(255,255,255,0.06);
-  --text-primary: #FAFAFA;
-  --text-secondary: #A5A3A0;
-  --text-tertiary: #6E6C68;
-  --success: #17E88F;
-  --warning: #FFC93C;
-  --danger: #FF4D5E;
-  --shadow-card: 0 14px 34px rgba(0,0,0,0.45);
+  --surface-1: var(--bg-canvas);
+  --surface-2: var(--surface-card);
+  --inset-bg: var(--surface-inset);
+  --line: var(--border-hairline);
+  --line-soft: var(--border-soft);
+  --success: var(--accent-green);
+  --warning: var(--accent-amber);
+  --danger: var(--accent-coral);
   --title-grad-a: #FFFFFF;
   --title-grad-b: #C7C4BC;
-  --btn-primary-a: #FFFFFF;
-  --btn-primary-b: #E8E5DD;
-  --btn-primary-text: #0A0A0B;
-  --font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-}
-
-:root[data-theme="light"] {
-  --surface-1: #F3F3F1;
-  --surface-2: #FFFFFF;
-  --inset-bg: rgba(0,0,0,0.035);
-  --line: rgba(15,15,20,0.10);
-  --line-soft: rgba(15,15,20,0.07);
-  --text-primary: #141416;
-  --text-secondary: #55545C;
-  --text-tertiary: #8B8A90;
-  --shadow-card: 0 10px 26px rgba(20,20,26,0.08);
-  --title-grad-a: #141416;
-  --title-grad-b: #4A4952;
-  --btn-primary-a: #141416;
-  --btn-primary-b: #2B2A30;
-  --btn-primary-text: #FAFAFA;
 }
 
 * { box-sizing: border-box; }
@@ -290,6 +275,7 @@ body {
 .habit-gauge-fill {
   fill: none; stroke: var(--success); stroke-width: 11; stroke-linecap: round;
   transform: rotate(-90deg); transform-origin: 60px 60px;
+  filter: drop-shadow(0 0 6px var(--success));
   transition: stroke-dashoffset 0.7s cubic-bezier(0.22, 1, 0.36, 1);
 }
 .habit-gauge-overlay {
@@ -402,11 +388,15 @@ body {
 .nutrition-score-track { fill: none; stroke: var(--line); stroke-width: 11; }
 .nutrition-score-fill {
   fill: none;
-  stroke: #C4B5FD;
+  /* Nutrition domain's semantic accent (row-ui.css: --accent-purple)
+     — this page already independently landed on almost exactly this
+     shade (#C4B5FD) before the redesign unified it into a token. */
+  stroke: var(--accent-purple, #C4B5FD);
   stroke-width: 11;
   stroke-linecap: round;
   transform: rotate(-90deg);
   transform-origin: 60px 60px;
+  filter: drop-shadow(0 0 6px var(--accent-purple, #C4B5FD));
   transition: stroke 0.7s cubic-bezier(0.22, 1, 0.36, 1),
               stroke-dashoffset 0.7s cubic-bezier(0.22, 1, 0.36, 1);
 }
@@ -457,14 +447,13 @@ body {
   background: linear-gradient(90deg, var(--line), transparent);
 }
 
+/* background/border/radius/padding/shadow now come from row-ui.css's
+   shared .gm-card rule (loaded before this block) — only this page's
+   own additions (stacking spacing, the all-done glow pseudo-element
+   below, hover transition) stay local. */
 .gm-card {
   position: relative;
-  background: var(--surface-2);
-  border: 1px solid var(--line-soft);
-  border-radius: 18px;
-  padding: 20px;
-  margin-bottom: 14px;
-  box-shadow: var(--shadow-card);
+  margin-bottom: var(--space-4, 16px);
   transition: background 0.3s, border-color 0.3s;
   overflow: hidden;
 }
@@ -549,7 +538,6 @@ body {
   background: rgba(255, 255, 255, 0.07);
   border-radius: 8px;
 }
-:root[data-theme="light"] .cal-event-nested-chip { background: rgba(0, 0, 0, 0.05); }
 /* Same fixed-width treatment as .cal-event-time above, scaled to this
    chip's own smaller font (10px vs 11.5px) — measured live at ~138px
    for the longest realistic value in this font; 150px leaves margin.
@@ -1076,9 +1064,19 @@ body {
 .score-hero-ring { position: relative; width: 100px; height: 100px; flex-shrink: 0; }
 .score-hero-ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
 .score-hero-ring-track { fill: none; stroke: var(--line); stroke-width: 9; }
-.score-hero-ring-fill { fill: none; stroke: var(--success); stroke-width: 9; stroke-linecap: round; transition: stroke-dashoffset 0.6s ease, stroke 0.3s; }
-.score-hero-ring-fill.is-warn { stroke: var(--warning); }
-.score-hero-ring-fill.is-bad { stroke: var(--danger); }
+/* Same visual recipe as row-ui.css's shared .ru-ring (thick stroke,
+   rounded caps, a static glow) — kept as this page's own classes
+   rather than migrated onto .ru-ring's literal markup, since that
+   would mean rewriting the score-threshold JS below (setRing(),
+   is-warn/is-bad) that this file's own hard constraint says must not
+   change behavior. Visually unified; markup deliberately not merged. */
+.score-hero-ring-fill {
+  fill: none; stroke: var(--success); stroke-width: 9; stroke-linecap: round;
+  transition: stroke-dashoffset 0.6s ease, stroke 0.3s;
+  filter: drop-shadow(0 0 6px var(--success));
+}
+.score-hero-ring-fill.is-warn { stroke: var(--warning); filter: drop-shadow(0 0 6px var(--warning)); }
+.score-hero-ring-fill.is-bad { stroke: var(--danger); filter: drop-shadow(0 0 6px var(--danger)); }
 .score-hero-ring-overlay {
   position: absolute; inset: 0; display: flex; flex-direction: column;
   align-items: center; justify-content: center;
@@ -1766,10 +1764,6 @@ body {
     if (sleepHour <= wakeHour) sleepHour += 24;
     return { wakeHour, sleepHour };
   }
-
-  // Theme (dark/light) is owned globally by topbar.js — it sets
-  // <html data-theme="..."> on every page and this page's CSS
-  // variables react to that attribute.
 
   // ---------- day-end time, formatted for display ----------
   // "Activates at 6 AM tomorrow" / "locked until 6 AM" used to be

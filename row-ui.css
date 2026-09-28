@@ -521,7 +521,15 @@ body { min-height: 100vh; position: relative; overflow-x: hidden; }
   .page-shell { max-width: 720px; }
 }
 @media (min-width: 1024px) {
-  .page-shell { max-width: 100%; padding-left: calc(220px + 32px); padding-right: 32px; }
+  /* Sidebar clearance lives on BODY (see topbar.js's own >=1024px
+     block, which sets this on body.has-bottombar — the class
+     injectChrome() always adds), not on .page-shell specifically —
+     that way every page's own container (.page-shell here, or the
+     pre-existing .page class five pages already share, each with its
+     own max-width) gets it for free with no per-page/per-class rule
+     needed. .page-shell only adds the wider max-width a desktop grid
+     wants. */
+  .page-shell { max-width: 100%; padding-right: 32px; }
   .ru-modal-bg { align-items: center; }
   .ru-modal {
     border-radius: var(--radius-lg);
