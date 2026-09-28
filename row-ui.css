@@ -1,0 +1,535 @@
+/* =============================================================
+   row-ui.css — Row's shared design system.
+
+   Loaded from <head> on EVERY page, non-deferred, BEFORE any page-
+   local <style> block (same load-order discipline as daylib.js and
+   score-lib.js: components below must already be defined before a
+   page's own styles might reference or override a detail of them).
+
+   WHY THIS FILE EXISTS
+   Before this, the app had FOUR incompatible token schemes across its
+   pages (main.html/habits.html/trends.html shared one; health.html a
+   second; finance.html a close-but-different third; gym.html a fourth
+   entirely, right down to different variable NAMES for the same
+   concept — --text-primary vs --text-1 vs --text-secondary meaning
+   three different things). topbar.js's own header comment used to
+   document this as a reason to hardcode literal color values rather
+   than reference any page's tokens. That reason is gone now that
+   every page loads this file first — topbar.js's injected CSS can
+   (and now does) reference these tokens directly.
+
+   ONE VISUAL LANGUAGE, enforced by ONE ring/card/button/modal/chip
+   implementation each, used identically everywhere — that's the
+   actual point of this file. A page should almost never need its own
+   copy of any class defined below; if it does, that's a sign either
+   this file is missing something, or the page has a real, page-
+   specific layout need (fine — keep only THAT part local).
+
+   =============================================================
+   TOKENS (section 1)
+   -------------------------------------------------------------
+   Color — semantic accent mapping, used identically everywhere:
+     --accent-cyan    primary accent: data, charts, links, the ring's
+                       default color, primary interactive elements.
+     --accent-green   completed / positive / success.
+     --accent-amber   warning / caution.
+     --accent-coral   alert / violation / destructive.
+     --accent-purple  nutrition domain only (Cronometer/food).
+   Surfaces:
+     --bg-canvas      the near-black page background color itself
+                       (the glow — see section 5 — paints on top of
+                       this, not instead of it).
+     --surface-card   a card's own fill: barely lighter than canvas,
+                       translucent, NOT a heavy filled block.
+     --surface-inset  a sunken/input surface, darker than a card.
+     --border-hairline / --border-strong
+                       card/control outlines — visible but not harsh,
+                       14%/22% white alpha respectively.
+   Text: --text-primary/secondary/tertiary/quaternary.
+   Radii: --radius-xs/sm/md/lg/pill — --radius-lg (20px) is the card
+     radius the reference designs use; smaller controls step down.
+   Spacing scale: --space-1..8, the 4/8/12/16/20/24/32 scale.
+   Type scale: --text-2xl (page title) down to --text-2xs (micro-
+     labels) — nothing on screen should ever compute smaller than
+     --text-2xs (11px).
+   Shadows/glow: --shadow-card (ambient card drop shadow) and
+     --glow-cyan/green/amber/coral/purple (a soft colored glow for
+     hero elements only — see section 6's performance rules: STATIC,
+     capped blur radius, not applied per-card).
+   Z-index layers: --z-nav/fab/modal/toast, matching topbar.js's
+     existing real values exactly (40 / 200 / 300 / 2147483647) so
+     migrating topbar.js to reference these tokens changes nothing
+     about actual stacking behavior.
+   Motion: --duration-fast/base and --ease-standard; every transition
+     in this file (and page CSS built on it) should use these rather
+     than inventing new timings, and everything animation-related is
+     skipped under prefers-reduced-motion (see the media query at the
+     end of section 1).
+
+   COMPONENTS (section 2) — one implementation each:
+     .page-shell / .page-header      page container + title block
+     .ru-card, .ru-card--hero, .ru-card--compact
+                                      default / hero (accent under-
+                                      glow) / compact card variants
+     .ru-kpi                         icon-chip + big number + label
+     .ru-pill                        small outlined status pill
+     .ru-ring                        ring gauge (SVG-based) — used
+                                      identically for score, nutrition,
+                                      habits, and the Day Ring
+     .save-btn, .btn-outline, .btn-icon, .btn-destructive
+                                      buttons (primary/outlined/icon/
+                                      destructive) — .save-btn is the
+                                      pre-existing primary-button class
+                                      name, kept as-is so no page needs
+                                      a markup change for it
+     .hf-input, .hf-select, .ru-stepper
+                                      inputs/selects/steppers
+     .cal-tabs / .cal-tab            segmented control (day-nav range
+                                      tabs, activity/day-type tabs) —
+                                      pre-existing names, kept
+     .day-nav / .day-nav-btn / .day-nav-label
+                                      the day-nav segmented control
+     .ru-toggle                      toggle switch
+     .gm-card, .list-row             list container / list row —
+                                      .gm-card is the pre-existing
+                                      generic card class name, kept
+     .chip                           removable/tag chip
+     .ru-empty                       empty state
+     .ru-modal-bg / .ru-modal / .ru-sheet
+                                      ONE modal implementation — bottom
+                                      sheet on phone, centered dialog
+                                      on desktop, switching purely via
+                                      the breakpoint below, same markup
+     .ru-toast                       toast
+     .ru-chart-card                  chart-card wrapper (pairs with
+                                      row-charts.js's helper — section 8)
+
+   BREAKPOINTS
+     <768px    phone: single column, bottom tab bar
+     768-1023  "tablet": phone layout, centered, max-width 720px
+     >=1024px  desktop: left sidebar nav, wider bento/grid layouts
+   These three are defined once as --bp-tablet/--bp-desktop comments
+   here (CSS can't interpolate a var() into a media query) — the
+   actual numbers (768px / 1024px) are repeated in each @media rule
+   throughout this file and any page-local grid rules; if they ever
+   change, both this file and topbar.js's own breakpoint (also 1024,
+   see injectChrome's sidebar logic) must change together.
+   ============================================================= */
+
+:root {
+  color-scheme: dark;
+
+  /* ---- Accent colors (semantic — see header) ---- */
+  --accent-cyan: #22D3EE;
+  --accent-cyan-dim: rgba(34, 211, 238, 0.14);
+  --accent-green: #17E88F;
+  --accent-green-dim: rgba(23, 232, 143, 0.14);
+  --accent-amber: #FFC93C;
+  --accent-amber-dim: rgba(255, 201, 60, 0.14);
+  --accent-coral: #FF4D5E;
+  --accent-coral-dim: rgba(255, 77, 94, 0.14);
+  --accent-purple: #A78BFA;
+  --accent-purple-dim: rgba(167, 139, 250, 0.14);
+
+  /* ---- Surfaces ---- */
+  --bg-canvas: #050506;
+  --surface-card: rgba(255, 255, 255, 0.045);
+  --surface-card-hover: rgba(255, 255, 255, 0.065);
+  --surface-inset: rgba(0, 0, 0, 0.30);
+  --surface-2: #121214; /* solid (non-translucent) surface for opaque bars/sheets */
+  --border-hairline: rgba(255, 255, 255, 0.14);
+  --border-strong: rgba(255, 255, 255, 0.22);
+  --border-soft: rgba(255, 255, 255, 0.07);
+
+  /* ---- Text ---- */
+  --text-primary: #FAFAFA;
+  --text-secondary: #A5A3A0;
+  --text-tertiary: #6E6C68;
+  --text-quaternary: #4D4B47;
+
+  /* ---- Buttons (primary = off-white, matches existing app convention) ---- */
+  --btn-primary-a: #FFFFFF;
+  --btn-primary-b: #E8E5DD;
+  --btn-primary-text: #0A0A0B;
+
+  /* ---- Radii ---- */
+  --radius-xs: 6px;
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+  --radius-pill: 999px;
+
+  /* ---- Spacing scale ---- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* ---- Type scale (nothing on-screen should compute below 11px) ---- */
+  --text-2xs: 11px;
+  --text-xs: 12px;
+  --text-sm: 12.5px;
+  --text-base: 14px;
+  --text-md: 15px;
+  --text-lg: 16px;
+  --text-xl: 20px;
+  --text-2xl: 28px;
+
+  /* ---- Shadows / glow (static — see section 6 performance rules) ---- */
+  --shadow-card: 0 14px 34px rgba(0, 0, 0, 0.45);
+  --glow-cyan: 0 0 24px rgba(34, 211, 238, 0.28);
+  --glow-green: 0 0 24px rgba(23, 232, 143, 0.28);
+  --glow-amber: 0 0 24px rgba(255, 201, 60, 0.28);
+  --glow-coral: 0 0 24px rgba(255, 77, 94, 0.28);
+  --glow-purple: 0 0 24px rgba(167, 139, 250, 0.28);
+
+  /* ---- Z-index layers (matches topbar.js's real, pre-existing values) ---- */
+  --z-nav: 40;
+  --z-fab: 200;
+  --z-modal: 300;
+  --z-toast: 2147483647;
+
+  /* ---- Motion ---- */
+  --duration-fast: 120ms;
+  --duration-base: 200ms;
+  --ease-standard: cubic-bezier(0.2, 0.7, 0.3, 1);
+
+  --font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+/* Dark theme only (see this file's own migration commit for what was
+   removed app-wide: the toggle, every [data-theme="light"] rule, the
+   per-page theme-init scripts, and the dashboard:theme storage key).
+   No :root[data-theme="light"] block exists anywhere in this system
+   on purpose. */
+html, body { background: var(--bg-canvas); color-scheme: dark; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* =============================================================
+   SECTION 2 — Components
+   ============================================================= */
+
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; padding: 0;
+  color: var(--text-secondary);
+  font-family: var(--font);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-text-size-adjust: 100%;
+}
+body { min-height: 100vh; position: relative; overflow-x: hidden; }
+
+/* Tabular numerals everywhere a number appears — scores, KPI tiles,
+   ring gauge centers, chart axis labels — so digits never jitter in
+   width as they change. */
+.tabular-nums, .ru-kpi-num, .ru-ring-num, .plan-day-block-time {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+}
+
+/* ---- Page shell ---- */
+.page-shell { max-width: 700px; margin: 0 auto; padding: 0 20px 60px; }
+.page-header { margin-bottom: var(--space-5); }
+.page-title {
+  font-size: var(--text-2xl); font-weight: 800; letter-spacing: -0.01em;
+  color: var(--text-primary); margin: 0;
+}
+.section-title {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs); font-weight: 600;
+  letter-spacing: 0.18em; text-transform: uppercase;
+  color: var(--text-tertiary);
+  margin: var(--space-6) 0 var(--space-3);
+}
+
+/* ---- Cards ----
+   Thin 1px outline over a barely-lighter translucent fill, NOT a
+   heavy filled block — the reference design's defining card trait.
+   .gm-card is the pre-existing generic-card class name used across
+   every page already; kept as-is (no markup renames needed) and made
+   the canonical implementation here. */
+.gm-card, .ru-card {
+  background: var(--surface-card);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5);
+  box-shadow: var(--shadow-card);
+}
+/* Hero variant: a soft accent under-glow along the bottom edge, for
+   the score ring / primary chart card on each page. Accent color is
+   set per-instance via --ru-hero-accent (defaults to cyan); a page
+   applies e.g. style="--ru-hero-accent: var(--accent-green)" or a
+   modifier class for a non-default accent. STATIC, no animation (see
+   section 6). */
+.ru-card--hero {
+  --ru-hero-accent: var(--accent-cyan);
+  position: relative;
+  overflow: hidden;
+}
+.ru-card--hero::after {
+  content: '';
+  position: absolute; left: 8%; right: 8%; bottom: 0; height: 3px;
+  background: var(--ru-hero-accent);
+  filter: blur(6px);
+  opacity: 0.55;
+  pointer-events: none;
+}
+.ru-card--compact { padding: var(--space-4); border-radius: var(--radius-md); }
+
+/* ---- KPI tile: icon chip + big number + muted label ---- */
+.ru-kpi { display: flex; flex-direction: column; gap: var(--space-2); }
+.ru-kpi-icon-chip {
+  width: 32px; height: 32px; border-radius: var(--radius-sm);
+  display: flex; align-items: center; justify-content: center;
+  background: var(--accent-cyan-dim); color: var(--accent-cyan);
+  flex-shrink: 0;
+}
+.ru-kpi-icon-chip svg { width: 16px; height: 16px; }
+.ru-kpi-num { font-size: var(--text-2xl); font-weight: 800; color: var(--text-primary); line-height: 1; }
+.ru-kpi-label {
+  font-size: var(--text-2xs); font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+/* ---- Status pill ---- */
+.ru-pill {
+  display: inline-flex; align-items: center; gap: var(--space-1);
+  padding: 4px 10px; border-radius: var(--radius-pill);
+  font-size: var(--text-2xs); font-weight: 700; letter-spacing: 0.02em;
+  border: 1px solid var(--border-hairline);
+  background: var(--surface-inset); color: var(--text-secondary);
+}
+.ru-pill-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
+.ru-pill--cyan { color: var(--accent-cyan); border-color: rgba(34, 211, 238, 0.30); background: var(--accent-cyan-dim); }
+.ru-pill--green { color: var(--accent-green); border-color: rgba(23, 232, 143, 0.30); background: var(--accent-green-dim); }
+.ru-pill--amber { color: var(--accent-amber); border-color: rgba(255, 201, 60, 0.30); background: var(--accent-amber-dim); }
+.ru-pill--coral { color: var(--accent-coral); border-color: rgba(255, 77, 94, 0.30); background: var(--accent-coral-dim); }
+
+/* ---- Ring gauge ----
+   ONE implementation for score / nutrition / habits / Day Ring. Markup
+   contract (an SVG circle pair + a centered label, matching what
+   main.html's Today's Score ring already uses — every ring on every
+   page adopts this exact structure during migration):
+     <div class="ru-ring" style="--ru-ring-pct: 0.62; --ru-ring-accent: var(--accent-cyan)">
+       <svg viewBox="0 0 100 100"><circle class="ru-ring-track" .../><circle class="ru-ring-fill" .../></svg>
+       <div class="ru-ring-center"><div class="ru-ring-num">62%</div><div class="ru-ring-label">TODAY</div></div>
+     </div>
+   --ru-ring-pct (0..1) drives stroke-dashoffset via calc() below;
+   JS sets it as an inline custom property per-instance (no per-page
+   ring-drawing math duplicated — see each page's migration diff for
+   the small helper this replaced). Thick stroke + rounded caps + a
+   glow, per the reference design. */
+.ru-ring { position: relative; width: 88px; height: 88px; flex-shrink: 0; }
+.ru-ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+.ru-ring-track { fill: none; stroke: var(--surface-inset); stroke-width: 9; }
+.ru-ring-fill {
+  fill: none; stroke: var(--ru-ring-accent, var(--accent-cyan)); stroke-width: 9;
+  stroke-linecap: round;
+  stroke-dasharray: 251.2; /* 2*pi*40 */
+  stroke-dashoffset: calc(251.2 * (1 - var(--ru-ring-pct, 0)));
+  filter: drop-shadow(0 0 6px var(--ru-ring-accent, var(--accent-cyan)));
+}
+.ru-ring-center {
+  position: absolute; inset: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; text-align: center;
+}
+.ru-ring-num { font-size: 20px; font-weight: 800; color: var(--text-primary); line-height: 1; }
+.ru-ring-label {
+  font-size: 9px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--text-tertiary); margin-top: 2px;
+}
+.ru-ring--lg { width: 132px; height: 132px; }
+.ru-ring--lg .ru-ring-num { font-size: 30px; }
+
+/* ---- Buttons ---- */
+.save-btn {
+  width: 100%; padding: 13px; border: none; border-radius: var(--radius-md);
+  background: linear-gradient(180deg, var(--btn-primary-a), var(--btn-primary-b));
+  color: var(--btn-primary-text);
+  font-family: inherit; font-size: var(--text-base); font-weight: 700;
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
+  transition: transform var(--duration-fast) var(--ease-standard), opacity var(--duration-fast);
+}
+.save-btn:active { transform: scale(0.98); }
+.save-btn:disabled { opacity: 0.5; cursor: default; }
+.save-btn-row { display: flex; gap: var(--space-3); }
+.btn-outline {
+  padding: 11px 22px; border-radius: var(--radius-md); border: 1px solid var(--border-hairline);
+  background: transparent; color: var(--text-secondary);
+  font-family: inherit; font-size: var(--text-base); font-weight: 700; cursor: pointer;
+}
+.btn-outline:hover { border-color: var(--text-tertiary); }
+.btn-icon {
+  width: 40px; height: 40px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border-hairline); background: var(--surface-inset);
+  color: var(--text-secondary); display: flex; align-items: center; justify-content: center;
+  cursor: pointer; flex-shrink: 0;
+}
+.btn-icon svg { width: 18px; height: 18px; }
+.btn-destructive { color: var(--accent-coral); border-color: rgba(255, 77, 94, 0.30); }
+
+/* ---- Inputs / selects / steppers ---- */
+.hf-input, .hf-select {
+  background: var(--surface-inset); border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-sm); padding: 9px 12px;
+  font-family: inherit; font-size: var(--text-base); color: var(--text-primary);
+  min-width: 0;
+}
+.hf-input::placeholder { color: var(--text-tertiary); }
+.hf-input:focus, .hf-select:focus { outline: none; border-color: var(--accent-cyan); }
+.ru-stepper { display: flex; align-items: center; gap: var(--space-1); }
+.ru-stepper-btn {
+  width: 32px; height: 32px; border-radius: var(--radius-xs); border: 1px solid var(--border-hairline);
+  background: var(--surface-inset); color: var(--text-secondary);
+  font-size: 16px; font-weight: 700; cursor: pointer; flex-shrink: 0;
+}
+.ru-stepper-val {
+  min-width: 40px; text-align: center; font-weight: 700; color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Segmented control (day-nav range tabs / activity tabs) ----
+   .cal-tabs/.cal-tab are the pre-existing class names; kept as-is. */
+.cal-tabs {
+  display: flex; gap: 4px; background: var(--surface-inset);
+  border: 1px solid var(--border-hairline); border-radius: var(--radius-sm); padding: 3px;
+}
+.cal-tab {
+  padding: 7px 12px; border: none; background: transparent; color: var(--text-tertiary);
+  border-radius: 7px; font-family: inherit; font-size: 11.5px; font-weight: 700;
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
+  transition: background var(--duration-fast), color var(--duration-fast);
+}
+.cal-tab:hover { color: var(--text-secondary); }
+.cal-tab.active { background: linear-gradient(180deg, var(--btn-primary-a), var(--btn-primary-b)); color: var(--btn-primary-text); }
+
+/* ---- Day-nav ---- */
+.day-nav { display: flex; align-items: center; gap: 4px; min-width: 0; margin-bottom: var(--space-5); }
+.day-nav-btn {
+  width: 30px; height: 30px; flex-shrink: 0; border-radius: 50%;
+  border: 1px solid var(--border-hairline); background: var(--surface-inset);
+  color: var(--text-secondary); display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+}
+.day-nav-btn:hover { color: var(--text-primary); border-color: var(--text-tertiary); }
+.day-nav-btn:disabled { opacity: 0.35; cursor: default; }
+.day-nav-btn:disabled:hover { color: var(--text-tertiary); border-color: var(--border-hairline); }
+.day-nav-label { font-size: var(--text-base); font-weight: 700; color: var(--text-primary); min-width: 0; }
+
+/* ---- Toggle ---- */
+.ru-toggle { position: relative; display: inline-block; width: 42px; height: 24px; flex-shrink: 0; }
+.ru-toggle input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
+.ru-toggle-track {
+  position: absolute; inset: 0; border-radius: var(--radius-pill);
+  background: var(--surface-inset); border: 1px solid var(--border-hairline);
+  transition: background var(--duration-base) var(--ease-standard);
+}
+.ru-toggle-thumb {
+  position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%;
+  background: var(--text-secondary);
+  transition: transform var(--duration-base) var(--ease-standard), background var(--duration-base);
+}
+.ru-toggle input:checked ~ .ru-toggle-track { background: var(--accent-green-dim); border-color: rgba(23, 232, 143, 0.4); }
+.ru-toggle input:checked ~ .ru-toggle-thumb { transform: translateX(18px); background: var(--accent-green); }
+
+/* ---- List row / chip ---- */
+.list-row { display: flex; align-items: center; gap: var(--space-3); padding: 10px 0; border-bottom: 1px solid var(--border-soft); }
+.list-row:last-child { border-bottom: none; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--surface-inset); border: 1px solid var(--border-hairline); border-radius: var(--radius-pill);
+  padding: 6px 6px 6px 12px; font-size: var(--text-xs); color: var(--text-primary);
+}
+.chip-remove {
+  width: 18px; height: 18px; flex-shrink: 0; border-radius: 50%; border: none;
+  background: rgba(255,255,255,0.08); color: var(--text-secondary);
+  font-size: 12px; line-height: 1; cursor: pointer; display: flex; align-items: center; justify-content: center;
+}
+.chip-remove:hover { background: var(--accent-coral-dim); color: var(--accent-coral); }
+
+/* ---- Empty state ---- */
+.ru-empty { text-align: center; padding: var(--space-8) var(--space-4); color: var(--text-tertiary); }
+.ru-empty-icon { width: 36px; height: 36px; margin: 0 auto var(--space-3); opacity: 0.5; }
+.ru-empty-title { font-size: var(--text-md); font-weight: 700; color: var(--text-secondary); margin-bottom: 4px; }
+.ru-empty-sub { font-size: var(--text-sm); }
+
+/* ---- Modal / bottom sheet ----
+   ONE implementation: a bottom sheet on phone, a centered dialog on
+   desktop — same markup, presentation switches purely at the 768px
+   breakpoint below. Markup contract:
+     <div class="ru-modal-bg" id="...">
+       <div class="ru-modal">
+         <div class="ru-modal-header">...<button class="btn-icon">×</button></div>
+         <div class="ru-modal-body">...</div>
+       </div>
+     </div>
+   Visibility toggled the same way every existing modal already does
+   (a .show/.is-open class flip — topbar.js's startModalLock() already
+   watches for exactly these two class names app-wide, unchanged). */
+.ru-modal-bg {
+  position: fixed; inset: 0; z-index: var(--z-modal);
+  background: rgba(0, 0, 0, 0.55);
+  display: none; align-items: flex-end; justify-content: center;
+  padding: 0;
+}
+.ru-modal-bg.show, .ru-modal-bg.is-open { display: flex; }
+.ru-modal {
+  background: var(--surface-2); border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  width: 100%; max-height: 86vh; overflow-y: auto;
+  padding: var(--space-5);
+  padding-bottom: max(var(--space-5), env(safe-area-inset-bottom));
+}
+.ru-modal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-4); }
+.ru-modal-header h2, .ru-modal-header h3 { margin: 0; font-size: var(--text-lg); color: var(--text-primary); }
+
+/* ---- Toast ---- */
+.ru-toast {
+  position: fixed; left: 50%; bottom: max(20px, env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  z-index: var(--z-toast);
+  background: var(--surface-2); border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-md); padding: 12px 18px;
+  font-size: var(--text-base); color: var(--text-primary);
+  box-shadow: var(--shadow-card);
+  display: flex; align-items: center; gap: var(--space-3);
+}
+
+/* ---- Chart-card wrapper (pairs with row-charts.js, section 8) ---- */
+.ru-chart-card { position: relative; }
+.ru-chart-card canvas { max-width: 100%; }
+
+/* =============================================================
+   Breakpoints: tablet (768-1023, phone layout centered/wider) and
+   desktop (>=1024, sidebar nav + grid). Phone (<768) is the default
+   above with no media query needed.
+   ============================================================= */
+@media (min-width: 768px) {
+  .page-shell { max-width: 720px; }
+}
+@media (min-width: 1024px) {
+  .page-shell { max-width: 100%; padding-left: calc(220px + 32px); padding-right: 32px; }
+  .ru-modal-bg { align-items: center; }
+  .ru-modal {
+    border-radius: var(--radius-lg);
+    max-width: 480px; max-height: 80vh;
+    padding-bottom: var(--space-5);
+  }
+}
+
+@media (max-width: 480px) {
+  input, textarea, select { font-size: 16px !important; }
+}

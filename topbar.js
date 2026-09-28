@@ -10,13 +10,22 @@
 // finance.html included, since that's a page in its own right, just
 // one with its own internal nav instead of the shared chrome.
 //
-// This file is self-contained on purpose: every color below is a
-// literal value, not var(--something). Pages in this project use at
-// least three different, incompatible CSS-variable naming schemes
-// (health.html/finance.html vs. index.html/main.html/po-water.html
-// vs. gym.html), and this same stylesheet gets injected on all of
-// them — reaching for a page's own tokens would silently break on
-// whichever pages don't define them.
+// Since the row-ui.css redesign, every page loads ONE shared token set
+// (row-ui.css) before its own styles — the three-incompatible-schemes
+// problem this file used to work around by hardcoding every color as a
+// literal is gone, so the CSS below now references those tokens
+// (var(--text-primary) etc.) directly. row-ui.css itself still keeps
+// its OWN literal fallback values for the handful of things that must
+// render correctly even if row-ui.css somehow failed to load (this
+// file has no such fallback path, so it now genuinely depends on
+// row-ui.css being present — every page's <head> loads it first,
+// non-deferred, same load-order discipline as daylib.js/score-lib.js).
+//
+// Responsive shell: the SAME #bottombar markup below (five tabs) is
+// restyled into a fixed left sidebar at >=1024px via the media query
+// near the end of this CSS block — same destinations/icons/active-
+// state logic (currentPageKey() below), only the presentation
+// switches. <1024px keeps the existing bottom tab bar unchanged.
 // =============================================================
 (function () {
   'use strict';
@@ -28,13 +37,13 @@
   // -------- CSS --------
   const css = `
 .topbar {
-  position: sticky; top: 0; z-index: 40;
+  position: sticky; top: 0; z-index: var(--z-nav, 40);
   display: flex; justify-content: flex-end; align-items: center;
-  gap: 8px;
-  padding: max(10px, env(safe-area-inset-top)) 14px 8px;
-  background: #0a0a0b;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-  font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+  gap: var(--space-2, 8px);
+  padding: max(10px, env(safe-area-inset-top)) var(--space-4, 14px) 8px;
+  background: var(--bg-canvas, #0a0a0b);
+  border-bottom: 1px solid var(--border-soft, rgba(255, 255, 255, 0.06));
+  font-family: var(--font, -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif);
   /* The one shared gap between the topbar and whatever page content
      follows it. injectChrome() always inserts #topbar as body's first
      child (see below), so this margin is the ONLY thing standing
@@ -46,26 +55,26 @@
      gap without needing its own hack, and the topbar's own padding-top
      already resolves env(safe-area-inset-top) into its height, so this
      value doesn't need to duplicate that. */
-  margin-bottom: 20px;
+  margin-bottom: var(--space-5, 20px);
 }
 .topbar-water-wrap { display: flex; align-items: stretch; }
 .topbar-water-pill {
   display: inline-flex; align-items: center; gap: 8px;
   padding: 9px 14px;
-  background: rgba(125, 211, 252, 0.08);
-  border: 1px solid rgba(125, 211, 252, 0.16);
+  background: var(--accent-cyan-dim, rgba(34, 211, 238, 0.14));
+  border: 1px solid rgba(34, 211, 238, 0.22);
   border-right: none;
-  border-radius: 12px 0 0 12px;
-  text-decoration: none; color: #FAFAFA;
+  border-radius: var(--radius-sm, 12px) 0 0 var(--radius-sm, 12px);
+  text-decoration: none; color: var(--text-primary, #FAFAFA);
   -webkit-tap-highlight-color: transparent;
 }
 .topbar-water-pill .topbar-pill-dot {
   width: 8px; height: 8px; border-radius: 50%;
-  background: #7DD3FC; flex-shrink: 0;
+  background: var(--accent-cyan, #22D3EE); flex-shrink: 0;
 }
-.topbar-water-pill.warn .topbar-pill-dot { background: #fbbf24; }
+.topbar-water-pill.warn .topbar-pill-dot { background: var(--accent-amber, #fbbf24); }
 .topbar-water-pill.miss .topbar-pill-dot {
-  background: #ff8a8a;
+  background: var(--accent-coral, #ff8a8a);
   animation: topbar-miss-pulse 1.6s ease-in-out infinite;
 }
 @keyframes topbar-miss-pulse {
@@ -73,64 +82,90 @@
   50%      { box-shadow: 0 0 0 5px rgba(239, 68, 68, 0); }
 }
 .topbar-pill-count {
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  font-size: 13px; font-weight: 700; color: #FAFAFA;
+  font-family: var(--font-mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace);
+  font-size: 13px; font-weight: 700; color: var(--text-primary, #FAFAFA);
   font-variant-numeric: tabular-nums; white-space: nowrap;
 }
 .topbar-water-add {
   width: 44px;
-  border: 1px solid rgba(125, 211, 252, 0.16);
-  background: linear-gradient(180deg, rgba(125, 211, 252, 0.28), rgba(110, 231, 183, 0.28));
+  border: 1px solid rgba(34, 211, 238, 0.22);
+  background: linear-gradient(180deg, rgba(34, 211, 238, 0.32), rgba(23, 232, 143, 0.28));
   color: #FFFFFF; font-family: inherit;
   font-size: 20px; font-weight: 700; line-height: 1;
-  cursor: pointer; border-radius: 0 12px 12px 0;
+  cursor: pointer; border-radius: 0 var(--radius-sm, 12px) var(--radius-sm, 12px) 0;
   -webkit-tap-highlight-color: transparent;
-  transition: background 0.15s, transform 0.10s;
+  transition: background var(--duration-base, 0.15s), transform var(--duration-fast, 0.10s);
 }
 .topbar-water-add:active { transform: scale(0.94); }
 .topbar-water-add.flash {
-  background: linear-gradient(180deg, rgba(125, 211, 252, 0.7), rgba(110, 231, 183, 0.7));
+  background: linear-gradient(180deg, rgba(34, 211, 238, 0.75), rgba(23, 232, 143, 0.7));
 }
 .topbar-icon-btn {
   display: inline-flex; align-items: center; justify-content: center;
   width: 44px; height: 42px;
-  border: 1px solid rgba(255, 255, 255, 0.10);
-  background: rgba(255, 255, 255, 0.04);
-  border-radius: 12px; text-decoration: none;
+  border: 1px solid var(--border-hairline, rgba(255, 255, 255, 0.10));
+  background: var(--surface-card, rgba(255, 255, 255, 0.04));
+  border-radius: var(--radius-sm, 12px); text-decoration: none;
   -webkit-tap-highlight-color: transparent;
-  transition: background 0.15s;
+  transition: background var(--duration-base, 0.15s);
 }
-.topbar-icon-btn:hover { background: rgba(255, 255, 255, 0.08); }
+.topbar-icon-btn:hover { background: var(--surface-card-hover, rgba(255, 255, 255, 0.08)); }
 .topbar-back-btn { margin-right: auto; }
 .topbar-icon {
   width: 20px; height: 20px;
-  stroke: currentColor; color: rgba(255, 255, 255, 0.85);
+  stroke: currentColor; color: var(--text-primary, rgba(255, 255, 255, 0.85));
 }
 .bottombar {
-  position: fixed; bottom: 0; left: 0; right: 0; z-index: 40;
+  position: fixed; bottom: 0; left: 0; right: 0; z-index: var(--z-nav, 40);
   display: flex; justify-content: space-around; align-items: stretch;
   padding: 6px 0 calc(6px + env(safe-area-inset-bottom));
-  background: #0a0a0b;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-  font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+  background: var(--bg-canvas, #0a0a0b);
+  border-top: 1px solid var(--border-hairline, rgba(255, 255, 255, 0.08));
+  font-family: var(--font, -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif);
 }
 .bottombar-tab {
   flex: 1;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 3px; padding: 6px 0 4px; text-decoration: none;
-  color: rgba(255, 255, 255, 0.45);
+  color: var(--text-tertiary, rgba(255, 255, 255, 0.45));
   font-size: 10px; font-weight: 600; letter-spacing: 0.04em;
-  -webkit-tap-highlight-color: transparent; transition: color 0.15s;
+  -webkit-tap-highlight-color: transparent; transition: color var(--duration-base, 0.15s);
 }
 .bottombar-tab-icon {
   width: 24px; height: 24px;
   stroke: currentColor; stroke-width: 1.75;
-  transition: transform 0.10s;
+  transition: transform var(--duration-fast, 0.10s);
 }
-.bottombar-tab.active { color: #FAFAFA; }
+.bottombar-tab.active { color: var(--accent-cyan, #FAFAFA); }
 .bottombar-tab:active .bottombar-tab-icon { transform: scale(0.92); }
 body.has-bottombar {
   padding-bottom: calc(72px + env(safe-area-inset-bottom)) !important;
+}
+
+/* ---- Responsive shell: >=1024px turns #bottombar into a fixed left
+   sidebar instead — same markup/tabs/active-state (currentPageKey()),
+   only the presentation switches. .page-shell (row-ui.css) reserves
+   room for it via padding-left; pages not yet migrated to .page-shell
+   keep their own max-width container centered in the remaining space,
+   same as before (the sidebar simply overlays the left gutter). ---- */
+@media (min-width: 1024px) {
+  body.has-bottombar { padding-bottom: 0 !important; }
+  .bottombar {
+    top: 0; bottom: 0; left: 0; right: auto; width: 220px;
+    flex-direction: column; justify-content: flex-start; align-items: stretch;
+    gap: var(--space-1, 4px);
+    padding: max(24px, env(safe-area-inset-top)) var(--space-3, 12px) 24px;
+    border-top: none; border-right: 1px solid var(--border-hairline, rgba(255, 255, 255, 0.08));
+  }
+  .bottombar-tab {
+    flex: none; flex-direction: row; justify-content: flex-start;
+    gap: var(--space-3, 12px); padding: 10px 14px;
+    border-radius: var(--radius-sm, 10px);
+    font-size: var(--text-base, 14px); font-weight: 600; letter-spacing: normal;
+  }
+  .bottombar-tab:hover { background: var(--surface-card, rgba(255,255,255,0.04)); color: var(--text-primary); }
+  .bottombar-tab.active { background: var(--accent-cyan-dim, rgba(34,211,238,0.14)); color: var(--accent-cyan, #22D3EE); }
+  .bottombar-tab-icon { width: 20px; height: 20px; }
 }
 @media (max-width: 480px) {
   .topbar { padding-left: 10px; padding-right: 10px; gap: 6px; }
@@ -474,32 +509,27 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
   // to get wrong. `background-attachment: fixed` replaces `position: fixed`
   // for "stays put while the page scrolls". True `filter: blur()` and
   // `transform`-based drift aren't available for a background-image layer
-  // alone (they'd blur/shift all of body's real content too) — approximated
-  // instead with a longer gradient falloff and a `background-position`
-  // drift animation. Kept as literal values, same reasoning as `css` above:
-  // not every page defines the CSS variables the old per-page versions
-  // relied on (health.html used --accent-glow, others used --glow-opacity,
-  // gym.html/po-water.html/cronometer.html defined neither).
+  // alone (they'd blur/shift all of body's real content too) — the
+  // gradient's own falloff distance stands in for blur.
+  //
+  // NOW STATIC (the drift animation is gone): row-ui.css's performance
+  // rules for iOS are explicit — glow is STATIC, no animated blur/filter,
+  // no per-card animations. A page-wide 36s background-position drift on
+  // every page falls squarely under that ban, so it's removed here as
+  // part of the same redesign that wrote those rules. Also dark-only —
+  // the light theme (and its own dimmer glow variant) no longer exists
+  // app-wide (see row-ui.css's own header comment). Tokenized: the
+  // accent color is exactly var(--accent-green-dim), byte-identical to
+  // the literal rgba this replaced.
   const glowCss = `
 body {
   background-image:
-    radial-gradient(circle at 82% 14%, rgba(23, 232, 143, 0.14), transparent 55%),
+    radial-gradient(circle at 82% 14%, var(--accent-green-dim, rgba(23, 232, 143, 0.14)), transparent 55%),
     radial-gradient(circle at 18% 90%, rgba(180, 180, 200, 0.06), transparent 60%),
     radial-gradient(rgba(255,255,255,0.014) 1px, transparent 1px);
   background-size: auto, auto, 3px 3px;
   background-attachment: fixed, fixed, fixed;
   background-repeat: no-repeat, no-repeat, repeat;
-  animation: row-glow-drift 36s ease-in-out infinite alternate;
-}
-html[data-theme="light"] body {
-  background-image:
-    radial-gradient(circle at 82% 14%, rgba(23, 232, 143, 0.049), transparent 55%),
-    radial-gradient(circle at 18% 90%, rgba(180, 180, 200, 0.021), transparent 60%),
-    radial-gradient(rgba(255,255,255,0.014) 1px, transparent 1px);
-}
-@keyframes row-glow-drift {
-  0%   { background-position: 0 0, 0 0, 0 0; }
-  100% { background-position: -22px 14px, -22px 14px, 0 0; }
 }
 `;
 

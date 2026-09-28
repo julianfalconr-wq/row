@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Row — Styleguide (dev only)</title>
+<!-- Not linked in any nav — this is the single reference page every
+     component in row-ui.css renders on, in every state, for eyeballing
+     and for the automated consistency checks (see the redesign's own
+     verification scripts) to diff every real page's computed styles
+     against. Not gated behind lock.js on purpose: it holds zero real
+     user data. -->
+<link rel="stylesheet" href="row-ui.css">
+<style>
+  body { padding: 40px 24px 120px; }
+  .sg-section { max-width: 1000px; margin: 0 auto 56px; }
+  .sg-section h2 {
+    font-size: 20px; font-weight: 800; color: var(--text-primary);
+    margin: 0 0 16px; padding-bottom: 8px; border-bottom: 1px solid var(--border-hairline);
+  }
+  .sg-row { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
+  .sg-swatch { width: 110px; }
+  .sg-swatch-color { height: 56px; border-radius: var(--radius-sm); border: 1px solid var(--border-hairline); margin-bottom: 6px; }
+  .sg-swatch-label { font-size: 11px; color: var(--text-tertiary); font-family: var(--font-mono); }
+  .sg-type-row { display: flex; align-items: baseline; gap: 12px; margin-bottom: 10px; }
+  .sg-type-label { width: 90px; font-size: 11px; color: var(--text-tertiary); font-family: var(--font-mono); flex-shrink: 0; }
+  .sg-space-row { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+  .sg-space-bar { height: 16px; background: var(--accent-cyan-dim); border: 1px solid var(--accent-cyan); }
+  .sg-space-label { font-size: 11px; color: var(--text-tertiary); font-family: var(--font-mono); width: 90px; }
+  .sg-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; }
+  .sg-ring-row { display: flex; gap: 24px; align-items: center; flex-wrap: wrap; }
+</style>
+</head>
+<body>
+
+<div class="sg-section">
+  <h1 style="font-size:28px;font-weight:800;color:var(--text-primary);">Row — Styleguide</h1>
+  <p style="color:var(--text-tertiary);font-size:13px;">Dev-only reference. Not linked from any page's nav. Every row-ui.css component, in every state.</p>
+</div>
+
+<div class="sg-section">
+  <h2>Accent colors</h2>
+  <div class="sg-row" id="sg-colors"></div>
+</div>
+
+<div class="sg-section">
+  <h2>Surfaces &amp; text</h2>
+  <div class="sg-row" id="sg-surfaces"></div>
+</div>
+
+<div class="sg-section">
+  <h2>Type scale</h2>
+  <div id="sg-type"></div>
+</div>
+
+<div class="sg-section">
+  <h2>Spacing scale</h2>
+  <div id="sg-space"></div>
+</div>
+
+<div class="sg-section">
+  <h2>Radii</h2>
+  <div class="sg-row" id="sg-radii"></div>
+</div>
+
+<div class="sg-section">
+  <h2>Cards</h2>
+  <div class="sg-grid">
+    <div class="ru-card">
+      <div class="section-title">Default card</div>
+      <div style="color:var(--text-primary);font-size:15px;font-weight:700;">gm-card / ru-card</div>
+      <div style="color:var(--text-secondary);font-size:13px;margin-top:4px;">Thin 1px outline over a barely-lighter translucent fill.</div>
+    </div>
+    <div class="ru-card ru-card--hero" style="--ru-hero-accent: var(--accent-cyan);">
+      <div class="section-title">Hero (cyan)</div>
+      <div style="color:var(--text-primary);font-size:15px;font-weight:700;">ru-card--hero</div>
+      <div style="color:var(--text-secondary);font-size:13px;margin-top:4px;">Soft accent under-glow along the bottom edge.</div>
+    </div>
+    <div class="ru-card ru-card--hero" style="--ru-hero-accent: var(--accent-green);">
+      <div class="section-title">Hero (green)</div>
+      <div style="color:var(--text-primary);font-size:15px;font-weight:700;">Accent swapped via --ru-hero-accent</div>
+    </div>
+    <div class="ru-card ru-card--compact">
+      <div class="section-title">Compact</div>
+      <div style="color:var(--text-primary);font-size:14px;font-weight:700;">ru-card--compact</div>
+    </div>
+  </div>
+</div>
+
+<div class="sg-section">
+  <h2>KPI tiles</h2>
+  <div class="sg-grid">
+    <div class="ru-card ru-kpi">
+      <div class="ru-kpi-icon-chip"><i data-lucide="flame"></i></div>
+      <div class="ru-kpi-num">1,842</div>
+      <div class="ru-kpi-label">Calories</div>
+    </div>
+    <div class="ru-card ru-kpi">
+      <div class="ru-kpi-icon-chip" style="background:var(--accent-green-dim);color:var(--accent-green);"><i data-lucide="check"></i></div>
+      <div class="ru-kpi-num">7</div>
+      <div class="ru-kpi-label">Day streak</div>
+    </div>
+  </div>
+</div>
+
+<div class="sg-section">
+  <h2>Status pills</h2>
+  <div class="sg-row">
+    <span class="ru-pill"><span class="ru-pill-dot"></span>Default</span>
+    <span class="ru-pill ru-pill--cyan"><span class="ru-pill-dot"></span>Active</span>
+    <span class="ru-pill ru-pill--green"><span class="ru-pill-dot"></span>Complete</span>
+    <span class="ru-pill ru-pill--amber"><span class="ru-pill-dot"></span>Warning</span>
+    <span class="ru-pill ru-pill--coral"><span class="ru-pill-dot"></span>Alert</span>
+  </div>
+</div>
+
+<div class="sg-section">
+  <h2>Ring gauges — same component for score / nutrition / habits / Day Ring</h2>
+  <div class="sg-ring-row">
+    <div class="ru-ring" style="--ru-ring-pct: 0.72; --ru-ring-accent: var(--accent-cyan);">
+      <svg viewBox="0 0 100 100"><circle class="ru-ring-track" cx="50" cy="50" r="40"/><circle class="ru-ring-fill" cx="50" cy="50" r="40"/></svg>
+      <div class="ru-ring-center"><div class="ru-ring-num">72%</div><div class="ru-ring-label">Today</div></div>
+    </div>
+    <div class="ru-ring" style="--ru-ring-pct: 0.4; --ru-ring-accent: var(--accent-purple);">
+      <svg viewBox="0 0 100 100"><circle class="ru-ring-track" cx="50" cy="50" r="40"/><circle class="ru-ring-fill" cx="50" cy="50" r="40"/></svg>
+      <div class="ru-ring-center"><div class="ru-ring-num">40%</div><div class="ru-ring-label">Score</div></div>
+    </div>
+    <div class="ru-ring" style="--ru-ring-pct: 0; --ru-ring-accent: var(--accent-cyan);">
+      <svg viewBox="0 0 100 100"><circle class="ru-ring-track" cx="50" cy="50" r="40"/><circle class="ru-ring-fill" cx="50" cy="50" r="40"/></svg>
+      <div class="ru-ring-center"><div class="ru-ring-num">—</div><div class="ru-ring-label">No data</div></div>
+    </div>
+    <div class="ru-ring ru-ring--lg" style="--ru-ring-pct: 0.94; --ru-ring-accent: var(--accent-coral);">
+      <svg viewBox="0 0 100 100"><circle class="ru-ring-track" cx="50" cy="50" r="40"/><circle class="ru-ring-fill" cx="50" cy="50" r="40"/></svg>
+      <div class="ru-ring-center"><div class="ru-ring-num">94%</div><div class="ru-ring-label">Bedtime</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="sg-section">
+  <h2>Buttons</h2>
+  <div class="sg-row" style="align-items:center;">
+    <button class="save-btn" style="width:auto;padding:13px 24px;">Primary</button>
+    <button class="save-btn" style="width:auto;padding:13px 24px;" disabled>Disabled</button>
+    <button class="btn-outline">Outline</button>
+    <button class="btn-icon"><i data-lucide="settings"></i></button>
+    <button class="btn-outline btn-destructive">Destructive</button>
+  </div>
+</div>
+
+<div class="sg-section">
+  <h2>Inputs, selects, steppers</h2>
+  <div class="sg-row" style="align-items:center;">
+    <input class="hf-input" placeholder="Text input" style="width:180px;">
+    <select class="hf-select"><option>Option A</option><option>Option B</option></select>
+    <div class="ru-stepper">
+      <button class="ru-stepper-btn">−</button>
+      <span class="ru-stepper-val">3</span>
+      <button class="ru-stepper-btn">+</button>
+    </div>
+  </div>
+</div>
+
+<div class="sg-section">
+  <h2>Segmented control / day-nav</h2>
+  <div class="sg-row" style="align-items:center;">
+    <div class="cal-tabs">
+      <button class="cal-tab active">Today</button>
+      <button class="cal-tab">7 days</button>
+      <button class="cal-tab">30 days</button>
+    </div>
+    <div class="day-nav" style="width:auto;">
+      <button class="day-nav-btn"><i data-lucide="chevron-left"></i></button>
+      <span class="day-nav-label">Today</span>
+      <button class="day-nav-btn"><i data-lucide="chevron-right"></i></button>
+    </div>
+  </div>
+</div>
+
+<div class="sg-section">
+  <h2>Toggle</h2>
+  <div class="sg-row" style="align-items:center;">
+    <label class="ru-toggle"><input type="checkbox"><span class="ru-toggle-track"></span><span class="ru-toggle-thumb"></span></label>
+    <label class="ru-toggle"><input type="checkbox" checked><span class="ru-toggle-track"></span><span class="ru-toggle-thumb"></span></label>
+  </div>
+</div>
+
+<div class="sg-section">
+  <h2>List rows &amp; chips</h2>
+  <div class="ru-card" style="max-width:420px;">
+    <div class="list-row"><span style="color:var(--text-primary);">Push day</span></div>
+    <div class="list-row"><span style="color:var(--text-primary);">Pull day</span></div>
+    <div class="list-row"><span style="color:var(--text-primary);">Legs</span></div>
+  </div>
+  <div class="sg-row" style="margin-top:12px;">
+    <span class="chip">Laundry <button class="chip-remove">✕</button></span>
+    <span class="chip">Read <button class="chip-remove">✕</button></span>
+  </div>
+</div>
+
+<div class="sg-section">
+  <h2>Empty state</h2>
+  <div class="ru-card">
+    <div class="ru-empty">
+      <div class="ru-empty-title">Nothing logged yet</div>
+      <div class="ru-empty-sub">Add your first entry to see it here.</div>
+    </div>
+  </div>
+</div>
+
+<div class="sg-section">
+  <h2>Modal / sheet (static preview — bottom sheet on phone, centered dialog on desktop)</h2>
+  <div style="position:relative;height:220px;border:1px dashed var(--border-hairline);border-radius:var(--radius-md);overflow:hidden;">
+    <div class="ru-modal-bg show" style="position:absolute;">
+      <div class="ru-modal" style="max-width:360px;">
+        <div class="ru-modal-header"><h3>Edit habit</h3><button class="btn-icon">✕</button></div>
+        <div style="color:var(--text-secondary);font-size:13px;">Modal body content goes here.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="sg-section">
+  <h2>Toast</h2>
+  <div style="position:relative;height:80px;">
+    <div class="ru-toast" style="position:absolute;left:50%;bottom:0;">Event created</div>
+  </div>
+</div>
+
+<script src="topbar.js" defer></script>
+<script>
+  // topbar.js's real chrome (topbar/bottombar/chat FAB) IS injected
+  // here on purpose — seeing the actual shared nav in place, not a
+  // mockup of it, is part of what this page is for. It isn't gated by
+  // lock.js (no PIN script on this page), so it renders immediately.
+  document.addEventListener('DOMContentLoaded', function () {
+    function swatch(name, varName) {
+      return '<div class="sg-swatch"><div class="sg-swatch-color" style="background:var(' + varName + ')"></div><div class="sg-swatch-label">' + name + '</div></div>';
+    }
+    document.getElementById('sg-colors').innerHTML = [
+      swatch('cyan', '--accent-cyan'), swatch('green', '--accent-green'),
+      swatch('amber', '--accent-amber'), swatch('coral', '--accent-coral'),
+      swatch('purple', '--accent-purple'),
+    ].join('');
+    document.getElementById('sg-surfaces').innerHTML = [
+      swatch('bg-canvas', '--bg-canvas'), swatch('surface-card', '--surface-card'),
+      swatch('surface-inset', '--surface-inset'), swatch('text-primary', '--text-primary'),
+      swatch('text-secondary', '--text-secondary'), swatch('text-tertiary', '--text-tertiary'),
+    ].join('');
+    const sizes = [['2xl','--text-2xl'],['xl','--text-xl'],['lg','--text-lg'],['md','--text-md'],['base','--text-base'],['sm','--text-sm'],['xs','--text-xs'],['2xs','--text-2xs']];
+    document.getElementById('sg-type').innerHTML = sizes.map(([n, v]) =>
+      '<div class="sg-type-row"><span class="sg-type-label">' + n + '</span><span style="font-size:var(' + v + ');color:var(--text-primary);">The quick brown fox</span></div>'
+    ).join('');
+    const spaces = [['1','--space-1'],['2','--space-2'],['3','--space-3'],['4','--space-4'],['5','--space-5'],['6','--space-6'],['8','--space-8']];
+    document.getElementById('sg-space').innerHTML = spaces.map(([n, v]) =>
+      '<div class="sg-space-row"><span class="sg-space-label">space-' + n + '</span><div class="sg-space-bar" style="width:var(' + v + ')"></div></div>'
+    ).join('');
+    const radii = [['xs','--radius-xs'],['sm','--radius-sm'],['md','--radius-md'],['lg','--radius-lg'],['pill','--radius-pill']];
+    document.getElementById('sg-radii').innerHTML = radii.map(([n, v]) =>
+      '<div class="sg-swatch"><div class="sg-swatch-color" style="background:var(--surface-card);border-radius:var(' + v + ')"></div><div class="sg-swatch-label">' + n + '</div></div>'
+    ).join('');
+    if (window.RowIcons) window.RowIcons.render(); else if (window.lucide) window.lucide.createIcons();
+  });
+</script>
+</body>
+</html>
