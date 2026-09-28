@@ -664,6 +664,63 @@ body {
 .plan-day-result .ok { color: var(--success); }
 .plan-day-result .err { color: var(--danger); }
 
+/* ----- Plan My Day — "+ Add activity" chips ----- */
+.plan-day-activities { margin-bottom: 12px; }
+.plan-day-activities-label {
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--text-tertiary); margin-bottom: 8px;
+}
+.plan-day-activity-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.plan-day-activity-chips:not(:empty) { margin-bottom: 10px; }
+.plan-day-activity-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--inset-bg); border: 1px solid var(--line); border-radius: 999px;
+  padding: 6px 6px 6px 12px; font-size: 12px; color: var(--text-primary);
+}
+.plan-day-activity-chip-meta { color: var(--text-tertiary); font-size: 11px; }
+.plan-day-activity-chip-remove {
+  width: 18px; height: 18px; flex-shrink: 0; border-radius: 50%; border: none;
+  background: rgba(255,255,255,0.08); color: var(--text-secondary);
+  font-size: 12px; line-height: 1; cursor: pointer; display: flex; align-items: center; justify-content: center;
+}
+.plan-day-activity-chip-remove:hover { background: rgba(255,77,94,0.18); color: var(--danger); }
+.plan-day-activity-form { display: flex; flex-wrap: wrap; gap: 6px; }
+.plan-day-activity-input {
+  flex: 1 1 140px; min-width: 0;
+  background: var(--inset-bg); border: 1px solid var(--line); border-radius: 10px;
+  padding: 9px 12px; font-family: inherit; font-size: 13px; color: var(--text-primary);
+}
+.plan-day-duration-presets {
+  display: flex; gap: 3px; background: var(--inset-bg); border: 1px solid var(--line);
+  border-radius: 10px; padding: 3px; flex-shrink: 0;
+}
+.plan-day-duration-btn {
+  padding: 7px 9px; border: none; background: transparent; color: var(--text-tertiary);
+  border-radius: 7px; font-family: inherit; font-size: 11px; font-weight: 700;
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.plan-day-duration-btn.active { background: linear-gradient(180deg, var(--btn-primary-a), var(--btn-primary-b)); color: var(--btn-primary-text); }
+.plan-day-activity-select {
+  flex: 1 1 120px; min-width: 0;
+  background: var(--inset-bg); border: 1px solid var(--line); border-radius: 10px;
+  padding: 9px 8px; font-family: inherit; font-size: 12px; color: var(--text-secondary);
+}
+.plan-day-activity-add-btn {
+  flex-shrink: 0; padding: 9px 16px; border-radius: 10px; border: 1px solid var(--line);
+  background: transparent; color: var(--text-primary);
+  font-family: inherit; font-size: 12.5px; font-weight: 700; cursor: pointer;
+}
+.plan-day-activity-add-btn:hover { border-color: var(--text-tertiary); }
+
+/* ----- Plan My Day — unplaced activities ----- */
+.plan-day-unplaced { margin-top: 10px; }
+.plan-day-unplaced-row {
+  font-size: 12px; color: var(--text-secondary); line-height: 1.5;
+  padding: 8px 10px; border-radius: 8px; background: rgba(255,77,94,0.08);
+  border: 1px solid rgba(255,77,94,0.18); margin-top: 6px;
+}
+.plan-day-unplaced-row b { color: var(--text-primary); }
+
 .gm-header {
   display: flex; align-items: flex-start; justify-content: space-between;
   flex-wrap: wrap; gap: 12px;
@@ -1469,6 +1526,33 @@ body {
       <div class="cal-tabs" id="planDayRangeTabs">
         <button type="button" class="cal-tab active" data-target="today">Today</button>
         <button type="button" class="cal-tab" data-target="tomorrow">Tomorrow</button>
+      </div>
+      <!-- Add-your-own-activity chips — visible before AND after
+           generation (see planDayActivityAddBtn's own handler): adding
+           or removing one re-generates automatically once a plan has
+           been generated at least once this session, so it's never
+           stale relative to what's actually in planDayActivityChips. -->
+      <div class="plan-day-activities">
+        <div class="plan-day-activities-label">Add your own activities</div>
+        <div class="plan-day-activity-chips" id="planDayActivityChips"></div>
+        <div class="plan-day-activity-form">
+          <input type="text" id="planDayActivityName" class="plan-day-activity-input" placeholder="Activity, e.g. Laundry" maxlength="80">
+          <div class="plan-day-duration-presets" id="planDayDurationPresets">
+            <button type="button" class="plan-day-duration-btn" data-min="15">15m</button>
+            <button type="button" class="plan-day-duration-btn" data-min="30">30m</button>
+            <button type="button" class="plan-day-duration-btn active" data-min="45">45m</button>
+            <button type="button" class="plan-day-duration-btn" data-min="60">60m</button>
+            <button type="button" class="plan-day-duration-btn" data-min="90">90m</button>
+          </div>
+          <select id="planDayActivityWindow" class="plan-day-activity-select">
+            <option value="">Any time</option>
+            <option value="morning">Morning</option>
+            <option value="afternoon">Afternoon</option>
+            <option value="evening">Evening</option>
+            <option value="before dinner">Before dinner</option>
+          </select>
+          <button type="button" class="plan-day-activity-add-btn" id="planDayActivityAddBtn">+ Add</button>
+        </div>
       </div>
       <button type="button" class="save-btn" id="planDayGenerateBtn">Generate today's plan</button>
       <div id="planDayStatus" class="plan-day-status"></div>
@@ -3083,9 +3167,9 @@ document.addEventListener('DOMContentLoaded', function () {
   let planDayBlocksState = null; // [{date,start,end,title,category}] from the last generated proposal
 
   function planCatLabel(cat) {
-    return { sleep: 'Sleep', training: 'Training', work: 'Work', meal: 'Meal', walk: 'Walk' }[cat] || 'Other';
+    return { sleep: 'Sleep', training: 'Training', work: 'Work', meal: 'Meal', walk: 'Walk', activity: 'Activity' }[cat] || 'Other';
   }
-  function renderPlanDayBlocks(blocks) {
+  function renderPlanDayBlocks(blocks, unplaced) {
     const el = $('planDayBlocks');
     el.innerHTML = blocks.map((b, i) => (
       '<div class="plan-day-block-row">' +
@@ -3099,13 +3183,91 @@ document.addEventListener('DOMContentLoaded', function () {
     )).join('');
     el.style.display = 'block';
     $('planDayActions').style.display = 'flex';
+    renderPlanDayUnplaced(unplaced);
   }
 
+  // Activities the user explicitly asked to have placed today (main.html's
+  // "+ Add activity" chips) — sent as userActivities on every day-plan
+  // request. Persists across Cancel/re-generate (only cleared by removing
+  // a chip): these represent the user's own stated intent, not the
+  // model's proposal, so they shouldn't evaporate just because the plan
+  // itself was cancelled or regenerated.
+  let planDayUserActivities = []; // [{name, durationMin, preferredWindow}]
+  // Whether a plan has been generated at least once this page-load — once
+  // true, adding/removing a chip re-generates automatically (see
+  // generatePlanDay below) so the visible plan never goes stale relative
+  // to the chip list; before the first generation there's nothing to
+  // regenerate, so adding a chip just adds it to the pending list.
+  let planDayHasGeneratedOnce = false;
+
+  function planDayWindowLabel(w) {
+    return { morning: 'Morning', afternoon: 'Afternoon', evening: 'Evening', 'before dinner': 'Before dinner' }[w] || '';
+  }
+  function renderPlanDayActivityChips() {
+    const el = $('planDayActivityChips');
+    el.innerHTML = planDayUserActivities.map((a, i) => (
+      '<span class="plan-day-activity-chip">' +
+        escapeHtml(a.name) +
+        '<span class="plan-day-activity-chip-meta">' +
+          escapeHtml(String(a.durationMin)) + 'm' + (a.preferredWindow ? ' · ' + escapeHtml(planDayWindowLabel(a.preferredWindow)) : '') +
+        '</span>' +
+        '<button type="button" class="plan-day-activity-chip-remove" data-idx="' + i + '" aria-label="Remove">✕</button>' +
+      '</span>'
+    )).join('');
+  }
+  function renderPlanDayUnplaced(unplaced) {
+    const el = $('planDayResult');
+    // Prepend to whatever's already there (create/error results),
+    // rather than owning the whole element, so this can be called from
+    // renderPlanDayBlocks (a fresh generation, where planDayResult is
+    // otherwise empty) without clobbering a later confirm result.
+    const existing = el.querySelector('.plan-day-unplaced');
+    if (existing) existing.remove();
+    if (!unplaced || !unplaced.length) return;
+    const wrap = document.createElement('div');
+    wrap.className = 'plan-day-unplaced';
+    wrap.innerHTML = unplaced.map((u) => (
+      '<div class="plan-day-unplaced-row">Couldn\'t fit: <b>' + escapeHtml(u.name) + '</b> — ' + escapeHtml(u.reason) + '</div>'
+    )).join('');
+    el.insertBefore(wrap, el.firstChild);
+  }
+
+  $('planDayActivityChips').addEventListener('click', (e) => {
+    const btn = e.target.closest('.plan-day-activity-chip-remove');
+    if (!btn) return;
+    planDayUserActivities.splice(Number(btn.dataset.idx), 1);
+    renderPlanDayActivityChips();
+    if (planDayHasGeneratedOnce) generatePlanDay();
+  });
+
+  let planDayDurationMin = 45;
+  $('planDayDurationPresets').querySelectorAll('.plan-day-duration-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      $('planDayDurationPresets').querySelectorAll('.plan-day-duration-btn').forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+      planDayDurationMin = Number(btn.dataset.min);
+    });
+  });
+
+  $('planDayActivityAddBtn').addEventListener('click', () => {
+    const nameEl = $('planDayActivityName');
+    const name = nameEl.value.trim();
+    if (!name) { nameEl.focus(); return; }
+    const preferredWindow = $('planDayActivityWindow').value || null;
+    planDayUserActivities.push({ name, durationMin: planDayDurationMin, preferredWindow });
+    nameEl.value = '';
+    renderPlanDayActivityChips();
+    if (planDayHasGeneratedOnce) generatePlanDay();
+  });
+  $('planDayActivityName').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); $('planDayActivityAddBtn').click(); }
+  });
+
   // Today/Tomorrow toggle — only changes which day the MAIN schedule
-  // (training/work/meals/walks) is built for; see planDayGenerateBtn's
-  // own handler and api/training.js's buildDayPlanSystemPrompt header
-  // comment for what does and doesn't change with it (tonight's
-  // Wind-down is ALWAYS tonight's, regardless).
+  // (training/work/meals/walks) is built for; see generatePlanDay's own
+  // body and api/training.js's buildDayPlanSystemPrompt header comment
+  // for what does and doesn't change with it (tonight's Wind-down is
+  // ALWAYS tonight's, regardless).
   let planDayTarget = 'today';
   $('planDayRangeTabs').querySelectorAll('.cal-tab').forEach((tab) => {
     tab.addEventListener('click', () => {
@@ -3116,12 +3278,30 @@ document.addEventListener('DOMContentLoaded', function () {
     });
   });
 
-  $('planDayGenerateBtn').addEventListener('click', async () => {
+  // Extracted from planDayGenerateBtn's own click handler (which now
+  // just calls this) so adding/removing an activity chip can trigger
+  // the exact same generate flow — including the live calendar
+  // re-fetch, which is what makes "add an activity after the plan was
+  // already confirmed" work correctly with zero extra bookkeeping: any
+  // blocks already confirmed are, by then, real Google Calendar events,
+  // so they come back as fixedEvents on the next fetch and the model
+  // treats them as immovable — it only has to fit the new activity into
+  // whatever's left. See the userActivities doc comment in
+  // api/training.js's mode=day-plan header for the server side of this.
+  // Guards against two chip adds/removes in quick succession firing
+  // overlapping requests (each auto-regenerate re-fetches the calendar
+  // and calls the model, both slow) — without this, whichever response
+  // lands last would silently win, possibly showing a plan that's
+  // missing whatever chip was added in between.
+  let planDayGenerating = false;
+  async function generatePlanDay() {
+    if (planDayGenerating) return;
     const secret = getSecret();
     if (!secret) { $('planDayStatus').textContent = 'Set your dashboard secret first (on the Cronometer page) to use AI features.'; return; }
     const t = loadTokens();
     if (!t || !t.access) { $('planDayStatus').textContent = 'Connect Google Calendar above first — the plan needs to see what\'s already on it.'; return; }
 
+    planDayGenerating = true;
     const btn = $('planDayGenerateBtn');
     btn.disabled = true;
     $('planDayStatus').textContent = 'Gathering today + tomorrow\'s calendar…';
@@ -3215,13 +3395,15 @@ document.addEventListener('DOMContentLoaded', function () {
           wakeUpTime,
           todayWakeUpTime, todayBedtime,
           restrictions,
+          userActivities: planDayUserActivities,
         }),
       });
       const json = await res.json();
       if (!res.ok || !json.ok) throw new Error((json && json.error) || ('HTTP ' + res.status));
 
+      planDayHasGeneratedOnce = true;
       planDayBlocksState = json.blocks;
-      renderPlanDayBlocks(json.blocks);
+      renderPlanDayBlocks(json.blocks, json.unplaced);
       $('planDayStatus').textContent = planningRecommendation
         ? 'Review below, then confirm.'
         : (planDayTarget === 'tomorrow'
@@ -3231,8 +3413,10 @@ document.addEventListener('DOMContentLoaded', function () {
       $('planDayStatus').textContent = 'Could not generate a plan: ' + (e.message || String(e));
     } finally {
       btn.disabled = false;
+      planDayGenerating = false;
     }
-  });
+  }
+  $('planDayGenerateBtn').addEventListener('click', generatePlanDay);
 
   $('planDayCancelBtn').addEventListener('click', () => {
     planDayBlocksState = null;
@@ -3290,6 +3474,21 @@ document.addEventListener('DOMContentLoaded', function () {
         results.push({ block, ok: false, error: e.message || String(e) });
       }
     }
+
+    // Prune any user activity that just became a real calendar event from
+    // the pending chip list — otherwise it would stay in userActivities
+    // on the next generate, and since it's now ALSO a fixedEvent (picked
+    // up by the next live calendar fetch), a model that tried to place it
+    // again would just get it dropped by dropBlocksOverlappingFixedEvents
+    // for "conflicting" with its own real twin, surfacing a confusing
+    // "couldn't fit" message for something that's actually already
+    // scheduled. Matched by title, same as reconcileUserActivities does
+    // server-side.
+    results.filter((r) => r.ok && r.block.category === 'activity').forEach((r) => {
+      const idx = planDayUserActivities.findIndex((a) => a.name === r.block.title);
+      if (idx !== -1) planDayUserActivities.splice(idx, 1);
+    });
+    renderPlanDayActivityChips();
 
     const okCount = results.filter((r) => r.ok).length;
     const failCount = results.length - okCount;

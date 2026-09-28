@@ -154,8 +154,17 @@
 //     // wakeUpTime and a sleepTargetHours target — that ignored the user's actual configured sleep
 //     // time entirely, the same class of bug already fixed for wake-up via todayWakeUpTime. Removed:
 //     // nothing else read sleepTargetHours or that inferred bedtime once Wind-down uses todayBedtime.)
+//     userActivities: [{ name, durationMin, preferredWindow }] | undefined,   // main.html's "+ Add
+//     // activity" chips — user-specified items that MUST be placed on planningDateKey (or reported
+//     // as unplaced with a reason), unlike the "WHAT YOU DECIDE" items which the model is free to
+//     // omit/adjust. preferredWindow is one of PREFERRED_WINDOWS below or omitted. Capped at 10,
+//     // durationMin clamped to 5-480 — see sanitizeUserActivities.
 //   }
-//   -> { ok: true, blocks: [{ date, start, end, title, category }] }
+//   -> { ok: true, blocks: [{ date, start, end, title, category }], unplaced: [{ name, reason }] }
+//   // unplaced lists any userActivities entry that genuinely couldn't be fit in (never silently
+//   // dropped — see reconcileUserActivities, which also catches one the model forgot entirely or
+//   // that got removed by dropBlocksOverlappingFixedEvents). Always present, [] when everything fit
+//   // (including when userActivities itself was empty/omitted).
 //
 // MODE 4 — POST /api/training?mode=find-patterns&secret=...
 //   trends.html's "Find Patterns" feature — on-demand only, never
@@ -766,7 +775,7 @@ async function handleToday(req, res, apiKey, body) {
 // recovery number and must not be treated as predictive of tomorrow —
 // same principle as api/chat.js's own QUESTIONS ABOUT A DIFFERENT DAY
 // section and buildTomorrowSystemPrompt above.
-function buildDayPlanSystemPrompt(restrictions) {
+function buildDayPlanSystemPrompt(restrictions, userActivities) {
   return (
     'You are planning ONE user\'s day on a personal dashboard, producing a concrete schedule of time ' +
     'blocks that will be created as real Google Calendar events only after the user reviews and explicitly ' +
@@ -824,6 +833,25 @@ function buildDayPlanSystemPrompt(restrictions) {
     'today\'s specific whoopToday number does not predict tomorrow\'s recovery, and planningRecommendation ' +
     'for tomorrow has already reasoned about load-management appropriately on its own (see how it was ' +
     'generated); do not layer a second, today-based recovery adjustment on top of it.\n\n' +
+    (userActivities && userActivities.length ? (
+      'USER-REQUESTED ACTIVITIES — these are REQUIRED, unlike the "WHAT YOU DECIDE" items above which you may ' +
+      'adjust or omit: the user explicitly asked for each of these to happen on planningDateKey, using its ' +
+      'exact name and exact duration:\n' +
+      JSON.stringify(userActivities, null, 2) + '\n' +
+      'For each one: fit it into a genuinely free gap around fixedEvents and the blocks above — the items YOU ' +
+      'decided above (training/work/meals/walks) may shift earlier or later to make room, but fixedEvents ' +
+      'entries never move, no matter what. When preferredWindow is given, place it inside that window if at ' +
+      'all possible: "morning" is roughly 6am-12pm, "afternoon" roughly 12pm-5pm, "evening" roughly 5pm until ' +
+      'todayBedtime/Wind-down, "before dinner" any time before the Dinner block you place. Output each placed ' +
+      'one as its own block with category "activity" and title EXACTLY equal to its given name — do not ' +
+      'rename, abbreviate, translate, or add detail to it. On todayDateKey it is still subject to the nowTime ' +
+      'rule above (cannot start before nowTime) exactly like everything else.\n' +
+      'If — and only if — there is genuinely no free gap that fits an activity (respecting its preferredWindow ' +
+      'when one was given), do not place it and do not force it into a conflict or shrink its duration — ' +
+      'instead add it to the "unplaced" list below with a short, specific reason naming what\'s in the way ' +
+      '(e.g. "no free 60-minute gap before your 6pm event", not just "no time"). Every userActivities entry ' +
+      'must end up EITHER as a placed block OR in "unplaced" — never neither, and never both.\n\n'
+    ) : '') +
     buildRestrictionsPromptSection(restrictions) +
     'Reply with ONLY valid JSON, no markdown fences, no commentary, in exactly this shape:\n' +
     JSON.stringify({
@@ -833,12 +861,16 @@ function buildDayPlanSystemPrompt(restrictions) {
           start: 'HH:MM 24-hour',
           end: 'HH:MM 24-hour',
           title: 'short, e.g. "Training: Push + 5K run", "Wake up", "Breakfast", "Walk", "Wind-down"',
-          category: 'one of: sleep, training, work, meal, walk',
+          category: 'one of: sleep, training, work, meal, walk, activity',
         },
+      ],
+      unplaced: [
+        { name: 'exact name from userActivities that could not be placed', reason: 'short, specific reason' },
       ],
     }, null, 2) +
     '\n\nEvery block\'s start must be strictly before its end, blocks must not overlap each other or any ' +
-    'fixedEvents entry, and the list should be in chronological order.'
+    'fixedEvents entry, and the list should be in chronological order. unplaced must be present (an empty ' +
+    'array if everything fit, or if no userActivities were given at all).'
   );
 }
 
@@ -847,8 +879,69 @@ function numOrNull(v) {
   return isNaN(n) ? null : n;
 }
 
-const DAY_PLAN_CATEGORIES = ['sleep', 'training', 'work', 'meal', 'walk'];
+const DAY_PLAN_CATEGORIES = ['sleep', 'training', 'work', 'meal', 'walk', 'activity'];
 const HHMM_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+// main.html's "+ Add activity" chips. preferredWindow is a fixed
+// whitelist (not free text) so the prompt's morning/afternoon/evening/
+// before-dinner definitions stay meaningful — an arbitrary string here
+// would just be ignored by buildDayPlanSystemPrompt's own wording.
+// Capped at 10 activities: comfortably above anything the chip UI would
+// realistically accumulate in one sitting, same defensive-ceiling
+// reasoning as e.g. sanitizePainSeries's 200-entry cap elsewhere in
+// this file. durationMin clamped 5-480 (8 hours) — wide enough for any
+// real single activity, narrow enough to reject garbage input.
+const PREFERRED_WINDOWS = ['morning', 'afternoon', 'evening', 'before dinner'];
+function sanitizeUserActivities(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw.slice(0, 10).map((a) => {
+    if (!a || typeof a.name !== 'string') return null;
+    const name = a.name.trim().slice(0, 80);
+    if (!name) return null;
+    const durationMin = Number(a && a.durationMin);
+    if (!Number.isFinite(durationMin) || durationMin < 5 || durationMin > 480) return null;
+    const preferredWindow = PREFERRED_WINDOWS.indexOf(a.preferredWindow) !== -1 ? a.preferredWindow : null;
+    return { name, durationMin: Math.round(durationMin), preferredWindow };
+  }).filter(Boolean);
+}
+
+// Model-reported unplaced entries — kept only if they actually name one
+// of the activities that was really requested (never trust the model to
+// echo back exactly what was sent, same discipline as normalizeDayPlanBlocks
+// not trusting date/category strings verbatim). The real backstop is
+// reconcileUserActivities below, which runs regardless of what the model
+// did or didn't report.
+function sanitizeUnplaced(raw, userActivities) {
+  if (!Array.isArray(raw)) return [];
+  const validNames = new Set(userActivities.map((a) => a.name));
+  return raw.slice(0, 10)
+    .filter((u) => u && typeof u.name === 'string' && validNames.has(u.name))
+    .map((u) => ({ name: u.name, reason: typeof u.reason === 'string' && u.reason.trim() ? u.reason.trim().slice(0, 200) : 'Could not fit.' }));
+}
+
+// The actual guarantee behind "never silently drop a requested
+// activity" — same spirit as dropBlocksOverlappingFixedEvents being a
+// real backstop rather than trusting the prompt alone. Runs AFTER
+// normalizeDayPlanBlocks (so it sees the final, overlap-filtered block
+// list) and reconciles it against what was actually requested: every
+// userActivities entry ends up either matched to a surviving
+// category:'activity' block with its exact title, or pushed into
+// unplaced with a synthesized reason — covering both a userActivity the
+// model forgot about entirely, and one it placed but that then got
+// dropped by dropBlocksOverlappingFixedEvents for genuinely conflicting
+// with a fixed event despite the prompt's instructions.
+function reconcileUserActivities(blocks, unplaced, userActivities) {
+  const outUnplaced = unplaced.slice();
+  const unplacedNames = new Set(outUnplaced.map((u) => u.name));
+  for (const activity of userActivities) {
+    if (unplacedNames.has(activity.name)) continue;
+    const placed = blocks.some((b) => b.category === 'activity' && b.title === activity.name);
+    if (!placed) {
+      outUnplaced.push({ name: activity.name, reason: 'Could not be scheduled — either no plan block was generated for it, or it was dropped for conflicting with a fixed calendar event.' });
+    }
+  }
+  return outUnplaced;
+}
 
 // Half-open-interval overlap on the same calendar date — touching
 // endpoints (one block ending exactly when another starts) do NOT
@@ -959,6 +1052,8 @@ async function handleDayPlan(req, res, apiKey, body) {
     planningWakeUpTime: planningDateKey === tomorrowDateKey ? wakeUpTime : todayWakeUpTime,
     activeRestrictions: restrictions,
   };
+  const userActivities = sanitizeUserActivities(body.userActivities);
+  context.userActivities = userActivities;
 
   // Confirmed via the logged raw text: it came back as a literal empty
   // string, the same failure class as the earlier mode=today bug —
@@ -985,17 +1080,22 @@ async function handleDayPlan(req, res, apiKey, body) {
   // share the same budget), per Anthropic's own guidance to pair anything
   // above low effort with a large max_tokens ceiling.
   const text = await callClaude(apiKey, {
-    system: buildDayPlanSystemPrompt(restrictions),
+    system: buildDayPlanSystemPrompt(restrictions, userActivities),
     userContent: 'Context:\n' + JSON.stringify(context, null, 2),
-    maxTokens: 4000,
+    // Bumped from 4000: userActivities can add up to 10 more blocks
+    // (or unplaced entries) on top of the original ~9, sharing the same
+    // thinking+output budget at effort:'medium' — see the comment above
+    // on why this mode needs a large ceiling in the first place.
+    maxTokens: 6000,
     effort: 'medium',
   });
   const parsed = extractJson(text);
   if (!parsed) return res.status(502).json({ ok: false, error: 'Model did not return valid JSON.' });
   const blocks = normalizeDayPlanBlocks(parsed, todayDateKey, tomorrowDateKey, context.fixedEvents);
   if (!blocks.length) return res.status(502).json({ ok: false, error: 'Model did not return any usable blocks.' });
+  const unplaced = reconcileUserActivities(blocks, sanitizeUnplaced(parsed && parsed.unplaced, userActivities), userActivities);
 
-  return res.status(200).json({ ok: true, blocks });
+  return res.status(200).json({ ok: true, blocks, unplaced });
 }
 
 // ------------------------------------------------------------
