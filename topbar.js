@@ -90,9 +90,9 @@
   width: 44px;
   border: 1px solid rgba(34, 211, 238, 0.22);
   background: linear-gradient(180deg, rgba(34, 211, 238, 0.32), rgba(23, 232, 143, 0.28));
-  color: #FFFFFF; font-family: inherit;
+  color: var(--text-primary, #FAFAFA); font-family: inherit;
   font-size: 20px; font-weight: 700; line-height: 1;
-  cursor: pointer; border-radius: 0 var(--radius-sm, 12px) var(--radius-sm, 12px) 0;
+  cursor: pointer; border-radius: 0 var(--radius-sm, 10px) var(--radius-sm, 10px) 0;
   -webkit-tap-highlight-color: transparent;
   transition: background var(--duration-base, 0.15s), transform var(--duration-fast, 0.10s);
 }
@@ -326,7 +326,7 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
   display: flex; flex-direction: column;
   width: 100%; max-width: 480px;
   height: min(640px, 88vh); max-height: 88vh;
-  background: #121214;
+  background: var(--surface-2, #121214);
   border: 1px solid rgba(255, 255, 255, 0.12);
   /* Rounded top only while bottom-anchored (phone/tablet); desktop's
      centered position gets all four corners back below. */
@@ -342,17 +342,17 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   flex-shrink: 0;
 }
-.chat-modal-head h3 { margin: 0; font-size: 17px; font-weight: 700; color: #FAFAFA; }
+.chat-modal-head h3 { margin: 0; font-size: 17px; font-weight: 700; color: var(--text-primary); }
 .chat-head-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .chat-close-btn, .chat-history-btn, .chat-back-btn {
   flex-shrink: 0; width: 30px; height: 30px; border-radius: 50%;
   background: transparent; border: 1px solid rgba(255, 255, 255, 0.12);
-  color: #76746E; font-size: 15px; cursor: pointer;
+  color: var(--text-tertiary); font-size: 15px; cursor: pointer;
   display: inline-flex; align-items: center; justify-content: center;
   transition: color 0.15s, border-color 0.15s;
 }
 .chat-history-icon { width: 15px; height: 15px; stroke: currentColor; }
-.chat-close-btn:hover, .chat-history-btn:hover, .chat-back-btn:hover { color: #FAFAFA; border-color: #76746E; }
+.chat-close-btn:hover, .chat-history-btn:hover, .chat-back-btn:hover { color: var(--text-primary); border-color: var(--text-tertiary); }
 .chat-messages {
   flex: 1; overflow-y: auto; min-height: 0;
   padding: 16px 18px;
@@ -368,39 +368,40 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
   padding: 12px 8px; cursor: pointer; font-family: inherit;
 }
 .chat-day-row:hover { background: rgba(255, 255, 255, 0.035); border-radius: 8px; }
-.chat-day-date { font-size: 12.5px; font-weight: 700; color: #FAFAFA; }
+.chat-day-date { font-size: 12.5px; font-weight: 700; color: var(--text-primary); }
 .chat-day-count {
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  font-size: 10.5px; color: #76746E; margin-left: 8px;
+  font-size: 10.5px; color: var(--text-tertiary); margin-left: 8px;
 }
 .chat-day-preview {
-  margin-top: 3px; font-size: 12px; color: #A5A3A0;
+  margin-top: 3px; font-size: 12px; color: var(--text-secondary);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .chat-history-empty, .chat-history-loading, .chat-history-error {
-  text-align: center; font-size: 12px; color: #76746E; padding: 24px 12px;
+  text-align: center; font-size: 12px; color: var(--text-tertiary); padding: 24px 12px;
 }
-.chat-history-error { color: #FF8A8A; }
+.chat-history-error { color: var(--accent-coral, #FF8A8A); }
 .chat-ios-banner {
   display: flex; align-items: center; gap: 8px;
   padding: 10px 14px;
   background: rgba(29, 158, 117, 0.10);
   border-bottom: 1px solid rgba(29, 158, 117, 0.25);
-  font-size: 11.5px; line-height: 1.4; color: #A5A3A0;
+  font-size: 11.5px; line-height: 1.4; color: var(--text-secondary);
   flex-shrink: 0;
 }
 .chat-ios-banner button {
-  flex-shrink: 0; border: 0; background: transparent; color: #76746E;
+  flex-shrink: 0; border: 0; background: transparent; color: var(--text-tertiary);
   font-size: 16px; cursor: pointer; padding: 0 2px;
 }
-.chat-ios-banner button:hover { color: #FAFAFA; }
+.chat-ios-banner button:hover { color: var(--text-primary); }
 /* "New version available" toast — see setupFreshnessGuard() below.
    Fixed at the top, above everything (max z-index, same convention as
    the chat FAB/modal), since it needs to be reachable from any page
-   regardless of what else is on screen. Literal colors, not
-   var(--something) — same reasoning as every other rule in this file
-   (see this file's own header comment): this must render correctly
-   across all of this project's incompatible CSS-variable schemes. */
+   regardless of what else is on screen. Now references row-ui.css's
+   shared tokens (every page loads it first) — the "literal colors,
+   this must render across incompatible schemes" reasoning this rule
+   used to cite is the same one resolved app-wide by row-ui.css itself
+   (see this file's own header comment on that). */
 .row-update-toast {
   position: fixed; top: max(12px, env(safe-area-inset-top)); left: 50%;
   transform: translateX(-50%);
@@ -408,8 +409,8 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
   display: none;
   align-items: center; gap: 10px;
   padding: 10px 10px 10px 16px;
-  background: #17E88F; color: #08110D;
-  border-radius: 999px;
+  background: var(--accent-green, #17E88F); color: var(--btn-primary-text, #08110D);
+  border-radius: var(--radius-pill, 999px);
   font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
   font-size: 12.5px; font-weight: 700;
   box-shadow: 0 8px 24px rgba(0,0,0,0.35);
@@ -417,16 +418,16 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
 }
 .row-update-toast.show { display: flex; }
 .row-update-toast button {
-  flex-shrink: 0; border: 0; border-radius: 999px; cursor: pointer;
+  flex-shrink: 0; border: 0; border-radius: var(--radius-pill, 999px); cursor: pointer;
   font-family: inherit; font-weight: 700; -webkit-tap-highlight-color: transparent;
 }
-.row-update-reload-btn { padding: 6px 12px; background: #08110D; color: #17E88F; font-size: 12px; }
-.row-update-dismiss-btn { padding: 4px 6px; background: transparent; color: #08110D; opacity: 0.6; font-size: 15px; }
-.chat-empty { text-align: center; font-size: 12px; font-style: italic; color: #76746E; padding: 20px 10px; }
+.row-update-reload-btn { padding: 6px 12px; background: var(--btn-primary-text, #08110D); color: var(--accent-green, #17E88F); font-size: 12px; }
+.row-update-dismiss-btn { padding: 4px 6px; background: transparent; color: var(--btn-primary-text, #08110D); opacity: 0.6; font-size: 15px; }
+.chat-empty { text-align: center; font-size: 12px; font-style: italic; color: var(--text-tertiary); padding: 20px 10px; }
 .chat-bubble {
   max-width: 82%;
   padding: 10px 14px;
-  border-radius: 14px;
+  border-radius: var(--radius-md, 14px);
   font-size: 13.5px; line-height: 1.5;
   white-space: pre-wrap; word-break: break-word;
 }
@@ -438,19 +439,19 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
 .chat-bubble.assistant {
   align-self: flex-start;
   background: rgba(255, 255, 255, 0.035); border: 1px solid rgba(255, 255, 255, 0.06);
-  color: #FAFAFA;
+  color: var(--text-primary);
   border-bottom-left-radius: 4px;
 }
 .chat-bubble.error {
   align-self: center;
   background: rgba(255,107,107,0.08); border: 1px solid rgba(255,107,107,0.28);
-  color: #FF8A8A; font-size: 12px; max-width: 90%;
+  color: var(--accent-coral, #FF8A8A); font-size: 12px; max-width: 90%;
 }
-.chat-bubble.typing { align-self: flex-start; color: #76746E; font-style: italic; }
+.chat-bubble.typing { align-self: flex-start; color: var(--text-tertiary); font-style: italic; }
 .chat-bubble.has-chart { max-width: 100%; width: 100%; }
 .chat-chart-wrap { position: relative; width: 100%; height: 200px; margin: 6px 0; }
 .chat-chart-text { white-space: pre-wrap; word-break: break-word; }
-.chat-chart-fallback { font-size: 11px; color: #76746E; font-style: italic; margin-top: 4px; }
+.chat-chart-fallback { font-size: 11px; color: var(--text-tertiary); font-style: italic; margin-top: 4px; }
 .chat-plan-card {
   margin-top: 10px;
   background: rgba(255,255,255,0.04);
@@ -465,9 +466,9 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
 }
 .chat-plan-row:last-of-type { border-bottom: none; }
 .chat-plan-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.chat-plan-label { font-size: 9.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #76746E; }
-.chat-plan-desc { font-size: 11px; color: #A5A3A0; }
-.chat-plan-value { font-size: 12.5px; font-weight: 700; color: #FAFAFA; text-align: right; white-space: nowrap; flex-shrink: 0; }
+.chat-plan-label { font-size: 9.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-tertiary); }
+.chat-plan-desc { font-size: 11px; color: var(--text-secondary); }
+.chat-plan-value { font-size: 12.5px; font-weight: 700; color: var(--text-primary); text-align: right; white-space: nowrap; flex-shrink: 0; }
 /* See planRow()'s own comment on wrapValue — used for a row whose
    value is a long free-text string (a goal description) rather than a
    short stat. Stacks label above value instead of side-by-side, and
@@ -477,10 +478,10 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
    twice elsewhere (main.html's nested calendar chip, trends.html). */
 .chat-plan-row.is-wrap { flex-direction: column; align-items: flex-start; gap: 4px; }
 .chat-plan-row.is-wrap .chat-plan-value { white-space: normal; text-align: left; flex-shrink: 1; width: 100%; }
-.chat-plan-rationale { font-size: 11.5px; color: #A5A3A0; margin-top: 10px; line-height: 1.4; font-style: italic; }
+.chat-plan-rationale { font-size: 11.5px; color: var(--text-secondary); margin-top: 10px; line-height: 1.4; font-style: italic; }
 .chat-plan-actions { display: flex; gap: 8px; margin-top: 12px; }
 .chat-plan-save-btn {
-  flex: 1; padding: 10px; border-radius: 10px; border: none;
+  flex: 1; padding: 10px; border-radius: var(--radius-sm, 10px); border: none;
   background: #1D9E75; color: #08110D; font-family: inherit; font-size: 12.5px; font-weight: 700;
   cursor: pointer;
 }
@@ -491,19 +492,19 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
    button's existing "is-listening"/recording red above, the one other
    place this file already uses a danger accent. */
 .chat-plan-danger-btn {
-  flex: 1; padding: 10px; border-radius: 10px; border: none;
-  background: #E5484D; color: #FAFAFA; font-family: inherit; font-size: 12.5px; font-weight: 700;
+  flex: 1; padding: 10px; border-radius: var(--radius-sm, 10px); border: none;
+  background: #E5484D; color: var(--text-primary); font-family: inherit; font-size: 12.5px; font-weight: 700;
   cursor: pointer;
 }
 .chat-plan-danger-btn:disabled { opacity: 0.5; cursor: default; }
 .chat-plan-dismiss-btn {
-  padding: 10px 14px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.10);
-  background: transparent; color: #A5A3A0; font-family: inherit; font-size: 12.5px; font-weight: 600;
+  padding: 10px 14px; border-radius: var(--radius-sm, 10px); border: 1px solid rgba(255,255,255,0.10);
+  background: transparent; color: var(--text-secondary); font-family: inherit; font-size: 12.5px; font-weight: 600;
   cursor: pointer;
 }
 .chat-plan-status { font-size: 12px; font-weight: 700; margin-top: 12px; text-align: center; }
 .chat-plan-status.is-saved { color: #1D9E75; }
-.chat-plan-status.is-dismissed { color: #76746E; font-weight: 600; }
+.chat-plan-status.is-dismissed { color: var(--text-tertiary); font-weight: 600; }
 .chat-input-row {
   display: flex; align-items: center; gap: 8px;
   padding: 12px 14px;
@@ -513,8 +514,8 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
 .chat-input {
   flex: 1; min-width: 0;
   background: rgba(0, 0, 0, 0.28); border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 20px; padding: 10px 16px;
-  color: #FAFAFA; font-family: inherit; font-size: 13.5px;
+  border-radius: var(--radius-lg, 20px); padding: 10px 16px;
+  color: var(--text-primary); font-family: inherit; font-size: 13.5px;
   outline: none;
 }
 .chat-input:focus { border-color: #1D9E75; }
@@ -537,7 +538,7 @@ body.topbar-modal-open { overflow: hidden; touch-action: none; }
 .chat-mic-btn:active { transform: scale(0.92); }
 .chat-mic-icon { width: 18px; height: 18px; stroke: currentColor; }
 .chat-mic-btn.is-listening {
-  background: #E5484D; color: #FAFAFA; border-color: transparent;
+  background: #E5484D; color: var(--text-primary); border-color: transparent;
   animation: chatMicPulse 1.2s ease-in-out infinite;
 }
 @keyframes chatMicPulse {
