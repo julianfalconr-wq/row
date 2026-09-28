@@ -87,7 +87,7 @@ html, body {
   margin: 0 0 14px;
   background: rgba(255,255,255,0.04);
   border: 1px solid rgba(255,255,255,0.08);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   color: var(--text-secondary);
   font-family: var(--font);
   font-size: 12px;
@@ -237,7 +237,7 @@ html, body { scrollbar-width: none; -ms-overflow-style: none; }
   gap: 5px;
   font-size: 10.5px;
   padding: 3px 9px 3px 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   margin: 2px;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -254,7 +254,7 @@ html, body { scrollbar-width: none; -ms-overflow-style: none; }
   flex-shrink: 0;
   background: rgba(255,255,255,0.30);
 }
-.tag-green::before { background: #6BE3A4; box-shadow: 0 0 6px rgba(107,227,164,0.55); }
+.tag-green::before { background: var(--success); box-shadow: 0 0 6px rgba(107,227,164,0.55); }
 .tag-green { background: rgba(107, 227, 164, 0.10); color: #8EE9B7; }
 .pill-group { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 10px; }
 
@@ -331,7 +331,7 @@ html, body { scrollbar-width: none; -ms-overflow-style: none; }
   padding: 9px 12px;
   background: rgba(255,255,255,0.025);
   border: none;
-  border-radius: 10px;
+  border-radius: var(--radius-sm);
   margin-bottom: 5px;
   font-size: 13px;
   color: var(--text-primary);
@@ -351,11 +351,11 @@ html, body { scrollbar-width: none; -ms-overflow-style: none; }
   cursor: pointer;
   font-size: 16px;
   padding: 2px 6px;
-  border-radius: 6px;
+  border-radius: var(--radius-xs);
   opacity: 0.5;
 }
 .custom-item:hover .delete-x { opacity: 1; }
-.custom-item .delete-x:hover { color: #FF8A8A; background: rgba(255,138,138,0.10); }
+.custom-item .delete-x:hover { color: var(--danger); background: rgba(255,138,138,0.10); }
 
 /* Inline label eyebrow */
 .label {
@@ -451,8 +451,8 @@ html, body { scrollbar-width: none; -ms-overflow-style: none; }
 }
 .nw-chart-label { color: var(--text-tertiary); }
 .nw-chart-delta { font-variant-numeric: tabular-nums; color: var(--text-tertiary); }
-.nw-chart-delta.up   { color: #6BE3A4; }
-.nw-chart-delta.down { color: #FF8A8A; }
+.nw-chart-delta.up   { color: var(--success); }
+.nw-chart-delta.down { color: var(--danger); }
 .nw-chart-svg {
   display: block;
   width: 100%;
@@ -597,7 +597,7 @@ html, body { scrollbar-width: none; -ms-overflow-style: none; }
   gap: 8px; align-items: center;
   font-size: 11px;
   padding: 4px 6px;
-  border-radius: 6px;
+  border-radius: var(--radius-xs);
   font-variant-numeric: tabular-nums;
 }
 .nw-leg-dot {
@@ -676,8 +676,8 @@ html, body { scrollbar-width: none; -ms-overflow-style: none; }
   font-family: var(--font-mono);
   white-space: nowrap;
 }
-.nw-activity-amt.up   { color: #6BE3A4; }
-.nw-activity-amt.down { color: #FF8A8A; }
+.nw-activity-amt.up   { color: var(--success); }
+.nw-activity-amt.down { color: var(--danger); }
 .nw-activity-date {
   font-size: 10.5px; color: var(--text-tertiary);
   font-family: var(--font-mono);
@@ -758,8 +758,8 @@ html, body { scrollbar-width: none; -ms-overflow-style: none; }
   font-size: 12px; color: var(--text-secondary);
   font-family: var(--font-mono);
 }
-.ord-add-preview.warn { background: rgba(242,192,99,0.08); border-color: rgba(242,192,99,0.20); color: #F2C063; }
-.ord-add-preview.bad  { background: rgba(255,138,138,0.08); border-color: rgba(255,138,138,0.20); color: #FF8A8A; }
+.ord-add-preview.warn { background: rgba(242,192,99,0.08); border-color: rgba(242,192,99,0.20); color: var(--warning); }
+.ord-add-preview.bad  { background: rgba(255,138,138,0.08); border-color: rgba(255,138,138,0.20); color: var(--danger); }
 
 .ord-section-h {
   display: flex; justify-content: space-between; align-items: baseline;
@@ -778,7 +778,7 @@ html, body { scrollbar-width: none; -ms-overflow-style: none; }
 
 .ord-card {
   background: rgba(255,255,255,0.025);
-  border-radius: 14px;
+  border-radius: var(--radius-md);
   padding: 14px 16px;
   margin-bottom: 8px;
   border-left: 3px solid var(--text-tertiary);
@@ -809,10 +809,10 @@ html, body { scrollbar-width: none; -ms-overflow-style: none; }
   background: transparent; border: 1px solid rgba(255,255,255,0.08);
   color: var(--text-tertiary);
   cursor: pointer; font-size: 14px;
-  padding: 4px 9px; border-radius: 6px;
+  padding: 4px 9px; border-radius: var(--radius-xs);
   font-family: inherit; line-height: 1;
 }
-.ord-card-x:hover { color: #FF8A8A; }
+.ord-card-x:hover { color: var(--danger); }
 .ord-card-meta {
   display: flex; flex-wrap: wrap; gap: 10px;
   margin-top: 8px;
@@ -822,24 +822,24 @@ html, body { scrollbar-width: none; -ms-overflow-style: none; }
 }
 .ord-meta-pill {
   display: inline-flex; align-items: center; gap: 5px;
-  padding: 3px 9px; border-radius: 999px;
+  padding: 3px 9px; border-radius: var(--radius-pill);
   background: rgba(255,255,255,0.04);
   font-weight: 700;
   letter-spacing: 0.04em;
 }
 .ord-meta-pill.from { color: var(--text-secondary); }
 .ord-meta-pill.pct.good { color: #6EE7B7; background: rgba(110,231,183,0.10); }
-.ord-meta-pill.pct.warn { color: #F2C063; background: rgba(242,192,99,0.10); }
-.ord-meta-pill.pct.bad  { color: #FF8A8A; background: rgba(255,138,138,0.10); }
+.ord-meta-pill.pct.warn { color: var(--warning); background: rgba(242,192,99,0.10); }
+.ord-meta-pill.pct.bad  { color: var(--danger); background: rgba(255,138,138,0.10); }
 .ord-meta-pill.date { color: var(--text-secondary); }
-.ord-meta-pill.date.soon { color: #F2C063; background: rgba(242,192,99,0.10); }
+.ord-meta-pill.date.soon { color: var(--warning); background: rgba(242,192,99,0.10); }
 .ord-meta-pill.date.today { color: #6EE7B7; background: rgba(110,231,183,0.10); }
-.ord-meta-pill.date.past { color: #FF8A8A; background: rgba(255,138,138,0.10); }
+.ord-meta-pill.date.past { color: var(--danger); background: rgba(255,138,138,0.10); }
 
 .ord-empty-card {
   text-align: center; padding: 32px 20px;
   background: rgba(255,255,255,0.025);
-  border-radius: 14px;
+  border-radius: var(--radius-md);
   border: 1px dashed rgba(255,255,255,0.08);
 }
 .ord-empty-card.hidden { display: none; }
@@ -903,8 +903,8 @@ html, body { scrollbar-width: none; -ms-overflow-style: none; }
   font-family: var(--font-mono);
   color: #B794F4;
 }
-.wish-hero-pct-num.warn { color: #F2C063; }
-.wish-hero-pct-num.bad  { color: #FF8A8A; }
+.wish-hero-pct-num.warn { color: var(--warning); }
+.wish-hero-pct-num.bad  { color: var(--danger); }
 .wish-hero-bar {
   height: 6px; border-radius: 3px;
   background: rgba(255,255,255,0.06);
@@ -995,7 +995,7 @@ html, body { scrollbar-width: none; -ms-overflow-style: none; }
 .wish-empty-card {
   text-align: center; padding: 32px 20px;
   background: rgba(255,255,255,0.025);
-  border-radius: 14px;
+  border-radius: var(--radius-md);
   border: 1px dashed rgba(255,255,255,0.08);
 }
 .wish-empty-card.hidden { display: none; }
@@ -1050,18 +1050,18 @@ html, body { scrollbar-width: none; -ms-overflow-style: none; }
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
-.wish-row-pct.good { color: #6BE3A4; }
-.wish-row-pct.warn { color: #F2C063; }
-.wish-row-pct.bad  { color: #FF8A8A; }
+.wish-row-pct.good { color: var(--success); }
+.wish-row-pct.warn { color: var(--warning); }
+.wish-row-pct.bad  { color: var(--danger); }
 .wish-row-pct.flat { color: var(--text-tertiary); }
 .wish-row-x {
   background: transparent; border: 1px solid rgba(255,255,255,0.10);
   color: var(--text-tertiary);
   cursor: pointer; font-size: 14px;
-  padding: 4px 8px; border-radius: 6px;
+  padding: 4px 8px; border-radius: var(--radius-xs);
   font-family: inherit; line-height: 1;
 }
-.wish-row-x:hover { color: #FF8A8A; }
+.wish-row-x:hover { color: var(--danger); }
 .wish-row-bar {
   height: 5px; border-radius: 3px;
   background: rgba(255,255,255,0.04);
@@ -1072,9 +1072,9 @@ html, body { scrollbar-width: none; -ms-overflow-style: none; }
   height: 100%; border-radius: 3px;
   transition: width 0.3s ease;
 }
-.wish-row-bar-fill.good { background: #6BE3A4; box-shadow: 0 0 6px rgba(107,227,164,0.5); }
-.wish-row-bar-fill.warn { background: #F2C063; box-shadow: 0 0 6px rgba(242,192,99,0.5); }
-.wish-row-bar-fill.bad  { background: #FF8A8A; box-shadow: 0 0 6px rgba(255,138,138,0.5); }
+.wish-row-bar-fill.good { background: var(--success); box-shadow: 0 0 6px rgba(107,227,164,0.5); }
+.wish-row-bar-fill.warn { background: var(--warning); box-shadow: 0 0 6px rgba(242,192,99,0.5); }
+.wish-row-bar-fill.bad  { background: var(--danger); box-shadow: 0 0 6px rgba(255,138,138,0.5); }
 .wish-row-bar-fill.flat { background: rgba(255,255,255,0.20); }
 
 /* ============================================================
@@ -1111,10 +1111,10 @@ html, body { scrollbar-width: none; -ms-overflow-style: none; }
   text-transform: uppercase; color: var(--text-tertiary);
   padding: 3px 8px;
   background: rgba(0,0,0,0.30);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   flex-shrink: 0;
 }
-.finance-ticker.urgent .ticker-tag { color: #FF8A8A; background: rgba(255,138,138,0.10); }
+.finance-ticker.urgent .ticker-tag { color: var(--danger); background: rgba(255,138,138,0.10); }
 .ticker-stream {
   flex: 1;
   min-width: 0;
@@ -1144,9 +1144,9 @@ html, body { scrollbar-width: none; -ms-overflow-style: none; }
 }
 .ticker-item-amt {
   font-weight: 700;
-  color: #6BE3A4;
+  color: var(--success);
 }
-.finance-ticker.urgent .ticker-item-amt { color: #FF8A8A; }
+.finance-ticker.urgent .ticker-item-amt { color: var(--danger); }
 .ticker-item-days {
   color: var(--text-tertiary);
   letter-spacing: 0.06em;
@@ -1154,7 +1154,7 @@ html, body { scrollbar-width: none; -ms-overflow-style: none; }
   font-size: 11px;
 }
 .finance-ticker.urgent .ticker-item-days {
-  color: #FF8A8A;
+  color: var(--danger);
   font-weight: 700;
 }
 .ticker-dots {
@@ -1167,8 +1167,8 @@ html, body { scrollbar-width: none; -ms-overflow-style: none; }
   background: rgba(255,255,255,0.18);
   transition: background 0.2s;
 }
-.ticker-dot.active { background: #6BE3A4; }
-.finance-ticker.urgent .ticker-dot.active { background: #FF8A8A; }
+.ticker-dot.active { background: var(--success); }
+.finance-ticker.urgent .ticker-dot.active { background: var(--danger); }
 
 /* ============================================================
    DEDUCT-FROM-NW BUTTON & CHOOSER (in order cards)
@@ -1211,7 +1211,7 @@ html, body { scrollbar-width: none; -ms-overflow-style: none; }
   background: rgba(110,231,183,0.10);
   border: 1px solid rgba(110,231,183,0.20);
   padding: 5px 10px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
 }
 .ord-deducted-pill::before {
   content: '✓';
@@ -1226,7 +1226,7 @@ html, body { scrollbar-width: none; -ms-overflow-style: none; }
   letter-spacing: 0.06em;
   text-transform: uppercase;
   padding: 4px 9px;
-  border-radius: 6px;
+  border-radius: var(--radius-xs);
   cursor: pointer;
 }
 .ord-deduct-undo:hover { color: var(--text-primary); border-color: rgba(255,255,255,0.20); }
@@ -1236,7 +1236,7 @@ html, body { scrollbar-width: none; -ms-overflow-style: none; }
   padding: 12px;
   background: rgba(0,0,0,0.30);
   border: 1px solid rgba(125,211,252,0.18);
-  border-radius: 10px;
+  border-radius: var(--radius-sm);
 }
 .ord-deduct-chooser-title {
   font-size: 10px; letter-spacing: 0.18em; font-weight: 800;
@@ -1305,7 +1305,7 @@ html, body { scrollbar-width: none; -ms-overflow-style: none; }
   animation: subRowPulse 1.4s ease-in-out infinite;
 }
 .sub-row.is-urgent .sub-renew-line {
-  color: #FF8A8A !important;
+  color: var(--danger) !important;
   font-weight: 700;
 }
 @keyframes subRowPulse {
@@ -1487,7 +1487,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   display: inline-block;
   width: 30px;
   height: 16px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: rgba(255,255,255,0.10);
   transition: background 0.2s;
   flex-shrink: 0;
@@ -1497,18 +1497,18 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   top: 2px; left: 2px;
   width: 12px; height: 12px;
   border-radius: 50%;
-  background: #FAFAFA;
+  background: var(--text-primary);
   transition: transform 0.2s, background 0.2s;
 }
 .sub-auto-toggle input:checked ~ .sub-auto-track {
-  background: #6BE3A4;
+  background: var(--success);
 }
 .sub-auto-toggle input:checked ~ .sub-auto-track .sub-auto-thumb {
   transform: translateX(14px);
   background: #04201A;
 }
 .sub-auto-toggle input:checked ~ .sub-auto-label {
-  color: #6BE3A4;
+  color: var(--success);
   font-weight: 700;
 }
 .sub-auto-label {
@@ -1527,7 +1527,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   padding: 4px 8px;
   background: rgba(255,255,255,0.04);
   border: 1px solid rgba(255,255,255,0.08);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
   user-select: none;
@@ -1541,14 +1541,14 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 .sub-row-toggle.is-on {
   background: rgba(107,227,164,0.10);
   border-color: rgba(107,227,164,0.30);
-  color: #6BE3A4;
+  color: var(--success);
 }
 .sub-row-toggle .sub-row-toggle-dot {
   width: 6px; height: 6px; border-radius: 50%;
   background: rgba(255,255,255,0.25);
 }
 .sub-row-toggle.is-on .sub-row-toggle-dot {
-  background: #6BE3A4;
+  background: var(--success);
   box-shadow: 0 0 6px rgba(107,227,164,0.7);
 }
 
@@ -1559,7 +1559,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   padding: 3px 8px;
   background: rgba(125,211,252,0.10);
   border: 1px solid rgba(125,211,252,0.20);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   font-family: var(--font-mono);
   font-size: 10px;
   letter-spacing: 0.04em;
@@ -1603,7 +1603,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
         <div style="display:flex;align-items:center;gap:6px">
           <span style="font-size:11px;color:var(--text-tertiary)">CHF</span>
-          <select id="netWorthCurrency" style="background:var(--bg-card);color:var(--text-primary);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:12px;font-family:inherit;cursor:pointer">
+          <select id="netWorthCurrency" style="background:var(--bg-card);color:var(--text-primary);border:1px solid var(--border);border-radius: var(--radius-xs);padding:4px 8px;font-size:12px;font-family:inherit;cursor:pointer">
             <option value="CHF">CHF</option>
             <option value="USD">USD</option>
             <option value="EUR">EUR</option>
@@ -1615,7 +1615,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
           <span id="mxnManualRateHint">Live rate unavailable —</span>
           <span>1 USD =</span>
           <input id="mxnManualRateInput" type="number" step="0.01" min="0" inputmode="decimal"
-                 style="width:60px;background:var(--bg-card);color:var(--text-primary);border:1px solid var(--border);border-radius:6px;padding:3px 6px;font-size:11px;font-family:inherit">
+                 style="width:60px;background:var(--bg-card);color:var(--text-primary);border:1px solid var(--border);border-radius: var(--radius-xs);padding:3px 6px;font-size:11px;font-family:inherit">
           <span>MXN</span>
         </div>
       </div>
@@ -2148,7 +2148,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
     input.type = 'text';
     input.inputMode = 'decimal';
     input.value = String(curDisplay.toFixed(curDisplay % 1 === 0 ? 0 : 2));
-    input.style.cssText = 'width:110px;padding:4px 8px;font-family:var(--font-mono);font-size:12px;background:rgba(0,0,0,0.30);border:1px solid rgba(255,255,255,0.10);color:var(--text-primary);border-radius:6px;text-align:right;font-variant-numeric:tabular-nums;outline:none;';
+    input.style.cssText = 'width:110px;padding:4px 8px;font-family:var(--font-mono);font-size:12px;background:rgba(0,0,0,0.30);border:1px solid rgba(255,255,255,0.10);color:var(--text-primary);border-radius: var(--radius-xs);text-align:right;font-variant-numeric:tabular-nums;outline:none;';
     amtEl.textContent = '';
     amtEl.appendChild(input);
     setTimeout(() => { input.focus(); input.select(); }, 0);
@@ -2188,7 +2188,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
     const input = document.createElement('input');
     input.type = 'text';
     input.value = cur;
-    input.style.cssText = 'width:100%;padding:4px 8px;font-family:inherit;font-size:13px;background:rgba(0,0,0,0.30);border:1px solid rgba(255,255,255,0.10);color:var(--text-primary);border-radius:6px;outline:none;';
+    input.style.cssText = 'width:100%;padding:4px 8px;font-family:inherit;font-size:13px;background:rgba(0,0,0,0.30);border:1px solid rgba(255,255,255,0.10);color:var(--text-primary);border-radius: var(--radius-xs);outline:none;';
     nameEl.textContent = '';
     nameEl.appendChild(input);
     setTimeout(() => { input.focus(); input.select(); }, 0);
@@ -2295,7 +2295,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
     stocks: { name: 'Stocks',   color: '#6EE7B7' },
     crypto: { name: 'Crypto',   color: '#FBBF24' },
     other:  { name: 'Other',    color: '#B794F4' },
-    subs:   { name: 'Subs/yr',  color: '#FF8A8A' }
+    subs:   { name: 'Subs/yr',  color: 'var(--danger)' }
   };
   function donutArcPath(cx, cy, rOuter, rInner, startAngle, endAngle) {
     const x1o = cx + rOuter * Math.cos(startAngle);
@@ -2440,7 +2440,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
     const last = hist[hist.length - 1].v;
     const change = last - first;
     const direction = Math.abs(change) < 0.005 ? 'flat' : (change > 0 ? 'up' : 'down');
-    const color = direction === 'up' ? '#6BE3A4' : direction === 'down' ? '#FF8A8A' : 'var(--text-tertiary)';
+    const color = direction === 'up' ? 'var(--success)' : direction === 'down' ? 'var(--danger)' : 'var(--text-tertiary)';
     svg.style.color = color;
     if (deltaEl) {
       deltaEl.classList.remove('up', 'down');
@@ -2624,7 +2624,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
       row.className = 'sub-row' + (isUrgent ? ' is-urgent' : '');
       row.style.cssText = 'display:grid;grid-template-columns:1fr auto auto;align-items:center;padding:12px 14px;background:rgba(255,255,255,0.025);border-radius:var(--radius-md);margin-bottom:8px;gap:12px;';
       const renewLine = it.renewal
-        ? '<div class="sub-renew-line" style="font-size:10px;color:#F2C063;margin-top:3px">↻ Renews ' + formatRenewal(it.renewal) + '</div>'
+        ? '<div class="sub-renew-line" style="font-size:10px;color:var(--warning);margin-top:3px">↻ Renews ' + formatRenewal(it.renewal) + '</div>'
         : '';
       // Linked NW account + auto-deduct toggle pills
       let metaLine = '';
