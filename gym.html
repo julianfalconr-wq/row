@@ -9,17 +9,13 @@
      lesson as daylib.js/RowIcons, applied to something that actually
      needs to block, not just be ready in time). -->
 <script src="lock.js"></script>
-<script>
-(function () {
-  try {
-    var t = localStorage.getItem('dashboard:theme');
-    if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
-  } catch (e) {}
-})();
-</script>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0a0a0b">
 <title>Training</title>
+<!-- row-ui.css: the shared design system — see main.html's own <head>
+     comment (same pattern). Dark theme only; the theme-init script and
+     :root[data-theme="light"] block this replaced are both gone. -->
+<link rel="stylesheet" href="row-ui.css">
 <!-- Not deferred, on purpose: this file's own date logic below runs
      as plain synchronous inline scripts (not wrapped in
      DOMContentLoaded), so daylib.js must finish executing during
@@ -116,38 +112,45 @@ const CONFIG = {
 </script>
 
 <style>
+/* Old names kept as thin aliases onto row-ui.css's shared tokens, same
+   approach as main.html/health.html's own migrations. --text-1/2/3/4
+   (an opacity-based scale, this page's own genuinely different
+   structure from every other page's --text-primary/secondary/tertiary
+   naming) map onto the closest equivalents rather than being restructured
+   — --text-4 has no real equivalent (row-ui.css's scale stops at
+   --text-quaternary, close but not identical in intended opacity), kept
+   as its own literal. --accent used to be plain white here (this page's
+   own primary-button color, unrelated to the cyan/green/amber/coral/
+   purple semantic accents) — left as literal white since row-ui.css's
+   --btn-primary-a/b already serve that exact role app-wide and this
+   page's own buttons already reference --accent for the same purpose.
+   Dark only — the :root[data-theme="light"] block and this page's own
+   light-theme vignette line are both gone. The dark vignette below
+   this page used to set via the `background` SHORTHAND was already
+   silently overridden by topbar.js's later-injected glow
+   background-image (same property, later source wins) even before
+   this redesign — removed as dead code, not a behavior change. */
 :root {
-  --bg: #0a0a0b;
-  --bg-card: #111113;
-  --text-1: #ffffff;
-  --text-2: rgba(255,255,255,0.6);
-  --text-3: rgba(255,255,255,0.4);
+  --bg: var(--bg-canvas);
+  --bg-card: var(--surface-card);
+  --text-1: var(--text-primary);
+  --text-2: var(--text-secondary);
+  --text-3: var(--text-tertiary);
   --text-4: rgba(255,255,255,0.25);
-  --border: rgba(255,255,255,0.06);
-  --border-strong: rgba(255,255,255,0.14);
+  --border: var(--border-hairline);
+  /* --border-strong needs no alias at all: row-ui.css already defines
+     it under this exact name, so this page's own references to it
+     resolve directly — redeclaring it as var(--border-strong) here
+     would be a circular self-reference (computes to invalid/unset,
+     confirmed live before removing this line). */
   --accent: #ffffff;
-  --good: #6ee7b7;
-  --warn: #fbbf24;
-  --bad: #ff8a8a;
-  --font: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, sans-serif;
-  --font-mono: ui-monospace, SF Mono, Menlo, Consolas, monospace;
+  --good: var(--accent-green);
+  --warn: var(--accent-amber);
+  --bad: var(--accent-coral);
 }
-:root[data-theme="light"] {
-  --bg: #F3F3F1;
-  --bg-card: #FFFFFF;
-  --text-1: #141416;
-  --text-2: rgba(20,20,22,0.62);
-  --text-3: rgba(20,20,22,0.42);
-  --text-4: rgba(20,20,22,0.26);
-  --border: rgba(15,15,20,0.10);
-  --border-strong: rgba(15,15,20,0.18);
-  --accent: #141416;
-}
-html[data-theme="light"] body { background: radial-gradient(ellipse 80% 60% at 50% 0%, #FAFAF8 0%, #F3F3F1 60%); }
 * { box-sizing: border-box; }
 html, body {
   margin: 0; padding: 0;
-  background: radial-gradient(ellipse 80% 60% at 50% 0%, #14141a 0%, #0a0a0b 60%);
   color: var(--text-1);
   font-family: var(--font);
   -webkit-font-smoothing: antialiased;
