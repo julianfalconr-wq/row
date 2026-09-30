@@ -171,7 +171,7 @@ body {
 .entry-btn.na-btn { color: var(--text-tertiary); font-weight: 600; }
 .entry-btn.na-btn.active { background: var(--text-tertiary); color: var(--surface-2); }
 .entry-btn.entry-binary-x, .entry-btn.entry-binary-check { min-width: 40px; font-size: 15px; }
-.entry-btn.entry-binary-x.active { background: var(--danger); color: #fff; }
+.entry-btn.entry-binary-x.active { background: var(--danger); color: var(--text-primary); }
 .entry-num-input {
   width: 52px; height: 30px; text-align: center; border-radius: 8px;
   border: 1px solid var(--line); background: var(--inset-bg); color: var(--text-primary);
@@ -225,13 +225,13 @@ body {
 .hc-numeric-goal input.hc-goal { width: 40px !important; text-align: center; }
 .habit-config-actions { display: flex; flex-direction: column; gap: 4px; flex-shrink: 0; }
 .habit-config-icon-btn {
-  width: 26px; height: 26px; border-radius: 6px; border: 1px solid var(--line);
+  width: 26px; height: 26px; border-radius: var(--radius-xs); border: 1px solid var(--line);
   background: var(--inset-bg); color: var(--text-tertiary); font-size: 12px; cursor: pointer;
   display: flex; align-items: center; justify-content: center;
 }
 .habit-config-icon-btn:hover { color: var(--text-primary); }
 .habit-config-add-btn {
-  width: 100%; padding: 10px; margin-top: 10px; border-radius: 10px; border: 1px dashed var(--line);
+  width: 100%; padding: 10px; margin-top: 10px; border-radius: var(--radius-sm); border: 1px dashed var(--line);
   background: transparent; color: var(--text-tertiary); font-family: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
 }
 .habit-config-add-btn:hover { color: var(--text-primary); border-color: var(--text-tertiary); }
@@ -306,7 +306,7 @@ body {
   opacity: 0.45;
 }
 .consistency-stats { display: flex; gap: 8px; margin-top: 12px; }
-.consistency-stat { flex: 1; text-align: center; background: var(--inset-bg); border-radius: 10px; padding: 8px 4px; }
+.consistency-stat { flex: 1; text-align: center; background: var(--inset-bg); border-radius: var(--radius-sm); padding: 8px 4px; }
 .consistency-stat-value { font-size: 17px; font-weight: 800; color: var(--text-primary); font-variant-numeric: tabular-nums; }
 .consistency-stat-label { font-size: 9px; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; color: var(--text-tertiary); margin-top: 2px; }
 .consistency-empty-note { font-size: 12px; color: var(--text-tertiary); font-style: italic; padding: 4px 2px; }
