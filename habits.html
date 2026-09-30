@@ -254,6 +254,22 @@ body {
    behavior. */
 @media (min-width: 1024px) {
   #habitFormModalBg .modal { max-width: 440px; }
+  /* Desktop-only wide-screen grid: Consistency is a repeating list of
+     same-shaped per-habit cards (#consistencyList, populated by
+     renderConsistency() below) - the one section on this page that's a
+     natural grid candidate. "Today's Habits" (a sequential daily
+     checklist form) and "Manage Habits" (an ordered list with
+     up/down/edit controls, where visual position carries meaning) stay
+     single-column by design - a grid would break the up/down reorder
+     model on the latter and doesn't suit a form on the former. Pure CSS
+     on the existing container; renderConsistency()'s own markup is
+     untouched, so each habit's card just flows into the grid. */
+  #consistencyList { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+  /* The "N auto-tracked habits not shown here" note (same #consistencyList
+     children as the habit cards) reads as one short line, not a card -
+     span it across both columns instead of leaving it stranded in one
+     cell with an empty gap beside it. */
+  #consistencyList .consistency-empty-note { grid-column: 1 / -1; }
 }
 .hf-field { margin-bottom: 14px; }
 .hf-label { display: block; font-size: 10.5px; font-weight: 800; letter-spacing: 0.10em; text-transform: uppercase; color: var(--text-tertiary); margin-bottom: 6px; }
@@ -293,7 +309,14 @@ body {
 }
 
 /* ===== Consistency grid + streak stats (Phase 3) ===== */
-.consistency-card { margin-bottom: 12px; }
+/* min-width:0 overrides a CSS grid item's default min-width:auto,
+   which would otherwise refuse to shrink this card below the
+   intrinsic width of .consistency-grid's date-cell strip
+   (width:max-content, can be wide) once #consistencyList becomes a
+   2-column grid at >=1024px - without this, that forced the whole
+   grid (and the page) wider than the viewport instead of letting
+   .consistency-scroll's own overflow-x:auto do its job. */
+.consistency-card { margin-bottom: 12px; min-width: 0; }
 .consistency-card:last-child { margin-bottom: 0; }
 .consistency-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
 .consistency-name { font-size: 14px; font-weight: 700; color: var(--text-primary); }
