@@ -1700,31 +1700,6 @@ img, video, canvas, svg { max-width: 100%; }
    taller neighbor. */
 @media (min-width: 1024px) {
   .wide-grid-row { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
-  /* Routines | Weight tracker: both grid cells already start at the
-     same y (align-items:start), but the two headers inside them don't
-     - #routinesCard is a .card with its own 20px padding pushing
-     "Routines" down from the cell's top edge, while .wt-divider (the
-     "WEIGHT" label) sits with zero offset at the very top of its cell,
-     since .wt-section isn't a padded .card, just a bare wrapper around
-     a divider + a separate .wt-card below it. Nudging .wt-divider down
-     to roughly match .card's padding is the minimal fix - reusing
-     .card's own padding here would mean restyling .wt-section into a
-     bordered box it was never designed to be, just to fix an
-     alignment that only matters in this one paired context. Scoped to
-     the grid pairing specifically so phone width (where Weight isn't
-     sitting beside a padded card) is unaffected.
-
-     The value is 32.5px, not .card's 20px padding alone - the first
-     attempt used 20px on the (wrong) assumption that .card's padding
-     was the ONLY offset, but #routinesCard .po-title's own line box
-     (18px font, no explicit line-height, so it inherits the page's
-     default) adds its own ~12.5px of ascent space above the glyphs
-     that .card's padding doesn't account for. Measured directly via
-     getBoundingClientRect() on both .po-title and .wt-divider rather
-     than assumed from the CSS alone: with 20px, the gap between them
-     was still 12.5px; 32.5px is the actual measured difference that
-     closes it to 0. */
-  .wide-grid-row .wt-section .wt-divider { margin-top: 32.5px; }
 }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -1846,11 +1821,24 @@ img, video, canvas, svg { max-width: 100%; }
     <div class="po-no-ex" id="noRoutinesMsg" style="display:none">No routines yet. Tap <strong>+</strong> to build one.</div>
   </div>
 
-  <!-- WEIGHT + PROGRESS PHOTOS -->
+  <!-- WEIGHT + PROGRESS PHOTOS. The "WEIGHT" divider label lives INSIDE
+       .wt-card (not above/outside it) on purpose - when this section
+       pairs with Routines in the >=1024px wide-screen grid, .wt-card's
+       bordered box needs to start at the same y as #routinesCard's own
+       border, matching the rest of the app's title-inside-the-card
+       convention (.po-header/.po-title inside .card, used by every
+       other card on this page). Two earlier attempts tried to fix the
+       header-text alignment with margin-top magic numbers on the
+       divider while it stayed OUTSIDE the card - that kept the same
+       underlying structural mismatch (one section's title inside its
+       border, the other's outside), so it needed new numbers whenever
+       the measured offset turned out to be about something other than
+       what the margin was covering. Moving the divider inside the card
+       removes the mismatch instead of compensating for it: both cards'
+       own borders now start at the same y with no extra CSS needed. -->
   <div class="wt-section">
-    <div class="wt-divider"><span>WEIGHT</span></div>
-
     <div class="wt-card">
+      <div class="wt-divider"><span>WEIGHT</span></div>
       <div class="wt-row">
         <span class="wt-num" id="wtNum">—</span>
         <span class="wt-unit" id="wtUnit">kg</span>
