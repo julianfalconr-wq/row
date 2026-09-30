@@ -82,7 +82,11 @@ body {
   min-height: 100vh;
   position: relative;
   overflow-x: hidden;
-  padding: max(28px, env(safe-area-inset-top)) 20px 60px;
+  /* No top padding here — #topbar (body's own first child, injected by
+     topbar.js) already resolves env(safe-area-inset-top) into its own
+     padding, so duplicating it on body would just push the topbar down
+     from the true viewport top instead of sitting flush against it. */
+  padding: 0 20px 60px;
 }
 /* iOS Safari auto-zooms the whole page when a text input/textarea/
    select with a computed font-size under 16px receives focus, and —
