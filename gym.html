@@ -1712,8 +1712,19 @@ img, video, canvas, svg { max-width: 100%; }
      bordered box it was never designed to be, just to fix an
      alignment that only matters in this one paired context. Scoped to
      the grid pairing specifically so phone width (where Weight isn't
-     sitting beside a padded card) is unaffected. */
-  .wide-grid-row .wt-section .wt-divider { margin-top: 20px; }
+     sitting beside a padded card) is unaffected.
+
+     The value is 32.5px, not .card's 20px padding alone - the first
+     attempt used 20px on the (wrong) assumption that .card's padding
+     was the ONLY offset, but #routinesCard .po-title's own line box
+     (18px font, no explicit line-height, so it inherits the page's
+     default) adds its own ~12.5px of ascent space above the glyphs
+     that .card's padding doesn't account for. Measured directly via
+     getBoundingClientRect() on both .po-title and .wt-divider rather
+     than assumed from the CSS alone: with 20px, the gap between them
+     was still 12.5px; 32.5px is the actual measured difference that
+     closes it to 0. */
+  .wide-grid-row .wt-section .wt-divider { margin-top: 32.5px; }
 }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
