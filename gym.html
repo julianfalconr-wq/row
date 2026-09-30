@@ -1700,6 +1700,20 @@ img, video, canvas, svg { max-width: 100%; }
    taller neighbor. */
 @media (min-width: 1024px) {
   .wide-grid-row { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
+  /* Routines | Weight tracker: both grid cells already start at the
+     same y (align-items:start), but the two headers inside them don't
+     - #routinesCard is a .card with its own 20px padding pushing
+     "Routines" down from the cell's top edge, while .wt-divider (the
+     "WEIGHT" label) sits with zero offset at the very top of its cell,
+     since .wt-section isn't a padded .card, just a bare wrapper around
+     a divider + a separate .wt-card below it. Nudging .wt-divider down
+     to roughly match .card's padding is the minimal fix - reusing
+     .card's own padding here would mean restyling .wt-section into a
+     bordered box it was never designed to be, just to fix an
+     alignment that only matters in this one paired context. Scoped to
+     the grid pairing specifically so phone width (where Weight isn't
+     sitting beside a padded card) is unaffected. */
+  .wide-grid-row .wt-section .wt-divider { margin-top: 20px; }
 }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
