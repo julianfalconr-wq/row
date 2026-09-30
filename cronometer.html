@@ -77,11 +77,11 @@ body { min-height: 100vh; padding: max(28px, env(safe-area-inset-top)) 20px 60px
 .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 input[type="text"], input[type="password"], input[type="number"], select {
   flex: 1; min-width: 140px;
-  background: var(--inset-bg); border: 1px solid var(--line); border-radius: 10px;
+  background: var(--inset-bg); border: 1px solid var(--line); border-radius: var(--radius-sm);
   color: var(--text-primary); padding: 10px 12px; font-size: 14px; font-family: var(--font);
 }
 button {
-  border: none; border-radius: 10px; padding: 10px 16px; font-size: 14px; font-weight: 700;
+  border: none; border-radius: var(--radius-sm); padding: 10px 16px; font-size: 14px; font-weight: 700;
   cursor: pointer; font-family: var(--font);
 }
 .btn-primary { background: var(--text-primary); color: var(--surface-1); }
