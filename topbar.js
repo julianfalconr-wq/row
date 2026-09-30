@@ -782,6 +782,17 @@ body {
   // tight at a corner of it, which is where an end cap is more likely
   // to land. Widening the region masks that ambiguity with enough flat
   // margin that it no longer matters which interpretation a browser uses.
+  //
+  // Blur is now deliberately smaller/dimmer than the two earlier passes
+  // (stdDeviation 2.5 -> 1.5, plus the blurred layer's own alpha scaled
+  // to 50% via feComponentTransfer before merging under the sharp
+  // stroke) — after the region widening still didn't read as fixed
+  // end-to-end, the call was to make the whole glow more subtle rather
+  // than keep chasing the exact browser-specific bbox behavior: a
+  // smaller, softer halo makes any remaining unevenness far less
+  // noticeable while keeping the glow effect itself present. The sharp
+  // SourceGraphic stroke (merged on top, full opacity) is untouched —
+  // only the blurred halo underneath it is smaller and dimmer.
   function injectRingGlowDefs() {
     if (document.getElementById('row-ring-glow')) return;
     const svgNS = 'http://www.w3.org/2000/svg';
@@ -792,8 +803,11 @@ body {
     svg.innerHTML = `
 <defs>
   <filter id="row-ring-glow" x="-50%" y="-50%" width="200%" height="200%">
-    <feGaussianBlur stdDeviation="2.5" result="b" />
-    <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    <feGaussianBlur in="SourceGraphic" stdDeviation="1.5" result="blur" />
+    <feComponentTransfer in="blur" result="dimBlur">
+      <feFuncA type="linear" slope="0.5" />
+    </feComponentTransfer>
+    <feMerge><feMergeNode in="dimBlur"/><feMergeNode in="SourceGraphic"/></feMerge>
   </filter>
 </defs>`;
     document.body.appendChild(svg);
