@@ -97,14 +97,11 @@ body {
    main.html's Calendar card tabs (.cal-tabs/.cal-tab), reused verbatim
    for visual consistency rather than a new pattern. */
 .trend-range-row { display: flex; justify-content: flex-end; margin: 18px 0 16px; }
-.cal-tabs { display: flex; gap: 4px; background: var(--inset-bg); border: 1px solid var(--line); border-radius: 10px; padding: 3px; }
-.cal-tab {
-  padding: 7px 14px; border: none; background: transparent; color: var(--text-tertiary);
-  border-radius: 7px; font-family: inherit; font-size: 11.5px; font-weight: 700;
-  cursor: pointer; -webkit-tap-highlight-color: transparent; transition: background 0.15s, color 0.15s;
-}
-.cal-tab:hover { color: var(--text-secondary); }
-.cal-tab.active { background: linear-gradient(180deg, var(--btn-primary-a), var(--btn-primary-b)); color: var(--btn-primary-text); }
+/* .cal-tabs/.cal-tab now come from row-ui.css's shared rules — this
+   page's own copy was a near-duplicate (only its padding differed by
+   2px) missed by the original page migration, since that pass focused
+   on tokens/.gm-card and didn't catch every shared-component
+   duplicate individually. */
 
 .trend-card {
   position: relative;
@@ -140,7 +137,7 @@ body {
 .patterns-btn:disabled { opacity: 0.6; cursor: default; }
 .patterns-loading { margin-top: 14px; font-size: 12.5px; color: var(--text-tertiary); font-style: italic; }
 .patterns-error {
-  margin-top: 14px; padding: 10px 12px; border-radius: 10px;
+  margin-top: 14px; padding: 10px 12px; border-radius: var(--radius-sm);
   background: rgba(255, 77, 94, 0.08); border: 1px solid rgba(255, 77, 94, 0.25);
   color: var(--danger); font-size: 12.5px;
 }
@@ -465,12 +462,12 @@ document.addEventListener('DOMContentLoaded', function () {
     const whoopStrainToday = await computeWhoopStrainToday(DayLib.effectiveDateKey());
     const results = dates.map((dk) => computeDayScoreFromCache(dk, habitConfig, entriesByDate, cronoCache, weights, whoopStrainToday));
     const data = results.map((r) => r.score);
-    renderChart('scoreTrendChart', dates.map(shortLabel), [{ label: "Today's Score", data, color: '#1D9E75' }]);
+    renderChart('scoreTrendChart', dates.map(shortLabel), [{ label: "Today's Score", data }]);
     const loggedCount = data.filter((v) => v != null).length;
     $('scoreTrendSub').textContent = loggedCount ? (loggedCount + ' of ' + dates.length + ' days scored') : 'Not enough data to score any day in this range';
 
     const habitData = results.map((r) => r.habitPct);
-    renderChart('habitsTrendChart', dates.map(shortLabel), [{ label: 'Habits %', data: habitData, color: '#1D9E75' }]);
+    renderChart('habitsTrendChart', dates.map(shortLabel), [{ label: 'Habits %', data: habitData }]);
     const habitLoggedCount = habitData.filter((v) => v != null).length;
     $('habitsTrendSub').textContent = habitLoggedCount ? (habitLoggedCount + ' of ' + dates.length + ' days logged') : 'No habits logged in this range';
 
@@ -513,7 +510,7 @@ document.addEventListener('DOMContentLoaded', function () {
     const data = dates.map((dk) => (byDate[dk] != null ? byDate[dk] : null));
     let units = 'kg';
     try { const pc = JSON.parse(localStorage.getItem('po_coach_v1')); if (pc && pc.units) units = pc.units; } catch (e) {}
-    renderChart('weightTrendChart', dates.map(shortLabel), [{ label: 'Weight (' + units + ')', data, color: '#1D9E75' }]);
+    renderChart('weightTrendChart', dates.map(shortLabel), [{ label: 'Weight (' + units + ')', data }]);
     const loggedCount = data.filter((v) => v != null).length;
     $('weightTrendSub').textContent = loggedCount ? (loggedCount + ' logged ' + (loggedCount === 1 ? 'entry' : 'entries')) : 'No weight logged in this range';
 
@@ -533,7 +530,7 @@ document.addEventListener('DOMContentLoaded', function () {
   async function loadNutritionTrend(dates) {
     if (typeof window.CronoLib === 'undefined' || !window.CronoLib.getSecret()) {
       renderChart('nutritionTrendChart', dates.map(shortLabel), [
-        { label: 'Protein %', data: dates.map(() => null), color: '#1D9E75' },
+        { label: 'Protein %', data: dates.map(() => null) },
         { label: 'Calories %', data: dates.map(() => null), color: '#FFC93C' },
       ]);
       $('nutritionTrendSub').textContent = 'Cronometer not connected';
@@ -555,7 +552,7 @@ document.addEventListener('DOMContentLoaded', function () {
       caloriesData.push(energy && energy.fraction != null ? Math.round(energy.fraction * 100) : null);
     });
     renderChart('nutritionTrendChart', dates.map(shortLabel), [
-      { label: 'Protein %', data: proteinData, color: '#1D9E75' },
+      { label: 'Protein %', data: proteinData },
       { label: 'Calories %', data: caloriesData, color: '#FFC93C' },
     ]);
     const loggedCount = dates.filter((dk) => availableDates.indexOf(dk) !== -1).length;
@@ -631,7 +628,7 @@ document.addEventListener('DOMContentLoaded', function () {
     try { tokens = JSON.parse(localStorage.getItem(WHOOP_KEY)); } catch (e) {}
     if (!tokens || !tokens.access) {
       renderChart('whoopTrendChart', dates.map(shortLabel), [
-        { label: 'Recovery %', data: dates.map(() => null), color: '#1D9E75' },
+        { label: 'Recovery %', data: dates.map(() => null) },
         { label: 'Sleep %', data: dates.map(() => null), color: '#FFC93C' },
       ]);
       $('whoopTrendSub').textContent = 'WHOOP not connected';
@@ -661,7 +658,7 @@ document.addEventListener('DOMContentLoaded', function () {
       const recoveryData = dates.map((dk) => (dk in recoveryByDate ? recoveryByDate[dk] : null));
       const sleepData = dates.map((dk) => (dk in sleepByDate ? sleepByDate[dk] : null));
       renderChart('whoopTrendChart', dates.map(shortLabel), [
-        { label: 'Recovery %', data: recoveryData, color: '#1D9E75' },
+        { label: 'Recovery %', data: recoveryData },
         { label: 'Sleep %', data: sleepData, color: '#FFC93C' },
       ]);
       const loggedCount = recoveryData.filter((v) => v != null).length;
@@ -670,7 +667,7 @@ document.addEventListener('DOMContentLoaded', function () {
       return { dates, recoveryData, sleepData };
     } catch (e) {
       renderChart('whoopTrendChart', dates.map(shortLabel), [
-        { label: 'Recovery %', data: dates.map(() => null), color: '#1D9E75' },
+        { label: 'Recovery %', data: dates.map(() => null) },
         { label: 'Sleep %', data: dates.map(() => null), color: '#FFC93C' },
       ]);
       $('whoopTrendSub').textContent = 'Could not load WHOOP data';
@@ -708,7 +705,7 @@ document.addEventListener('DOMContentLoaded', function () {
     });
     const labels = weekOrder.map((wk) => shortLabel(wk));
     const data = weekOrder.map((wk) => weekCounts[wk]);
-    renderChart('strengthTrendChart', labels, [{ label: 'Sessions', data, color: '#1D9E75' }], 'bar');
+    renderChart('strengthTrendChart', labels, [{ label: 'Sessions', data }], 'bar');
     const totalSessions = data.reduce((a, b) => a + b, 0);
     $('strengthTrendSub').textContent = totalSessions
       ? (totalSessions + ' session' + (totalSessions === 1 ? '' : 's') + ' across ' + weekOrder.length + ' week' + (weekOrder.length === 1 ? '' : 's'))
@@ -745,7 +742,7 @@ document.addEventListener('DOMContentLoaded', function () {
     const distanceEntries = inRange.filter((a) => a.distanceKm != null);
     const distanceLabels = distanceEntries.map((a) => shortLabel(a.dateKey));
     const distanceData = distanceEntries.map((a) => Math.round(a.distanceKm * 100) / 100);
-    renderChart('activitiesDistanceChart', distanceLabels, [{ label: 'Distance (km)', data: distanceData, color: '#1D9E75' }]);
+    renderChart('activitiesDistanceChart', distanceLabels, [{ label: 'Distance (km)', data: distanceData }]);
     $('activitiesDistanceSub').textContent = distanceEntries.length
       ? (distanceEntries.length + ' session' + (distanceEntries.length === 1 ? '' : 's') + ' with distance logged')
       : 'No distance-based activities logged in this range';
