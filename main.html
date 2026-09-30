@@ -279,7 +279,8 @@ body {
 .habit-gauge-fill {
   fill: none; stroke: var(--success); stroke-width: 11; stroke-linecap: round;
   transform: rotate(-90deg); transform-origin: 60px 60px;
-  filter: drop-shadow(0 0 6px var(--success));
+  /* Shared ring-glow filter — see row-ui.css's .ru-ring-fill comment. */
+  filter: url(#row-ring-glow);
   transition: stroke-dashoffset 0.7s cubic-bezier(0.22, 1, 0.36, 1);
 }
 .habit-gauge-overlay {
@@ -320,6 +321,12 @@ body {
   stroke-linecap: round;
   transform: rotate(-90deg);
   transform-origin: 60px 60px;
+  /* Shared ring-glow filter — see row-ui.css's .ru-ring-fill comment.
+     Previously a local <filter id="dayRingGlow"> referenced via this
+     element's own `filter="..."` attribute (removed from the markup);
+     this was already the "good" implementation other rings on this
+     page lacked, just duplicated per-instance instead of shared. */
+  filter: url(#row-ring-glow);
   transition: stroke 0.7s cubic-bezier(0.22, 1, 0.36, 1),
               stroke-dashoffset 0.7s cubic-bezier(0.22, 1, 0.36, 1);
 }
@@ -400,7 +407,13 @@ body {
   stroke-linecap: round;
   transform: rotate(-90deg);
   transform-origin: 60px 60px;
-  filter: drop-shadow(0 0 6px var(--accent-purple, #C4B5FD));
+  /* Shared ring-glow filter — see row-ui.css's .ru-ring-fill comment.
+     This ring used to carry its own local <filter id="nutriRingGlow">
+     (a per-instance copy of the same feGaussianBlur recipe) but this
+     CSS `filter:` property always wins over that element's `filter="..."`
+     presentation attribute — the attribute was dead code, silently
+     overridden the whole time. Removed below along with the markup. */
+  filter: url(#row-ring-glow);
   transition: stroke 0.7s cubic-bezier(0.22, 1, 0.36, 1),
               stroke-dashoffset 0.7s cubic-bezier(0.22, 1, 0.36, 1);
 }
@@ -1076,10 +1089,13 @@ body {
 .score-hero-ring-fill {
   fill: none; stroke: var(--success); stroke-width: 9; stroke-linecap: round;
   transition: stroke-dashoffset 0.6s ease, stroke 0.3s;
-  filter: drop-shadow(0 0 6px var(--success));
+  /* Shared ring-glow filter (see row-ui.css's .ru-ring-fill comment) —
+     feGaussianBlur blurs the stroke's own color, so is-warn/is-bad only
+     need to change `stroke`, not re-specify the glow color too. */
+  filter: url(#row-ring-glow);
 }
-.score-hero-ring-fill.is-warn { stroke: var(--warning); filter: drop-shadow(0 0 6px var(--warning)); }
-.score-hero-ring-fill.is-bad { stroke: var(--danger); filter: drop-shadow(0 0 6px var(--danger)); }
+.score-hero-ring-fill.is-warn { stroke: var(--warning); }
+.score-hero-ring-fill.is-bad { stroke: var(--danger); }
 .score-hero-ring-overlay {
   position: absolute; inset: 0; display: flex; flex-direction: column;
   align-items: center; justify-content: center;
@@ -1579,14 +1595,8 @@ body {
     <div class="day-ring-wrap">
       <div class="day-ring">
         <svg viewBox="0 0 120 120">
-          <defs>
-            <filter id="dayRingGlow" x="-20%" y="-20%" width="140%" height="140%">
-              <feGaussianBlur stdDeviation="2.4" result="b" />
-              <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
-            </filter>
-          </defs>
           <circle class="day-ring-track" cx="60" cy="60" r="52" />
-          <circle class="day-ring-fill"  cx="60" cy="60" r="52" id="dayRingFill" filter="url(#dayRingGlow)" />
+          <circle class="day-ring-fill"  cx="60" cy="60" r="52" id="dayRingFill" />
         </svg>
         <div class="day-ring-overlay">
           <div class="day-ring-percent" id="dayRingPercent">—</div>
@@ -1604,14 +1614,8 @@ body {
     <a href="health.html#cronometer" class="nutrition-score-wrap" id="nutritionScoreLink">
       <div class="nutrition-score-ring">
         <svg viewBox="0 0 120 120">
-          <defs>
-            <filter id="nutriRingGlow" x="-20%" y="-20%" width="140%" height="140%">
-              <feGaussianBlur stdDeviation="2.4" result="b" />
-              <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
-            </filter>
-          </defs>
           <circle class="nutrition-score-track" cx="60" cy="60" r="52" />
-          <circle class="nutrition-score-fill"  cx="60" cy="60" r="52" id="nutriRingFill" filter="url(#nutriRingGlow)" />
+          <circle class="nutrition-score-fill"  cx="60" cy="60" r="52" id="nutriRingFill" />
         </svg>
         <div class="nutrition-score-overlay">
           <div class="nutrition-score-percent" id="nutriRingPercent">—</div>

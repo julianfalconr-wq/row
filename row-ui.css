@@ -344,7 +344,16 @@ body { min-height: 100vh; position: relative; overflow-x: hidden; }
   stroke-linecap: round;
   stroke-dasharray: 251.2; /* 2*pi*40 */
   stroke-dashoffset: calc(251.2 * (1 - var(--ru-ring-pct, 0)));
-  filter: drop-shadow(0 0 6px var(--ru-ring-accent, var(--accent-cyan)));
+  /* The shared ring-glow filter (feGaussianBlur + generous filter
+     region, injected once per page by topbar.js as #row-ring-glow) —
+     NOT a plain CSS drop-shadow(). A plain drop-shadow's default SVG
+     filter region is sized off the circle's bare path bbox (ignoring
+     stroke-width), too tight once you add the blur radius on top, so
+     it clips the glow right at the rounded stroke-cap ends at high
+     percentages instead of rendering it evenly around the whole arc.
+     feGaussianBlur blurs the stroke's own rendered color, so this one
+     shared filter works for any --ru-ring-accent with no color param. */
+  filter: url(#row-ring-glow);
 }
 .ru-ring-center {
   position: absolute; inset: 0; display: flex; flex-direction: column;

@@ -745,6 +745,43 @@ body {
     document.head.appendChild(style);
   }
 
+  // One shared SVG filter for every ring gauge's glow (Today's Score,
+  // Nutrition, Habits mini-gauge, Day Ring, Cronometer's Energy ring).
+  // Referenced via CSS `filter: url(#row-ring-glow)` from row-ui.css's
+  // .ru-ring-fill and each page's own aliased ring-fill classes —
+  // replaces plain CSS `filter: drop-shadow(...)` on those elements,
+  // which rendered a visibly patchy glow (bright on most of the arc,
+  // dim right at the rounded stroke-cap ends) at high percentages: a
+  // plain CSS drop-shadow()'s default SVG filter region is sized off
+  // the circle's bare path bbox, too tight once you add stroke-width
+  // + blur radius, so it clips the blur exactly where the stroke caps
+  // extend past that box. A couple of rings (Day Ring, Nutrition) had
+  // already independently reinvented the fix with their own per-instance
+  // <filter id="..."> + generous region (x/y -20%, width/height 140%) —
+  // this centralizes that into one definition every ring references,
+  // instead of 3+ duplicate copies drifting out of sync. feGaussianBlur
+  // blurs the source graphic's own rendered color, so one generic filter
+  // works for every ring's accent color with no per-instance tinting
+  // needed. Hidden (width/height 0, not display:none — filters on
+  // display:none content don't resolve in every browser), injected
+  // once per page since it's referenced by ID from CSS.
+  function injectRingGlowDefs() {
+    if (document.getElementById('row-ring-glow')) return;
+    const svgNS = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(svgNS, 'svg');
+    svg.setAttribute('width', '0');
+    svg.setAttribute('height', '0');
+    svg.style.position = 'absolute';
+    svg.innerHTML = `
+<defs>
+  <filter id="row-ring-glow" x="-20%" y="-20%" width="140%" height="140%">
+    <feGaussianBlur stdDeviation="2.5" result="b" />
+    <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+  </filter>
+</defs>`;
+    document.body.appendChild(svg);
+  }
+
   // -------------------------------------------------------------
   // Back button for sub-pages reached from somewhere other than the
   // bottom tab bar (e.g. health.html -> cronometer.html). A sub-page
@@ -3000,6 +3037,7 @@ body {
   function boot() {
     injectStyle();
     injectGlowStyle();
+    injectRingGlowDefs();
     injectChrome();
     injectChat();
     applyChatVisibility();

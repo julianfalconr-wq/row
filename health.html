@@ -207,6 +207,12 @@ main {
 .crono-ring-fill {
   fill: none; stroke: var(--accent-purple); stroke-width: 11; stroke-linecap: round;
   transform: rotate(-90deg); transform-origin: 60px 60px;
+  /* Shared ring-glow filter, injected once per page by topbar.js as
+     #row-ring-glow — see row-ui.css's .ru-ring-fill comment. Previously
+     a local <filter id="cronoRingGlow"> (removed from the markup below,
+     along with this element's own `filter="..."` attribute) duplicating
+     the exact same feGaussianBlur recipe per-instance. */
+  filter: url(#row-ring-glow);
   transition: stroke 0.5s, stroke-dashoffset 0.7s cubic-bezier(0.22,1,0.36,1);
 }
 .crono-ring-overlay {
@@ -1062,14 +1068,8 @@ main {
         <div class="crono-energy-row">
           <div class="crono-ring">
             <svg viewBox="0 0 120 120">
-              <defs>
-                <filter id="cronoRingGlow" x="-20%" y="-20%" width="140%" height="140%">
-                  <feGaussianBlur stdDeviation="2" result="b" />
-                  <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
-                </filter>
-              </defs>
               <circle class="crono-ring-track" cx="60" cy="60" r="52" />
-              <circle class="crono-ring-fill" cx="60" cy="60" r="52" id="cronoRingFill" filter="url(#cronoRingGlow)" />
+              <circle class="crono-ring-fill" cx="60" cy="60" r="52" id="cronoRingFill" />
             </svg>
             <div class="crono-ring-overlay">
               <div class="crono-ring-percent" id="cronoRingPercent">—</div>
