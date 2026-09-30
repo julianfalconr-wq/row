@@ -792,6 +792,19 @@ main {
   .stack-search-results { width: 100%; }
 }
 
+/* Desktop-only wide-screen grid (>=1024px): pairs two adjacent
+   top-level sections into one 2-column row each — Whoop + Daily Stack
+   (both "vitals at a glance" cards), and Cronometer + Scan Food with AI
+   (both manual nutrition-input tools, and adjacent in DOM so grouping
+   them doesn't create any visual/DOM-order mismatch for keyboard/screen
+   reader navigation). Water Tracker (an embedded iframe) and the phone
+   layout (<1024px, still one column top to bottom) are both untouched.
+   align-items:start so one column's card never stretches to match a
+   taller neighbor — these aren't the same height and shouldn't be. */
+@media (min-width: 1024px) {
+  .wide-grid-row { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
+}
+
 ::selection { background: rgba(224, 118, 88, 0.3); color: var(--text-primary); }
 ::-webkit-scrollbar { width: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -830,6 +843,7 @@ main {
     .whoop-cell-val { font-size:22px; font-weight:700; color:var(--text-primary); font-variant-numeric:tabular-nums; letter-spacing:-0.03em; line-height:1; }
     .whoop-cell-sub { font-size:10px; color:var(--text-tertiary); margin-top:5px; font-variant-numeric:tabular-nums; font-family:var(--font-mono); }
   </style>
+  <div class="wide-grid-row">
   <div class="whoop-section">
     <div class="section-title">Whoop</div>
     <div class="whoop-card">
@@ -1037,7 +1051,9 @@ main {
       </div>
     </div>
   </div>
+  </div>
 
+  <div class="wide-grid-row">
   <section id="cronometer" class="crono-embed">
     <div class="section-title">Cronometer</div>
     <div class="crono-card">
@@ -1155,6 +1171,7 @@ main {
       </div>
     </div>
   </section>
+  </div>
 
   <section id="water" class="water-embed">
     <div class="section-title">Water Tracker</div>
