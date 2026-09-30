@@ -232,7 +232,7 @@ body {
   letter-spacing: 0.04em;
   color: var(--text-secondary);
   padding: 3px 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--inset-bg);
 }
 @media (max-width: 480px) {
@@ -471,13 +471,13 @@ body {
 .cal-disconnected-title { font-size: 16px; font-weight: 700; color: var(--text-primary); margin-bottom: 6px; }
 .cal-disconnected-sub { font-size: 12.5px; color: var(--text-tertiary); line-height: 1.5; max-width: 340px; margin: 0 auto 16px; }
 .cal-connect-btn {
-  padding: 12px 22px; border-radius: 999px; border: 1px solid var(--line);
+  padding: 12px 22px; border-radius: var(--radius-pill); border: 1px solid var(--line);
   background: linear-gradient(180deg, var(--btn-primary-a), var(--btn-primary-b));
   color: var(--btn-primary-text); font-family: inherit; font-weight: 700; font-size: 13.5px;
   cursor: pointer; -webkit-tap-highlight-color: transparent;
 }
 .cal-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 14px; }
-.cal-tabs { display: flex; gap: 4px; background: var(--inset-bg); border: 1px solid var(--line); border-radius: 10px; padding: 3px; }
+.cal-tabs { display: flex; gap: 4px; background: var(--inset-bg); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 3px; }
 .cal-tab {
   padding: 7px 12px; border: none; background: transparent; color: var(--text-tertiary);
   border-radius: 7px; font-family: inherit; font-size: 11.5px; font-weight: 700;
@@ -500,7 +500,7 @@ body {
 .cal-list { display: flex; flex-direction: column; gap: 8px; }
 .cal-event-row {
   display: flex; gap: 12px; align-items: flex-start;
-  padding: 10px 12px; background: var(--inset-bg); border: 1px solid var(--line); border-radius: 10px;
+  padding: 10px 12px; background: var(--inset-bg); border: 1px solid var(--line); border-radius: var(--radius-sm);
 }
 /* A FIXED width (not just a min-width floor) — every row's time text
    used to size to its own content, so a short "9:00 AM" row and a long
@@ -568,7 +568,7 @@ body {
 .cal-empty { text-align: center; font-size: 12px; color: var(--text-tertiary); font-style: italic; padding: 14px 0; }
 .cal-add-toggle {
   width: 100%; margin-top: 12px; padding: 10px;
-  background: transparent; border: 1px dashed var(--line); border-radius: 10px;
+  background: transparent; border: 1px dashed var(--line); border-radius: var(--radius-sm);
   color: var(--text-secondary); font-family: inherit; font-size: 12.5px; cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
@@ -603,7 +603,7 @@ body {
   padding: 11px 14px; margin-bottom: 10px; border-radius: 12px;
   background: linear-gradient(135deg, rgba(29,158,117,0.18), rgba(29,158,117,0.06));
   border: 1px solid rgba(29,158,117,0.35);
-  font-size: 13px; font-weight: 700; color: #17E88F;
+  font-size: 13px; font-weight: 700; color: var(--success);
   text-align: center; text-decoration: none; transition: background 0.15s;
 }
 .race-countdown-badge:hover { background: linear-gradient(135deg, rgba(29,158,117,0.26), rgba(29,158,117,0.1)); }
@@ -662,7 +662,7 @@ body {
 .plan-day-activity-chips:not(:empty) { margin-bottom: 10px; }
 .plan-day-activity-chip {
   display: inline-flex; align-items: center; gap: 6px;
-  background: var(--inset-bg); border: 1px solid var(--line); border-radius: 999px;
+  background: var(--inset-bg); border: 1px solid var(--line); border-radius: var(--radius-pill);
   padding: 6px 6px 6px 12px; font-size: 12px; color: var(--text-primary);
 }
 .plan-day-activity-chip-meta { color: var(--text-tertiary); font-size: 11px; }
@@ -675,12 +675,12 @@ body {
 .plan-day-activity-form { display: flex; flex-wrap: wrap; gap: 6px; }
 .plan-day-activity-input {
   flex: 1 1 140px; min-width: 0;
-  background: var(--inset-bg); border: 1px solid var(--line); border-radius: 10px;
+  background: var(--inset-bg); border: 1px solid var(--line); border-radius: var(--radius-sm);
   padding: 9px 12px; font-family: inherit; font-size: 13px; color: var(--text-primary);
 }
 .plan-day-duration-presets {
   display: flex; gap: 3px; background: var(--inset-bg); border: 1px solid var(--line);
-  border-radius: 10px; padding: 3px; flex-shrink: 0;
+  border-radius: var(--radius-sm); padding: 3px; flex-shrink: 0;
 }
 .plan-day-duration-btn {
   padding: 7px 9px; border: none; background: transparent; color: var(--text-tertiary);
@@ -690,11 +690,11 @@ body {
 .plan-day-duration-btn.active { background: linear-gradient(180deg, var(--btn-primary-a), var(--btn-primary-b)); color: var(--btn-primary-text); }
 .plan-day-activity-select {
   flex: 1 1 120px; min-width: 0;
-  background: var(--inset-bg); border: 1px solid var(--line); border-radius: 10px;
+  background: var(--inset-bg); border: 1px solid var(--line); border-radius: var(--radius-sm);
   padding: 9px 8px; font-family: inherit; font-size: 12px; color: var(--text-secondary);
 }
 .plan-day-activity-add-btn {
-  flex-shrink: 0; padding: 9px 16px; border-radius: 10px; border: 1px solid var(--line);
+  flex-shrink: 0; padding: 9px 16px; border-radius: var(--radius-sm); border: 1px solid var(--line);
   background: transparent; color: var(--text-primary);
   font-family: inherit; font-size: 12.5px; font-weight: 700; cursor: pointer;
 }
@@ -754,7 +754,7 @@ body {
 .gm-streak {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 8px 12px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--inset-bg);
   border: 1px solid var(--line);
   color: var(--text-tertiary);
@@ -878,7 +878,7 @@ body {
   content: '';
   position: absolute; left: 6px; top: 2px;
   width: 6px; height: 11px;
-  border: solid #0A0A0B;
+  border: solid var(--btn-primary-text);
   border-width: 0 2.5px 2.5px 0;
   transform: rotate(45deg);
   animation: gm-check-pop 0.28s cubic-bezier(0.34, 1.56, 0.64, 1);
@@ -910,7 +910,7 @@ body {
   font-size: 14px;
   cursor: pointer;
   padding: 4px 6px;
-  border-radius: 6px;
+  border-radius: var(--radius-xs);
   opacity: 0.55;
   transition: opacity 0.2s, color 0.2s, transform 0.1s;
 }
@@ -939,7 +939,7 @@ body {
   margin: 6px 0 0;
   padding: 9px;
   border: 1px dashed var(--line);
-  border-radius: 10px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-tertiary);
   font-family: inherit;
@@ -1039,7 +1039,7 @@ body {
   position: relative;
   background: var(--surface-2);
   border: 1px solid var(--line-soft);
-  border-radius: 20px;
+  border-radius: var(--radius-lg);
   padding: 22px;
   margin-bottom: 14px;
   box-shadow: var(--shadow-card);
@@ -1095,7 +1095,7 @@ body {
   display: inline-flex; align-items: center; gap: 4px;
   background: rgba(255,77,94,0.14); color: var(--danger);
   border: 1px solid rgba(255,77,94,0.3);
-  font-size: 11px; font-weight: 700; padding: 4px 9px; border-radius: 999px;
+  font-size: 11px; font-weight: 700; padding: 4px 9px; border-radius: var(--radius-pill);
 }
 .score-hero-empty { font-size: 13px; color: var(--text-tertiary); padding: 10px 0; }
 
@@ -1117,11 +1117,11 @@ body {
 .score-cat-pts.is-zero { color: var(--danger); }
 .score-cat-zt-badge {
   font-size: 9px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase;
-  background: rgba(255,77,94,0.18); color: var(--danger); padding: 2px 6px; border-radius: 6px;
+  background: rgba(255,77,94,0.18); color: var(--danger); padding: 2px 6px; border-radius: var(--radius-xs);
   flex-shrink: 0;
 }
 .score-whoop-row { display: flex; gap: 16px; margin-top: 4px; }
-.score-whoop-cell { flex: 1; background: var(--inset-bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px; text-align: center; }
+.score-whoop-cell { flex: 1; background: var(--inset-bg); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 10px; text-align: center; }
 .score-whoop-val { font-size: 17px; font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums; }
 .score-whoop-label { margin-top: 3px; font-size: 9px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-tertiary); }
 
@@ -1166,7 +1166,7 @@ body {
 .gs-restrictions-list { display: flex; flex-direction: column; gap: 8px; }
 .gs-restriction-row {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
-  padding: 10px 12px; background: var(--inset-bg); border: 1px solid var(--line); border-radius: 10px;
+  padding: 10px 12px; background: var(--inset-bg); border: 1px solid var(--line); border-radius: var(--radius-sm);
 }
 .gs-restriction-main { min-width: 0; }
 .gs-restriction-text { font-size: 13px; font-weight: 600; color: var(--text-primary); }
@@ -1184,7 +1184,7 @@ body {
 .gs-activity-types-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
 .gs-activity-type-row {
   display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
-  padding: 10px 12px; background: var(--inset-bg); border: 1px solid var(--line); border-radius: 10px;
+  padding: 10px 12px; background: var(--inset-bg); border: 1px solid var(--line); border-radius: var(--radius-sm);
 }
 .gs-activity-type-row input[type="text"], .gs-activity-type-row select {
   background: var(--surface-2); border: 1px solid var(--line); color: var(--text-primary);
@@ -1204,7 +1204,7 @@ body {
 }
 .gs-at-del:hover { color: var(--danger); border-color: var(--danger); }
 .gs-activity-type-add-btn {
-  width: 100%; padding: 9px; border-radius: 10px; border: 1px dashed var(--line);
+  width: 100%; padding: 9px; border-radius: var(--radius-sm); border: 1px dashed var(--line);
   background: transparent; color: var(--text-tertiary); font-family: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
 }
 .gs-activity-type-add-btn:hover { color: var(--text-primary); border-color: var(--text-tertiary); }
@@ -1960,9 +1960,9 @@ body {
   });
 
   // ---------- Day Ring (3-zone, WHOOP-style) ----------
-  const ZONE_GREEN  = '#17E88F';
-  const ZONE_YELLOW = '#FFC93C';
-  const ZONE_RED    = '#FF4D5E';
+  const ZONE_GREEN  = 'var(--success)';
+  const ZONE_YELLOW = 'var(--warning)';
+  const ZONE_RED    = 'var(--danger)';
 
   function zoneColorAt(percent) {
     if (percent < 40) return ZONE_GREEN;
