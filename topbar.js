@@ -765,6 +765,23 @@ body {
   // needed. Hidden (width/height 0, not display:none — filters on
   // display:none content don't resolve in every browser), injected
   // once per page since it's referenced by ID from CSS.
+  //
+  // Region is -50%/-50%/200%/200%, wider than the -20%/-20%/140%/140%
+  // first landed with (itself copied from day-ring's/nutri-ring's own
+  // pre-existing per-instance filters). That narrower region still
+  // clipped the glow right at the arc's TERMINAL end cap specifically —
+  // reproduced by forcing the ring to several percentages and zooming
+  // into a screenshot: the glow rendered full and round at the arc's
+  // start and along its middle, but visibly thinned at the end cap,
+  // wherever that happened to land. A `<circle>` with stroke-dasharray/
+  // stroke-dashoffset's default objectBoundingBox filter region isn't
+  // reliably anchored to the full abstract circle geometry across
+  // browsers — some compute it off the currently-painted (dash-clipped)
+  // arc instead, which is NOT rotationally symmetric, so a percentage
+  // margin that's generous at an edge-midpoint of that box can still be
+  // tight at a corner of it, which is where an end cap is more likely
+  // to land. Widening the region masks that ambiguity with enough flat
+  // margin that it no longer matters which interpretation a browser uses.
   function injectRingGlowDefs() {
     if (document.getElementById('row-ring-glow')) return;
     const svgNS = 'http://www.w3.org/2000/svg';
@@ -774,7 +791,7 @@ body {
     svg.style.position = 'absolute';
     svg.innerHTML = `
 <defs>
-  <filter id="row-ring-glow" x="-20%" y="-20%" width="140%" height="140%">
+  <filter id="row-ring-glow" x="-50%" y="-50%" width="200%" height="200%">
     <feGaussianBlur stdDeviation="2.5" result="b" />
     <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
   </filter>
