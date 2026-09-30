@@ -1685,6 +1685,20 @@ img, video, canvas, svg { max-width: 100%; }
 }
 
 .hidden { display: none !important; }
+
+/* Desktop-only wide-screen grid (>=1024px): pairs two adjacent
+   top-level cards into one 2-column row each — "This week's
+   objectives" + "Today's session" (both compact plan/recommendation
+   summaries), and Routines + the Weight tracker (both "at a glance"
+   side info, next to the primary exercise-logging card below them
+   which stays full width since it's the main workflow and isn't a
+   natural fit for a column split). The big Strength/Activities
+   logging cards, and the phone layout (<1024px, still one column),
+   are both untouched. align-items:start so a shorter column never
+   stretches to match a taller neighbor. */
+@media (min-width: 1024px) {
+  .wide-grid-row { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
+}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
@@ -1699,6 +1713,7 @@ img, video, canvas, svg { max-width: 100%; }
     </div>
   </div>
 
+  <div class="wide-grid-row">
   <!-- This week's objectives (AI-generated, see api/training.js?mode=plan) -->
   <div class="card" id="tpWeeklyCard">
     <div class="tp-card-head">
@@ -1750,6 +1765,7 @@ img, video, canvas, svg { max-width: 100%; }
     <div class="tp-today-text" id="ttText">Tap refresh for today's pick.</div>
     <div class="tp-today-sub" id="ttSub"></div>
   </div>
+  </div>
 
   <!-- Training History (Phase E; generalized in Phase 1 of the
        multi-activity-type feature) — read-only, shows that day's actual
@@ -1789,6 +1805,7 @@ img, video, canvas, svg { max-width: 100%; }
        day types (WHOOP Strength Trainer-style). Purely additive: the
        exercise-by-exercise ad-hoc logging below is completely
        unchanged and still works with no routine involved. -->
+  <div class="wide-grid-row">
   <div class="card" id="routinesCard">
     <div class="po-header" style="margin-bottom:12px">
       <h2 class="po-title" style="font-size:18px">Routines</h2>
@@ -1883,6 +1900,7 @@ img, video, canvas, svg { max-width: 100%; }
       </div>
       <span class="wt-progress-arrow">→</span>
     </button>
+  </div>
   </div>
 
   <!-- Progress photos overlay -->
