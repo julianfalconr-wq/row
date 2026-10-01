@@ -1118,6 +1118,54 @@ body {
 }
 .score-hero-empty { font-size: 13px; color: var(--text-tertiary); padding: 10px 0; }
 
+/* Race Day card — base card look shared with .score-hero-card via that
+   class; this adds the distinct "prominent, one-day-only" accent on
+   top (warm coral glow instead of the normal card's plain border,
+   so it reads as a special occasion, not just another day's score). */
+.race-day-card {
+  cursor: default;
+  border-color: rgba(255,77,94,0.35);
+  box-shadow: var(--shadow-card), 0 0 0 1px rgba(255,77,94,0.08) inset;
+}
+.race-day-eyebrow {
+  font-size: 11px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--danger);
+}
+.race-day-title { font-size: 17px; font-weight: 700; color: var(--text-primary); margin-top: 6px; margin-bottom: 14px; }
+.race-day-checklist { display: flex; flex-direction: column; gap: 2px; }
+.race-day-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 2px;
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 13.5px; color: var(--text-secondary);
+}
+.race-day-item:last-child { border-bottom: none; }
+.race-day-item.is-checked { color: var(--text-tertiary); text-decoration: line-through; }
+.race-day-item input[type="checkbox"] { width: 18px; height: 18px; flex-shrink: 0; accent-color: var(--danger); cursor: pointer; }
+.race-day-item-label { flex: 1; min-width: 0; cursor: pointer; }
+.race-day-empty { font-size: 13px; color: var(--text-tertiary); padding: 10px 0; }
+.race-day-edit-btn {
+  margin-top: 14px; background: transparent; border: none; color: var(--text-tertiary);
+  font-family: inherit; font-size: 12px; font-weight: 700; cursor: pointer; padding: 0;
+  text-decoration: underline; text-underline-offset: 2px;
+}
+.race-day-edit-btn:hover { color: var(--text-secondary); }
+
+/* Race Day checklist editor (modal) */
+.race-edit-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line-soft); }
+.race-edit-row-label { flex: 1; min-width: 0; font-size: 13.5px; color: var(--text-primary); }
+.race-edit-remove-btn {
+  background: transparent; border: none; color: var(--text-tertiary); cursor: pointer;
+  font-size: 18px; line-height: 1; padding: 2px 6px; flex-shrink: 0;
+}
+.race-edit-remove-btn:hover { color: var(--danger); }
+.race-edit-add-row { display: flex; gap: 8px; margin-top: 14px; }
+.race-edit-add-input {
+  flex: 1; min-width: 0; background: var(--inset-bg); border: 1px solid var(--line); color: var(--text-primary);
+  font-family: inherit; font-size: 13px; padding: 9px 12px; border-radius: var(--radius-sm); outline: none;
+}
+.race-edit-empty { font-size: 13px; color: var(--text-tertiary); padding: 8px 0; }
+
 /* breakdown modal */
 .score-breakdown-group { margin-bottom: 18px; }
 .score-breakdown-group h4 {
@@ -1297,6 +1345,46 @@ body {
       </div>
     </div>
     <div class="score-hero-flags" id="scoreHeroFlags" style="display:none"></div>
+  </div>
+
+  <!-- Race Day — a single-day override of the card above, shown ONLY
+       when today's DayLib-effective date equals the active Plan's own
+       raceDate (see the Plan mini-card script's renderRaceDayCard()
+       further down, which toggles these two cards' display). Every
+       other day this stays display:none and #scoreHeroCard is exactly
+       what renders, unchanged — see that function's own comment for
+       why this is a pure visibility toggle, not a markup/logic change
+       to the score card itself. Reuses .score-hero-card for the same
+       base card look (background/border/radius/padding/shadow) via a
+       shared class, plus its own .race-day-card modifier for the
+       distinct accent treatment a "prominent" card calls for. -->
+  <div class="score-hero-card race-day-card" id="raceDayCard" style="display:none">
+    <div class="score-hero-head">
+      <span class="race-day-eyebrow">Race Day 🏁</span>
+    </div>
+    <div class="race-day-title" id="raceDayTitle">—</div>
+    <div class="race-day-checklist" id="raceDayChecklist"></div>
+    <button type="button" class="race-day-edit-btn" id="raceDayEditBtn">Edit checklist</button>
+  </div>
+
+  <!-- Race Day checklist editor — the TEMPLATE only (item labels,
+       persisted across every future race day via
+       resource=race-checklist), NOT that day's checked state (which
+       lives separately, per daily_habits' own date-keyed entries under
+       a reserved _raceChecklist key — see renderRaceDayCard()'s own
+       comment further down for the full storage split). -->
+  <div class="modal-bg" id="raceChecklistEditModalBg">
+    <div class="modal">
+      <div class="modal-head">
+        <h3>Edit Race Day checklist</h3>
+        <button type="button" class="modal-close" id="raceChecklistEditCloseBtn" aria-label="Close">×</button>
+      </div>
+      <div id="raceChecklistEditList"></div>
+      <div class="race-edit-add-row">
+        <input type="text" id="raceChecklistAddInput" class="race-edit-add-input" placeholder="Add an item…" maxlength="120">
+        <button type="button" class="save-btn" id="raceChecklistAddBtn">+ Add</button>
+      </div>
+    </div>
   </div>
 
   <div class="modal-bg" id="scoreBreakdownModalBg">
@@ -2996,6 +3084,36 @@ document.addEventListener('DOMContentLoaded', function () {
     } catch (e) { return []; }
   }
 
+  // Race Day detection — used both by generatePlanDay (below, to decide
+  // which system prompt api/training.js's mode=day-plan should use) and
+  // by the Race Day dashboard card (see RACE DAY CARD section further
+  // down). A dateKey is "race day" iff it exactly equals the active
+  // Plan's own raceDate field (plan.html's own field — see
+  // api/sync-state.js's "plans" section) — a plain string comparison of
+  // two DayLib-derived/DayLib-compatible "YYYY-MM-DD" keys, per this
+  // feature's own "Use DayLib consistently for the date match"
+  // requirement: raceDate is always stored as a real YYYY-MM-DD (see
+  // api/sync-state.js's DATE_RE validation on save), and every dateKey
+  // this file ever compares it against (todayDateKey, planningDateKey,
+  // tomorrowDateKey) is always produced by DayLib.effectiveDateKey()/
+  // plainDateKey() — never a raw `new Date()` format — so there is no
+  // timezone or format mismatch to worry about. Returns the active
+  // plan object (or null) alongside the boolean, since the dashboard
+  // card also wants plan.goalDescription for its subtitle.
+  async function fetchActivePlanForRaceCheck() {
+    const secret = getSecret();
+    if (!secret) return null;
+    try {
+      const r = await fetch('/api/sync-state?secret=' + encodeURIComponent(secret) + '&resource=plans');
+      const j = await r.json();
+      const plans = (j && j.ok && Array.isArray(j.plans)) ? j.plans : [];
+      return plans.find((p) => p.status === 'active') || null;
+    } catch (e) { return null; }
+  }
+  function isRaceDayFor(dateKey, activePlan) {
+    return !!(activePlan && activePlan.raceDate && activePlan.raceDate === dateKey);
+  }
+
   // gym.html's Training page caches its last real (padel-aware, per
   // Phase 1) recommendation here after generating one — read it rather
   // than recomputing Training's logic a second time in this file. Only
@@ -3146,7 +3264,7 @@ document.addEventListener('DOMContentLoaded', function () {
   let planDayBlocksState = null; // [{date,start,end,title,category}] from the last generated proposal
 
   function planCatLabel(cat) {
-    return { sleep: 'Sleep', training: 'Training', work: 'Work', meal: 'Meal', walk: 'Walk', activity: 'Activity' }[cat] || 'Other';
+    return { sleep: 'Sleep', training: 'Training', work: 'Work', meal: 'Meal', walk: 'Walk', activity: 'Activity', race: 'Race' }[cat] || 'Other';
   }
   function renderPlanDayBlocks(blocks, unplaced) {
     const el = $('planDayBlocks');
@@ -3293,6 +3411,8 @@ document.addEventListener('DOMContentLoaded', function () {
       tomorrowDateKeyDate.setDate(tomorrowDateKeyDate.getDate() + 1);
       const tomorrowDateKey = DayLib.plainDateKey(tomorrowDateKeyDate);
       const planningDateKey = planDayTarget === 'tomorrow' ? tomorrowDateKey : todayDateKey;
+      const activePlanForRaceCheck = await fetchActivePlanForRaceCheck();
+      const isRaceDay = isRaceDayFor(planningDateKey, activePlanForRaceCheck);
 
       // Today through the end of tomorrow — both days' ALREADY-FIXED
       // events, treated as immovable by the model.
@@ -3375,6 +3495,7 @@ document.addEventListener('DOMContentLoaded', function () {
           todayWakeUpTime, todayBedtime,
           restrictions,
           userActivities: planDayUserActivities,
+          isRaceDay,
         }),
       });
       const json = await res.json();
@@ -3383,7 +3504,9 @@ document.addEventListener('DOMContentLoaded', function () {
       planDayHasGeneratedOnce = true;
       planDayBlocksState = json.blocks;
       renderPlanDayBlocks(json.blocks, json.unplaced);
-      $('planDayStatus').textContent = planningRecommendation
+      $('planDayStatus').textContent = isRaceDay
+        ? 'Race day plan — review below, then confirm.'
+        : planningRecommendation
         ? 'Review below, then confirm.'
         : (planDayTarget === 'tomorrow'
           ? 'Review below, then confirm. (No training recommendation for tomorrow — Generate this week\'s objectives first if you want a training block included.)'
@@ -3522,6 +3645,7 @@ document.addEventListener('DOMContentLoaded', function () {
 document.addEventListener('DOMContentLoaded', function () {
   'use strict';
   function getSecret() { try { return localStorage.getItem('dashboard:secret') || ''; } catch (e) { return ''; } }
+  function escapeHtml(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
   const titleEl = document.getElementById('planMiniTitle');
   const subEl = document.getElementById('planMiniSub');
   const raceBadge = document.getElementById('raceCountdownBadge');
@@ -3556,6 +3680,177 @@ document.addEventListener('DOMContentLoaded', function () {
     raceBadge.style.display = 'flex';
   }
 
+  // =============================================================
+  // Race Day dashboard card — a single-day override of #scoreHeroCard,
+  // shown ONLY when todayK (DayLib-effective "today") exactly equals
+  // the active Plan's own raceDate. Reuses the SAME active-plan fetch
+  // as renderRaceBadge/load() below (no extra network call for the
+  // plan itself) — this is purely a visibility toggle plus the
+  // checklist's own small reads/writes.
+  //
+  // STORAGE SPLIT (two genuinely different things, two different
+  // places — see api/sync-state.js's own "race-checklist" section):
+  //   - TEMPLATE (item labels, e.g. "Helmet", "Goggles" — persisted
+  //     across every future race day, editable via "Edit checklist"):
+  //     resource=race-checklist, a plain {id,label} array. Falls back
+  //     to RACE_CHECKLIST_DEFAULT below if nothing has ever been saved.
+  //   - THAT DAY's checked/unchecked state: reuses daily_habits'
+  //     existing date-keyed entries blob under a reserved
+  //     "_raceChecklist" key — the exact same pattern habits.html's
+  //     pain-log already established for "_pain" (a habit id is always
+  //     a seed id or "custom_<...>", so this key can never collide,
+  //     and score-lib.js's scoring path never visits an unrecognized
+  //     entry key). Always fetch-merge-save (never blind-overwrite):
+  //     that date's entries may already hold real scored habit data
+  //     from habits.html, which must survive this card's own writes.
+  const raceDayCard = document.getElementById('raceDayCard');
+  const raceDayTitleEl = document.getElementById('raceDayTitle');
+  const raceDayChecklistEl = document.getElementById('raceDayChecklist');
+  const raceEditModalBg = document.getElementById('raceChecklistEditModalBg');
+  const raceEditListEl = document.getElementById('raceChecklistEditList');
+  const RACE_CHECKLIST_DEFAULT = [
+    { id: 'default_helmet', label: 'Helmet' },
+    { id: 'default_goggles', label: 'Goggles' },
+    { id: 'default_race_number', label: 'Race number / belt' },
+    { id: 'default_wetsuit', label: 'Wetsuit or tri-suit' },
+    { id: 'default_swim_cap', label: 'Swim cap' },
+    { id: 'default_transition_shoes', label: 'Transition shoes' },
+    { id: 'default_bike', label: 'Bike + repair kit' },
+    { id: 'default_running_shoes', label: 'Running shoes' },
+    { id: 'default_nutrition', label: 'Nutrition / gels' },
+    { id: 'default_sunscreen', label: 'Sunscreen' },
+  ];
+  function makeRaceItemId() { return 'rc_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8); }
+
+  async function fetchRaceChecklistTemplate() {
+    const secret = getSecret();
+    if (!secret) return RACE_CHECKLIST_DEFAULT;
+    try {
+      const r = await fetch('/api/sync-state?secret=' + encodeURIComponent(secret) + '&resource=race-checklist');
+      const j = await r.json();
+      return (j && j.ok && Array.isArray(j.items) && j.items.length) ? j.items : RACE_CHECKLIST_DEFAULT;
+    } catch (e) { return RACE_CHECKLIST_DEFAULT; }
+  }
+  async function saveRaceChecklistTemplate(items) {
+    const secret = getSecret();
+    if (!secret) return false;
+    try {
+      const r = await fetch('/api/sync-state?resource=race-checklist&secret=' + encodeURIComponent(secret), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ resource: 'race-checklist', items }),
+      });
+      const j = await r.json();
+      return !!(j && j.ok);
+    } catch (e) { return false; }
+  }
+  // Fetch-then-merge-then-save, per this section's own header comment —
+  // never blindly overwrites a date's real habit entries.
+  async function saveRaceChecklistCheckedState(dateKey, checkedIds) {
+    const secret = getSecret();
+    if (!secret) return false;
+    try {
+      const existingR = await fetch('/api/sync-state?secret=' + encodeURIComponent(secret) + '&resource=daily-habits&date=' + encodeURIComponent(dateKey));
+      const existingJ = await existingR.json();
+      const entries = (existingJ && existingJ.ok && existingJ.entries && typeof existingJ.entries === 'object') ? existingJ.entries : {};
+      entries._raceChecklist = { checkedIds };
+      const r = await fetch('/api/sync-state?resource=daily-habits&secret=' + encodeURIComponent(secret), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ resource: 'daily-habits', date: dateKey, entries }),
+      });
+      const j = await r.json();
+      return !!(j && j.ok);
+    } catch (e) { return false; }
+  }
+  async function fetchRaceChecklistCheckedIds(dateKey) {
+    const secret = getSecret();
+    if (!secret) return [];
+    try {
+      const r = await fetch('/api/sync-state?secret=' + encodeURIComponent(secret) + '&resource=daily-habits&date=' + encodeURIComponent(dateKey));
+      const j = await r.json();
+      const entries = (j && j.ok && j.entries && typeof j.entries === 'object') ? j.entries : {};
+      const saved = entries._raceChecklist;
+      return (saved && Array.isArray(saved.checkedIds)) ? saved.checkedIds : [];
+    } catch (e) { return []; }
+  }
+
+  let raceDayTemplateCache = null; // the template list, re-rendered into both the card and the editor
+  let raceDayDateKey = null;
+  function renderRaceDayChecklist(items, checkedIds) {
+    if (!items.length) { raceDayChecklistEl.innerHTML = '<div class="race-day-empty">No checklist items yet — tap "Edit checklist" to add some.</div>'; return; }
+    const checkedSet = new Set(checkedIds);
+    raceDayChecklistEl.innerHTML = items.map((it) => (
+      '<label class="race-day-item' + (checkedSet.has(it.id) ? ' is-checked' : '') + '" data-id="' + escapeHtml(it.id) + '">' +
+        '<input type="checkbox"' + (checkedSet.has(it.id) ? ' checked' : '') + '>' +
+        '<span class="race-day-item-label">' + escapeHtml(it.label) + '</span>' +
+      '</label>'
+    )).join('');
+    raceDayChecklistEl.querySelectorAll('.race-day-item input[type="checkbox"]').forEach((cb) => {
+      cb.addEventListener('change', async () => {
+        const row = cb.closest('.race-day-item');
+        row.classList.toggle('is-checked', cb.checked);
+        const nowChecked = Array.from(raceDayChecklistEl.querySelectorAll('.race-day-item input[type="checkbox"]:checked'))
+          .map((el) => el.closest('.race-day-item').dataset.id);
+        await saveRaceChecklistCheckedState(raceDayDateKey, nowChecked);
+      });
+    });
+  }
+  function renderRaceEditList(items) {
+    if (!items.length) { raceEditListEl.innerHTML = '<div class="race-edit-empty">No items — add one below.</div>'; return; }
+    raceEditListEl.innerHTML = items.map((it) => (
+      '<div class="race-edit-row" data-id="' + escapeHtml(it.id) + '">' +
+        '<span class="race-edit-row-label">' + escapeHtml(it.label) + '</span>' +
+        '<button type="button" class="race-edit-remove-btn" aria-label="Remove">×</button>' +
+      '</div>'
+    )).join('');
+    raceEditListEl.querySelectorAll('.race-edit-remove-btn').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const id = btn.closest('.race-edit-row').dataset.id;
+        raceDayTemplateCache = raceDayTemplateCache.filter((it) => it.id !== id);
+        renderRaceEditList(raceDayTemplateCache);
+        await saveRaceChecklistTemplate(raceDayTemplateCache);
+        const checkedIds = await fetchRaceChecklistCheckedIds(raceDayDateKey);
+        renderRaceDayChecklist(raceDayTemplateCache, checkedIds);
+      });
+    });
+  }
+  document.getElementById('raceChecklistAddBtn').addEventListener('click', async () => {
+    const input = document.getElementById('raceChecklistAddInput');
+    const label = input.value.trim();
+    if (!label) return;
+    raceDayTemplateCache = (raceDayTemplateCache || []).concat([{ id: makeRaceItemId(), label: label.slice(0, 120) }]);
+    input.value = '';
+    renderRaceEditList(raceDayTemplateCache);
+    await saveRaceChecklistTemplate(raceDayTemplateCache);
+    const checkedIds = await fetchRaceChecklistCheckedIds(raceDayDateKey);
+    renderRaceDayChecklist(raceDayTemplateCache, checkedIds);
+  });
+  document.getElementById('raceDayEditBtn').addEventListener('click', () => {
+    renderRaceEditList(raceDayTemplateCache || []);
+    raceEditModalBg.classList.add('show');
+  });
+  document.getElementById('raceChecklistEditCloseBtn').addEventListener('click', () => raceEditModalBg.classList.remove('show'));
+  raceEditModalBg.addEventListener('click', (e) => { if (e.target.id === 'raceChecklistEditModalBg') raceEditModalBg.classList.remove('show'); });
+
+  async function renderRaceDayCard(active) {
+    if (!raceDayCard) return;
+    const todayK = (typeof DayLib !== 'undefined') ? DayLib.effectiveDateKey() : new Date().toISOString().slice(0, 10);
+    const isRace = !!(active && active.raceDate && active.raceDate === todayK);
+    if (!isRace) {
+      raceDayCard.style.display = 'none';
+      const scoreCardEl = document.getElementById('scoreHeroCard');
+      if (scoreCardEl) scoreCardEl.style.display = '';
+      return;
+    }
+    raceDayDateKey = todayK;
+    raceDayTitleEl.textContent = active.goalDescription || 'Good luck today!';
+    const scoreCardEl = document.getElementById('scoreHeroCard');
+    if (scoreCardEl) scoreCardEl.style.display = 'none';
+    raceDayCard.style.display = '';
+    const [items, checkedIds] = await Promise.all([fetchRaceChecklistTemplate(), fetchRaceChecklistCheckedIds(todayK)]);
+    raceDayTemplateCache = items;
+    renderRaceDayChecklist(items, checkedIds);
+  }
+
   async function load() {
     const secret = getSecret();
     if (!secret) { titleEl.textContent = 'Plan'; subEl.textContent = 'Set your dashboard secret to use this'; return; }
@@ -3567,6 +3862,7 @@ document.addEventListener('DOMContentLoaded', function () {
     } catch (e) {}
     const active = plans.find((p) => p.status === 'active');
     renderRaceBadge(active);
+    renderRaceDayCard(active);
     if (!active) {
       titleEl.textContent = 'No active plan';
       subEl.textContent = 'Tap to start one via chat →';

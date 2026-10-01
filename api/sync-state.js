@@ -192,6 +192,36 @@
 //     createdAt,   // ISO timestamp, set server-side on create
 //   }
 //
+// -------------------------------------------------------------
+// race-checklist — the EDITABLE TEMPLATE for main.html's Race Day
+// card (a plan's raceDate — see the "plans" section above — showing
+// a generic Sprint Triathlon gear checklist on that one day). Reuses
+// habit_config as a fourth row (id: "raceChecklist"), same reasoning
+// as activity-types/general-settings/habit-config itself: a single
+// blob per user, no new table needed, and this file is already at
+// Vercel's Hobby-plan 12-function cap. Shape is a plain ARRAY (like
+// activity-types), since the template is just the list itself.
+//
+// This is ONLY the template (item labels, persisted across every
+// future race day) — that DAY's own checked/unchecked state is a
+// completely separate thing, stored under daily_habits' existing
+// date-keyed entries blob (see that section above) under a reserved
+// "_raceChecklist" key, the exact same pattern habits.html's pain-log
+// already established for "_pain": a habit id is always either a seed
+// id or "custom_<timestamp>_<random>", so "_raceChecklist" can never
+// collide with one, and nothing in score-lib.js's scoring path visits
+// unrecognized entry keys. No new endpoint needed for the per-day
+// state at all — the existing GET/POST daily-habits resource already
+// handles it.
+//
+// GET  /api/sync-state?secret=...&resource=race-checklist
+//   -> { ok:true, items: [...] | null }  (null if never saved yet —
+//      caller falls back to its own built-in generic Sprint Triathlon
+//      default list)
+// POST /api/sync-state?secret=...  { resource: "race-checklist", items: [{id, label}, ...] }
+//   -> upserts habit_config's "raceChecklist" row
+//
+// -------------------------------------------------------------
 // GET  /api/sync-state?secret=...&resource=plans
 //   -> { ok:true, plans: [...] }  ALL plans (active + past), most
 //      recently updated first — the client filters for status==="active"
@@ -276,6 +306,8 @@ const getGeneralSettings = () => getConfigRow('general');
 const saveGeneralSettings = (settings) => saveConfigRow('general', settings);
 const getActivityTypes = () => getConfigRow('activityTypes');
 const saveActivityTypes = (types) => saveConfigRow('activityTypes', types);
+const getRaceChecklist = () => getConfigRow('raceChecklist');
+const saveRaceChecklistRow = (items) => saveConfigRow('raceChecklist', items);
 
 // ---------- daily_habits ----------
 async function getDailyHabits(date) {
@@ -384,7 +416,7 @@ export default async function handler(req, res) {
 
   const resource = req.query && req.query.resource;
 
-  if (resource === 'habit-config' || resource === 'daily-habits' || resource === 'general-settings' || resource === 'restrictions' || resource === 'activity-types' || resource === 'plans') {
+  if (resource === 'habit-config' || resource === 'daily-habits' || resource === 'general-settings' || resource === 'restrictions' || resource === 'activity-types' || resource === 'plans' || resource === 'race-checklist') {
     if (!checkAuth(req, res)) return;
     if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_KEY) {
       return res.status(500).json({ error: 'missing SUPABASE_URL / SUPABASE_SERVICE_KEY' });
@@ -440,6 +472,24 @@ export default async function handler(req, res) {
             return res.status(400).json({ error: 'types must be an array' });
           }
           await saveActivityTypes(types);
+          return res.status(200).json({ ok: true });
+        }
+        return res.status(405).json({ error: 'method not allowed' });
+      }
+
+      if (resource === 'race-checklist') {
+        if (req.method === 'GET') {
+          const items = await getRaceChecklist();
+          return res.status(200).json({ ok: true, items });
+        }
+        if (req.method === 'POST') {
+          let body = req.body;
+          if (typeof body === 'string') { try { body = JSON.parse(body); } catch (e) { body = {}; } }
+          const items = body && body.items;
+          if (!Array.isArray(items) || items.some((it) => !it || typeof it.id !== 'string' || typeof it.label !== 'string')) {
+            return res.status(400).json({ error: 'items must be an array of {id, label}' });
+          }
+          await saveRaceChecklistRow(items.slice(0, 40).map((it) => ({ id: it.id.slice(0, 60), label: it.label.slice(0, 120) })));
           return res.status(200).json({ ok: true });
         }
         return res.status(405).json({ error: 'method not allowed' });

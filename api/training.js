@@ -159,6 +159,15 @@
 //     // as unplaced with a reason), unlike the "WHAT YOU DECIDE" items which the model is free to
 //     // omit/adjust. preferredWindow is one of PREFERRED_WINDOWS below or omitted. Capped at 10,
 //     // durationMin clamped to 5-480 — see sanitizeUserActivities.
+//     isRaceDay: Boolean | undefined,   // main.html computes this client-side (planningDateKey ===
+//     // the active Plan's raceDate, via DayLib.effectiveDateKey()/plainDateKey() — same date-key
+//     // convention as todayDateKey/tomorrowDateKey, no new date logic on the server) and forwards it
+//     // here. When true, buildRaceDaySystemPrompt replaces the normal "WHAT YOU DECIDE" section
+//     // (no training/work/meal/walk defaults at all) with race-logistics blocks instead — arrival,
+//     // warmup, transition setup, post-race recovery/food. Everything else (fixedEvents, wake/bedtime,
+//     // nowTime, userActivities, restrictions, the propose-then-confirm JSON shape, and every
+//     // server-side safety check below) is completely unchanged — this only swaps which system
+//     // prompt gets built, same branching style mode=today already uses for forTomorrow.
 //   }
 //   -> { ok: true, blocks: [{ date, start, end, title, category }], unplaced: [{ name, reason }] }
 //   // unplaced lists any userActivities entry that genuinely couldn't be fit in (never silently
@@ -775,13 +784,15 @@ async function handleToday(req, res, apiKey, body) {
 // recovery number and must not be treated as predictive of tomorrow —
 // same principle as api/chat.js's own QUESTIONS ABOUT A DIFFERENT DAY
 // section and buildTomorrowSystemPrompt above.
-function buildDayPlanSystemPrompt(restrictions, userActivities) {
+// The FIXED, NON-NEGOTIABLE section — day-boundary safety constraints
+// (fixedEvents, Wake up, Wind-down, nowTime) that apply on EVERY day
+// this endpoint plans, race day included: shared verbatim between
+// buildDayPlanSystemPrompt and buildRaceDaySystemPrompt rather than
+// duplicated, so a future change to e.g. the nowTime rule can't drift
+// between the two prompts. Only the "WHAT YOU DECIDE" section below
+// this differs per prompt.
+function buildFixedSectionPromptText() {
   return (
-    'You are planning ONE user\'s day on a personal dashboard, producing a concrete schedule of time ' +
-    'blocks that will be created as real Google Calendar events only after the user reviews and explicitly ' +
-    'confirms them — nothing is created automatically, so propose a genuinely usable, non-overlapping plan. ' +
-    'planningDateKey tells you which day (todayDateKey or tomorrowDateKey) the main schedule below actually ' +
-    'goes on — it may be either one.\n\n' +
     'FIXED, NON-NEGOTIABLE — never overlap these, and never move or omit them:\n' +
     '- fixedEvents: the user\'s ACTUAL existing calendar events for today and tomorrow (meetings, padel, ' +
     'appointments, etc. — already-booked real time). Every block you propose must fit strictly around these.\n' +
@@ -803,7 +814,45 @@ function buildDayPlanSystemPrompt(restrictions, userActivities) {
     'already midday), or omit it entirely if no reasonable later slot makes sense — but never output a ' +
     'todayDateKey block starting before nowTime. tomorrowDateKey blocks are unaffected by nowTime — if ' +
     'planningDateKey is tomorrowDateKey, that means the WHOLE day you are scheduling is open, with no ' +
-    '"already passed" constraint at all (only the Wake up block\'s own timing still applies).\n\n' +
+    '"already passed" constraint at all (only the Wake up block\'s own timing still applies).\n\n'
+  );
+}
+
+// Shared "USER-REQUESTED ACTIVITIES" section — reused verbatim by both
+// prompts (race day still honors "+ Add activity" chips exactly like a
+// normal day does, per the feature's own "no new safety pattern
+// needed, just different content logic" scope).
+function buildUserActivitiesPromptSection(userActivities) {
+  return (userActivities && userActivities.length ? (
+    'USER-REQUESTED ACTIVITIES — these are REQUIRED, unlike the "WHAT YOU DECIDE" items above which you may ' +
+    'adjust or omit: the user explicitly asked for each of these to happen on planningDateKey, using its ' +
+    'exact name and exact duration:\n' +
+    JSON.stringify(userActivities, null, 2) + '\n' +
+    'For each one: fit it into a genuinely free gap around fixedEvents and the blocks above — the items YOU ' +
+    'decided above may shift earlier or later to make room, but fixedEvents entries never move, no matter ' +
+    'what. When preferredWindow is given, place it inside that window if at all possible: "morning" is ' +
+    'roughly 6am-12pm, "afternoon" roughly 12pm-5pm, "evening" roughly 5pm until todayBedtime/Wind-down, ' +
+    '"before dinner" any time before the Dinner block you place (if this is a normal day) or before the ' +
+    'post-race meal block you place (if this is race day). Output each placed one as its own block with ' +
+    'category "activity" and title EXACTLY equal to its given name — do not rename, abbreviate, translate, ' +
+    'or add detail to it. On todayDateKey it is still subject to the nowTime rule above (cannot start before ' +
+    'nowTime) exactly like everything else.\n' +
+    'If — and only if — there is genuinely no free gap that fits an activity (respecting its preferredWindow ' +
+    'when one was given), do not place it and do not force it into a conflict or shrink its duration — ' +
+    'instead add it to the "unplaced" list below with a short, specific reason naming what\'s in the way ' +
+    '(e.g. "no free 60-minute gap before your 6pm event", not just "no time"). Every userActivities entry ' +
+    'must end up EITHER as a placed block OR in "unplaced" — never neither, and never both.\n\n'
+  ) : '');
+}
+
+function buildDayPlanSystemPrompt(restrictions, userActivities) {
+  return (
+    'You are planning ONE user\'s day on a personal dashboard, producing a concrete schedule of time ' +
+    'blocks that will be created as real Google Calendar events only after the user reviews and explicitly ' +
+    'confirms them — nothing is created automatically, so propose a genuinely usable, non-overlapping plan. ' +
+    'planningDateKey tells you which day (todayDateKey or tomorrowDateKey) the main schedule below actually ' +
+    'goes on — it may be either one.\n\n' +
+    buildFixedSectionPromptText() +
     'WHAT YOU DECIDE — fit these into whatever open time remains around the fixed items above, on ' +
     'planningDateKey:\n' +
     '1. Training session — planningRecommendation is the exact, already-decided session for planningDateKey ' +
@@ -833,25 +882,7 @@ function buildDayPlanSystemPrompt(restrictions, userActivities) {
     'today\'s specific whoopToday number does not predict tomorrow\'s recovery, and planningRecommendation ' +
     'for tomorrow has already reasoned about load-management appropriately on its own (see how it was ' +
     'generated); do not layer a second, today-based recovery adjustment on top of it.\n\n' +
-    (userActivities && userActivities.length ? (
-      'USER-REQUESTED ACTIVITIES — these are REQUIRED, unlike the "WHAT YOU DECIDE" items above which you may ' +
-      'adjust or omit: the user explicitly asked for each of these to happen on planningDateKey, using its ' +
-      'exact name and exact duration:\n' +
-      JSON.stringify(userActivities, null, 2) + '\n' +
-      'For each one: fit it into a genuinely free gap around fixedEvents and the blocks above — the items YOU ' +
-      'decided above (training/work/meals/walks) may shift earlier or later to make room, but fixedEvents ' +
-      'entries never move, no matter what. When preferredWindow is given, place it inside that window if at ' +
-      'all possible: "morning" is roughly 6am-12pm, "afternoon" roughly 12pm-5pm, "evening" roughly 5pm until ' +
-      'todayBedtime/Wind-down, "before dinner" any time before the Dinner block you place. Output each placed ' +
-      'one as its own block with category "activity" and title EXACTLY equal to its given name — do not ' +
-      'rename, abbreviate, translate, or add detail to it. On todayDateKey it is still subject to the nowTime ' +
-      'rule above (cannot start before nowTime) exactly like everything else.\n' +
-      'If — and only if — there is genuinely no free gap that fits an activity (respecting its preferredWindow ' +
-      'when one was given), do not place it and do not force it into a conflict or shrink its duration — ' +
-      'instead add it to the "unplaced" list below with a short, specific reason naming what\'s in the way ' +
-      '(e.g. "no free 60-minute gap before your 6pm event", not just "no time"). Every userActivities entry ' +
-      'must end up EITHER as a placed block OR in "unplaced" — never neither, and never both.\n\n'
-    ) : '') +
+    buildUserActivitiesPromptSection(userActivities) +
     buildRestrictionsPromptSection(restrictions) +
     'Reply with ONLY valid JSON, no markdown fences, no commentary, in exactly this shape:\n' +
     JSON.stringify({
@@ -874,12 +905,85 @@ function buildDayPlanSystemPrompt(restrictions, userActivities) {
   );
 }
 
+// Race Day — used instead of buildDayPlanSystemPrompt when isRaceDay is
+// true (planningDateKey matches the active Plan's raceDate — see this
+// file's own MODE 3 doc comment). Reuses the exact same FIXED section,
+// userActivities section, restrictions section, propose-then-confirm
+// JSON shape, and every server-side safety check (normalizeDayPlanBlocks/
+// dropBlocksOverlappingFixedEvents/reconcileUserActivities all run
+// identically regardless of which prompt produced the raw blocks) — only
+// the "WHAT YOU DECIDE" content differs: no training/strength/cardio/
+// work/meal blocks at all, race-logistics blocks instead.
+function buildRaceDaySystemPrompt(restrictions, userActivities) {
+  return (
+    'You are planning ONE user\'s RACE DAY on a personal dashboard — today is the exact date of their ' +
+    'Sprint Triathlon (or similar single-event race), producing a concrete schedule of time blocks that ' +
+    'will be created as real Google Calendar events only after the user reviews and explicitly confirms ' +
+    'them — nothing is created automatically. planningDateKey tells you which day (todayDateKey or ' +
+    'tomorrowDateKey) the main schedule below actually goes on — it may be either one.\n\n' +
+    buildFixedSectionPromptText() +
+    'WHAT YOU DECIDE — this is RACE DAY, so do NOT propose any normal training/strength/cardio session, ' +
+    'work block, or the usual three-meals-plus-walks pattern a non-race day would get — none of those apply ' +
+    'today. Instead, fit these race-logistics blocks into whatever open time remains around the fixed items ' +
+    'above, on planningDateKey:\n' +
+    '1. Race start time — FIRST check fixedEvents on planningDateKey for one that is plainly the race itself ' +
+    '(its title names the race, or clearly reads as a race/event start — e.g. "Sprint Triathlon", ' +
+    '"Triathlon race start"). If you find one, treat its start time as the actual race-start anchor for ' +
+    'everything below. If there is no such fixedEvents entry, assume a reasonable, typical Sprint Triathlon ' +
+    'wave-start time (commonly mid-morning, e.g. around 7:30-8:30am) as the anchor instead — use your ' +
+    'judgment for the exact time, but do not pick anything wildly early (e.g. before 6am) or late (e.g. ' +
+    'after 11am) without a concrete reason from the given context. Do NOT output the race start itself as a ' +
+    'block (it is either already a fixedEvent, or has no calendar event at all) — it is only the anchor the ' +
+    'blocks below are built around.\n' +
+    '2. Arrival at the venue — a block ending shortly before transition setup begins (see #3), giving enough ' +
+    'time to park/check in and get oriented. For a Sprint Triathlon, arriving roughly 90-120 minutes before ' +
+    'the race-start anchor is typical — use your judgment within that range based on how much other fixed ' +
+    'time exists that morning.\n' +
+    '3. Transition setup — racking the bike and laying out gear (helmet, shoes, nutrition) in the transition ' +
+    'area. Right after arrival, ending with enough buffer before warmup (#4) — roughly 30-45 minutes is ' +
+    'typical.\n' +
+    '4. Warmup — a short pre-race warmup (roughly 15-20 minutes), ending shortly before the race-start ' +
+    'anchor from #1 (a few minutes\' buffer to get to the start line).\n' +
+    '5. Post-race recovery/food — placed AFTER the race itself. Since the race\'s own finish time is not ' +
+    'known precisely, estimate a plausible finish for a recreational Sprint Triathlon athlete (roughly ' +
+    '1-2 hours after the race-start anchor from #1) and place this block shortly after that estimate — a ' +
+    'block for refueling, hydration, and stretching/cooldown, roughly 30-45 minutes.\n\n' +
+    'Do not add anything beyond the five items above (plus any userActivities below) — no work block, no ' +
+    'separate breakfast/lunch/dinner blocks; the day is entirely structured around the race itself. Keep the ' +
+    'rest of today genuinely light after the post-race block — this is a demanding physical day regardless ' +
+    'of WHOOP recovery, so do not add training or work blocks even if whoopToday shows good recovery.\n\n' +
+    buildUserActivitiesPromptSection(userActivities) +
+    buildRestrictionsPromptSection(restrictions) +
+    'Reply with ONLY valid JSON, no markdown fences, no commentary, in exactly this shape:\n' +
+    JSON.stringify({
+      blocks: [
+        {
+          date: 'YYYY-MM-DD (must be todayDateKey or tomorrowDateKey, whichever the block actually falls on)',
+          start: 'HH:MM 24-hour',
+          end: 'HH:MM 24-hour',
+          title: 'short, e.g. "Arrive at venue", "Transition setup", "Warmup", "Post-race recovery", "Wake up", "Wind-down"',
+          category: 'one of: sleep, race, activity',
+        },
+      ],
+      unplaced: [
+        { name: 'exact name from userActivities that could not be placed', reason: 'short, specific reason' },
+      ],
+    }, null, 2) +
+    '\n\nUse category "race" for the four race-logistics blocks (arrival, transition setup, warmup, ' +
+    'post-race recovery) — "sleep" is only for the Wake up/Wind-down blocks from the FIXED section above, ' +
+    'and "activity" is only for placed userActivities entries.\n\n' +
+    'Every block\'s start must be strictly before its end, blocks must not overlap each other or any ' +
+    'fixedEvents entry, and the list should be in chronological order. unplaced must be present (an empty ' +
+    'array if everything fit, or if no userActivities were given at all).'
+  );
+}
+
 function numOrNull(v) {
   const n = Number(v);
   return isNaN(n) ? null : n;
 }
 
-const DAY_PLAN_CATEGORIES = ['sleep', 'training', 'work', 'meal', 'walk', 'activity'];
+const DAY_PLAN_CATEGORIES = ['sleep', 'training', 'work', 'meal', 'walk', 'activity', 'race'];
 const HHMM_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 // main.html's "+ Add activity" chips. preferredWindow is a fixed
@@ -1054,6 +1158,7 @@ async function handleDayPlan(req, res, apiKey, body) {
   };
   const userActivities = sanitizeUserActivities(body.userActivities);
   context.userActivities = userActivities;
+  const isRaceDay = body.isRaceDay === true;
 
   // Confirmed via the logged raw text: it came back as a literal empty
   // string, the same failure class as the earlier mode=today bug —
@@ -1080,7 +1185,7 @@ async function handleDayPlan(req, res, apiKey, body) {
   // share the same budget), per Anthropic's own guidance to pair anything
   // above low effort with a large max_tokens ceiling.
   const text = await callClaude(apiKey, {
-    system: buildDayPlanSystemPrompt(restrictions, userActivities),
+    system: isRaceDay ? buildRaceDaySystemPrompt(restrictions, userActivities) : buildDayPlanSystemPrompt(restrictions, userActivities),
     userContent: 'Context:\n' + JSON.stringify(context, null, 2),
     // Bumped from 4000: userActivities can add up to 10 more blocks
     // (or unplaced entries) on top of the original ~9, sharing the same
