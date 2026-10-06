@@ -2605,9 +2605,15 @@ document.addEventListener('DOMContentLoaded', function () {
       return;
     }
     const targets = window.CronoLib.loadTargets();
-    const totals = window.CronoLib.sumNutrientsForDate(result.rows, result.headers, latest, targets);
+    // Sodium's target is dynamic on a high-WHOOP-strain today — see
+    // cronometer-lib.js's applySodiumStrainOverride. latest is already
+    // confirmed === today by the check above, so this is always safe
+    // to fetch (never applied to a past day).
+    const strainInfo = await window.CronoLib.fetchWhoopStrainToday(latest);
+    const effectiveTargets = window.CronoLib.applySodiumStrainOverride(targets, strainInfo);
+    const totals = window.CronoLib.sumNutrientsForDate(result.rows, result.headers, latest, effectiveTargets);
     totals.supplements = window.CronoLib.getStackCompletionForDate(latest);
-    const { score } = window.CronoLib.computeScore(totals, targets);
+    const { score } = window.CronoLib.computeScore(totals, effectiveTargets);
 
     if (score == null) {
       percentEl.textContent = '—';
@@ -4063,14 +4069,22 @@ document.addEventListener('DOMContentLoaded', function () {
   // Settings (DayLib.loadProfile().categoryWeights) as before, just
   // read at the call site now instead of inside these functions.
 
-  async function computeNutritionCategory(datePlainKey, precachedResult) {
+  // strainInfo (optional): today's WHOOP strain reading ({available,
+  // strain}), passed through to applySodiumStrainOverride so sodium's
+  // target is elevated on a high-strain day — see cronometer-lib.js's
+  // own comment. This function is only ever called for today (its one
+  // caller, computeDailyScore, is itself only ever called for today -
+  // see that function's own header comment), so there's no "is this
+  // actually today" check needed here the way health.html's day-nav-
+  // aware renderForDate needs one.
+  async function computeNutritionCategory(datePlainKey, precachedResult, strainInfo) {
     if (typeof window.CronoLib === 'undefined' || !window.CronoLib.getSecret()) return { available: false, reason: 'not connected' };
     try {
       const result = precachedResult || await window.CronoLib.fetchCronometerData();
       if (!result.ok) return { available: false, reason: 'no data synced yet' };
       const dates = window.CronoLib.listAvailableDates(result.rows, result.headers);
       if (dates.indexOf(datePlainKey) === -1) return { available: false, reason: 'not synced today' };
-      const targets = window.CronoLib.loadTargets();
+      const targets = window.CronoLib.applySodiumStrainOverride(window.CronoLib.loadTargets(), strainInfo);
       const totals = window.CronoLib.sumNutrientsForDate(result.rows, result.headers, datePlainKey, targets);
       const { score } = window.CronoLib.computeScore(totals, targets); // totals.supplements left unset on purpose — Daily Stack is scored as its own category above, not blended in here
       if (score == null) return { available: false, reason: 'not enough data' };
@@ -4173,7 +4187,7 @@ document.addEventListener('DOMContentLoaded', function () {
     const water = ScoreLib.computeWaterCategory(datePlainKey);
     const strength = ScoreLib.computeStrengthCategory(datePlainKey);
     const cardio = ScoreLib.computeCardioCategory(datePlainKey, weekMondayPlainKey);
-    const nutrition = await computeNutritionCategory(datePlainKey, opts.cronoCache);
+    const nutrition = await computeNutritionCategory(datePlainKey, opts.cronoCache, opts.whoopStrainToday);
     const training = ScoreLib.combineTrainingFraction(strength, cardio, opts.whoopStrainToday);
     const autoSources = await computeAutoThresholdSources(datePlainKey, { water, strength, nutrition, habitConfig });
     const manual = ScoreLib.scoreManualHabitsForDate(habitConfig, entriesByDate, dateActiveKey, weekMondayActiveKey, autoSources);

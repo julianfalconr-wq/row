@@ -268,6 +268,69 @@
     return { score, breakdown, consideredWeight, totalWeight };
   }
 
+  // ---------- dynamic sodium target (high-strain training days) ----------
+  // On a high-strain WHOOP day the body loses meaningfully more sodium
+  // through sweat, so the normal 1500-2300mg target undershoots what's
+  // actually needed — elevate it to 3000-3500mg (common sports-nutrition
+  // guidance for heavy-sweat training days) instead. Threshold is
+  // strain >= 14, matching WHOOP's own documented "High" strain tier
+  // (14-17) rather than an arbitrary number — 18+ is WHOOP's "All-Out"
+  // tier, already used as-is by main.html's combineTrainingFraction
+  // override (score-lib.js), a SEPARATE threshold for a SEPARATE
+  // purpose (training credit, not nutrition) that this does not change.
+  //
+  // applySodiumStrainOverride is a pure function: it never mutates the
+  // targets object passed in (callers that also use `targets` for
+  // something else — e.g. health.html's Settings modal — must keep
+  // seeing the real configured value), and it overrides the CURRENT
+  // sodium target (whatever's actually configured — the 1500-2300mg
+  // default, or a user's own Settings customization), not a hardcoded
+  // literal, so a user who's customized their sodium range still gets
+  // a sensible elevated version of THEIR range. Falls back to the
+  // targets object unchanged whenever strainInfo isn't available
+  // (WHOOP not connected, no cycle synced yet for today, etc.) or strain
+  // is below the threshold.
+  const SODIUM_HIGH_STRAIN_THRESHOLD = 14;
+  const SODIUM_HIGH_STRAIN_RANGE = { min: 3000, max: 3500 };
+  function applySodiumStrainOverride(targets, strainInfo) {
+    const base = (targets && Array.isArray(targets.metrics)) ? targets : { metrics: cloneDefaults() };
+    if (!strainInfo || !strainInfo.available || strainInfo.strain == null || strainInfo.strain < SODIUM_HIGH_STRAIN_THRESHOLD) {
+      return base;
+    }
+    const metrics = base.metrics.map((m) => (
+      m.id === 'sodium' ? Object.assign({}, m, SODIUM_HIGH_STRAIN_RANGE) : m
+    ));
+    return Object.assign({}, base, { metrics });
+  }
+
+  // Live "today" WHOOP day-strain fetch — same /cycle endpoint and
+  // date-match safety as main.html's own computeWhoopStrainToday
+  // (Training's All-Out override, score-lib.js), exposed here on the
+  // shared library so every caller of computeScore (main.html's
+  // Nutrition Score ring, the Today's Score engine, health.html's
+  // Cronometer section) can get the SAME strain reading without
+  // duplicating the fetch in each page's own closure. Callers that
+  // already have today's strain in hand (the Today's Score engine
+  // already fetches it once for combineTrainingFraction) should reuse
+  // that value instead of calling this a second time in the same
+  // render pass — this exists for the callers that don't.
+  async function fetchWhoopStrainToday(datePlainKey) {
+    let t = null;
+    try { t = JSON.parse(localStorage.getItem('whoop_tokens_v1')); } catch (e) {}
+    if (!t || !t.access || (t.expires && Date.now() > t.expires)) return { available: false };
+    try {
+      const cycles = await fetch('/api/whoop-data?path=' + encodeURIComponent('/cycle') + '&limit=1', { headers: { Authorization: 'Bearer ' + t.access } }).then((r) => r.ok ? r.json() : null).catch(() => null);
+      const c = cycles && cycles.records && cycles.records[0];
+      const cDate = c && String(c.start || '').slice(0, 10);
+      if (c && c.score && c.score.strain != null && cDate === datePlainKey) {
+        return { available: true, strain: Math.round(c.score.strain * 10) / 10 };
+      }
+      return { available: false };
+    } catch (e) {
+      return { available: false };
+    }
+  }
+
   window.CronoLib = {
     DEFAULT_METRICS,
     loadTargets, saveTargets, resetTargets, weightSum, makeCustomMetric,
@@ -276,5 +339,6 @@
     matchDateColumn, matchColumnForMetric, debugColumns, listAvailableDates, toDateKey,
     sumNutrientsForDate, getStackCompletionForDate,
     metricFraction, computeScore,
+    applySodiumStrainOverride, fetchWhoopStrainToday,
   };
 })();

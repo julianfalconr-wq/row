@@ -1910,7 +1910,7 @@ document.addEventListener('DOMContentLoaded', function () {
     return row;
   }
 
-  function renderForDate(dateKey) {
+  async function renderForDate(dateKey) {
     updateDayNavUI();
     // A day with no synced Cronometer rows at all (nothing exported/
     // synced for it yet, e.g. today before this morning's sync, or any
@@ -1935,14 +1935,24 @@ document.addEventListener('DOMContentLoaded', function () {
       return;
     }
 
-    const totals = Crono.sumNutrientsForDate(data.rows, data.headers, dateKey, targets);
+    // Sodium's target is dynamic on a high-WHOOP-strain TODAY (see
+    // cronometer-lib.js's applySodiumStrainOverride) — day-nav can
+    // browse past days here, and we have no historical per-day strain
+    // fetching wired up, so the override only ever applies when the
+    // date actually being viewed/scored is today; any other day keeps
+    // its normal configured target, unchanged from before this feature.
+    const isViewingToday = dateKey === DayLib.effectiveDateKey();
+    const strainInfo = isViewingToday ? await Crono.fetchWhoopStrainToday(dateKey) : { available: false };
+    const effectiveTargets = Crono.applySodiumStrainOverride(targets, strainInfo);
+
+    const totals = Crono.sumNutrientsForDate(data.rows, data.headers, dateKey, effectiveTargets);
     totals.supplements = Crono.getStackCompletionForDate(dateKey);
-    const { score } = Crono.computeScore(totals, targets);
+    const { score } = Crono.computeScore(totals, effectiveTargets);
 
     scoreVal.textContent = score == null ? '—' : score;
     if (score != null) Crono.saveScoreForDate(dateKey, score);
 
-    const energyMetric = targets.metrics.find((m) => m.id === 'energy') || Crono.DEFAULT_METRICS[0];
+    const energyMetric = effectiveTargets.metrics.find((m) => m.id === 'energy') || Crono.DEFAULT_METRICS[0];
     const energyVal_ = totals.energy;
     const energyPct = energyMetric.max ? Math.min(100, Math.round(((energyVal_ || 0) / energyMetric.max) * 100)) : 0;
     ringFill.setAttribute('stroke-dashoffset', RING_C * (1 - energyPct / 100));
@@ -1956,7 +1966,7 @@ document.addEventListener('DOMContentLoaded', function () {
     otherEl.innerHTML = '';
     let macroCount = 0, microCount = 0, otherCount = 0;
 
-    targets.metrics.forEach((m) => {
+    effectiveTargets.metrics.forEach((m) => {
       if (m.group === 'energy' || m.group === 'supplements') return;
       const value = totals[m.id];
       if (m.group === 'macro') { macrosEl.appendChild(barRow(m, value)); macroCount++; }
