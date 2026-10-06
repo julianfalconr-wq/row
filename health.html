@@ -792,13 +792,15 @@ main {
   .stack-search-results { width: 100%; }
 }
 
-/* Desktop-only wide-screen grid (>=1024px): pairs two adjacent
-   top-level sections into one 2-column row each — Whoop + Daily Stack
-   (both "vitals at a glance" cards), and Cronometer + Scan Food with AI
-   (both manual nutrition-input tools, and adjacent in DOM so grouping
-   them doesn't create any visual/DOM-order mismatch for keyboard/screen
-   reader navigation). Water Tracker (an embedded iframe) and the phone
-   layout (<1024px, still one column top to bottom) are both untouched.
+/* Desktop-only wide-screen grid (>=1024px): pairs Cronometer + Scan
+   Food with AI into one 2-column row (both manual nutrition-input
+   tools, adjacent in DOM so grouping them doesn't create any visual/
+   DOM-order mismatch for keyboard/screen reader navigation). Whoop +
+   Daily Stack were paired here too during the original bento-grid
+   task but that pairing was reverted back to full-width stacking per
+   direct feedback - this class now only wraps the Cronometer/Scan
+   Food pair. Water Tracker (an embedded iframe) and the phone layout
+   (<1024px, still one column top to bottom) are both untouched.
    align-items:start so one column's card never stretches to match a
    taller neighbor — these aren't the same height and shouldn't be. */
 @media (min-width: 1024px) {
@@ -843,7 +845,6 @@ main {
     .whoop-cell-val { font-size:22px; font-weight:700; color:var(--text-primary); font-variant-numeric:tabular-nums; letter-spacing:-0.03em; line-height:1; }
     .whoop-cell-sub { font-size:10px; color:var(--text-tertiary); margin-top:5px; font-variant-numeric:tabular-nums; font-family:var(--font-mono); }
   </style>
-  <div class="wide-grid-row">
   <div class="whoop-section">
     <div class="section-title">Whoop</div>
     <div class="whoop-card">
@@ -1001,7 +1002,6 @@ main {
   })();
   </script>
 
-  <div class="daily-stack-section">
   <div class="section-title">Daily Stack</div>
 
   <div class="stack-card">
@@ -1051,8 +1051,6 @@ main {
         <button id="stackAddBtn" class="stack-add-btn">+ Add</button>
       </div>
     </div>
-  </div>
-  </div>
   </div>
 
   <div class="wide-grid-row">
