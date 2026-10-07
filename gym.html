@@ -5746,11 +5746,21 @@ img, video, canvas, svg { max-width: 100%; }
       })();
     });
   }
-  async function detectPadelToday() {
+  // precachedCtx (optional, Phase 2): generateTodayRecommendation() now
+  // also needs gatherTodayContext()'s own result (for availability/
+  // calendar feasibility — see buildTodayFeasibility above) in the SAME
+  // call, so it fetches ctx once and passes it in here instead of this
+  // function doing its own second fetch. Still fully self-sufficient
+  // when called without one (fetches its own), so nothing else that
+  // calls this unchanged needs to know Phase 2 exists.
+  async function detectPadelToday(precachedCtx) {
     try {
-      const ready = await waitForGatherTodayContext(3000);
-      if (!ready) return { padelToday: false, padelEventTitle: null };
-      const ctx = await window.gatherTodayContext();
+      let ctx = precachedCtx;
+      if (!ctx) {
+        const ready = await waitForGatherTodayContext(3000);
+        if (!ready) return { padelToday: false, padelEventTitle: null };
+        ctx = await window.gatherTodayContext();
+      }
       const upcoming = (ctx && ctx.calendar && Array.isArray(ctx.calendar.upcoming)) ? ctx.calendar.upcoming : [];
       const win = todayCalendarWindow();
       const match = upcoming.find((ev) => isEventToday(ev, win) && PADEL_RE.test(ev.title || ''));
@@ -5758,6 +5768,195 @@ img, video, canvas, svg { max-width: 100%; }
     } catch (e) {
       return { padelToday: false, padelEventTitle: null };
     }
+  }
+
+  // ---------- Phase 2: availability- and calendar-aware feasibility
+  // (see api/training.js's MODE 2 doc comment for the `feasibility`
+  // body field this builds) ----------
+  //
+  // Every number here is computed in CODE, never asked of the model —
+  // same discipline already established for dropBlocksOverlappingFixedEvents/
+  // isCardioTypeBlocked elsewhere in this project. The server only ever
+  // picks among candidates this file has already proven feasible, and
+  // re-validates that choice itself (see buildFeasibilityBackstop in
+  // api/training.js) rather than trusting the model's pick blindly.
+
+  // "After midnight" bedtime resolution — mirrors main.html's own
+  // bedtimeFromDayRingSchedule()/General Settings' own documented rule
+  // ("a sleep time earlier than that day's wake time means after
+  // midnight") exactly, but resolved into a real timestamp here (not
+  // just the raw HH:MM string Plan my day hands to the model) since
+  // this file needs actual clock math to compute free calendar gaps.
+  // Small per-file duplication rather than a shared import, matching
+  // this project's own established convention for this exact class of
+  // lookup (see main.html's own comment on bedtimeFromDayRingSchedule).
+  const AVAIL_WEEKDAY_NAMES = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+  function resolveTodayBedtimeMs() {
+    const profile = DayLib.loadProfile();
+    const todayKey = DayLib.effectiveDateKey(null, profile);
+    const weekday = AVAIL_WEEKDAY_NAMES[DayLib.parseDateKey(todayKey).getDay()];
+    const entry = (profile.dayRingSchedule && profile.dayRingSchedule[weekday]) || {};
+    const wake = (typeof entry.wake === 'string' && entry.wake) || '08:00';
+    const sleep = (typeof entry.sleep === 'string' && entry.sleep) || '00:00';
+    const [wakeH, wakeM] = wake.split(':').map(Number);
+    const [sleepH, sleepM] = sleep.split(':').map(Number);
+    const bedtime = DayLib.parseDateKey(todayKey);
+    bedtime.setHours(sleepH, sleepM, 0, 0);
+    if (sleepH < wakeH || (sleepH === wakeH && sleepM <= wakeM)) bedtime.setDate(bedtime.getDate() + 1);
+    return bedtime.getTime();
+  }
+
+  // Free gaps between now and bedtime, after subtracting TODAY's real
+  // fixed calendar events — reuses ctx.calendar.upcoming from the SAME
+  // gatherTodayContext() call detectPadelToday() already makes (see
+  // generateTodayRecommendation() below, which now fetches ctx once
+  // and passes it to both), not a second calendar fetch.
+  function computeTodayFreeGaps(upcomingEvents, nowMs, bedtimeMs) {
+    const win = todayCalendarWindow();
+    const events = (upcomingEvents || [])
+      .filter((ev) => isEventToday(ev, win) && !ev.allDay && ev.start && ev.end)
+      .map((ev) => ({ start: new Date(ev.start).getTime(), end: new Date(ev.end).getTime() }))
+      .filter((ev) => !isNaN(ev.start) && !isNaN(ev.end) && ev.end > nowMs && ev.start < bedtimeMs)
+      .map((ev) => ({ start: Math.max(ev.start, nowMs), end: Math.min(ev.end, bedtimeMs) }))
+      .sort((a, b) => a.start - b.start);
+    const gaps = [];
+    let cursor = nowMs;
+    events.forEach((ev) => {
+      if (ev.start > cursor) gaps.push({ startMs: cursor, endMs: ev.start });
+      cursor = Math.max(cursor, ev.end);
+    });
+    if (cursor < bedtimeMs) gaps.push({ startMs: cursor, endMs: bedtimeMs });
+    return gaps;
+  }
+  function longestGapMinutes(gaps) {
+    return gaps.reduce((max, g) => Math.max(max, (g.endMs - g.startMs) / 60000), 0);
+  }
+
+  // Discipline classification is NAME-based (swim/bike/run keyword
+  // matching against the configured Activity Type's own name) rather
+  // than a new dedicated field on Activity Types — kept deliberately
+  // simple for this phase; an activity type whose name doesn't match
+  // any pattern is treated as unclassified, and an unclassified type
+  // is NEVER blocked by a discipline restriction (better to under-
+  // restrict an activity we can't confidently classify than to
+  // silently hide a legitimate option the user configured).
+  const DISCIPLINE_NAME_PATTERNS = { swim: /swim/i, bike: /\b(bike|cycl|ride|spin)/i, run: /\b(run|jog)/i };
+  function disciplineForActivityType(activityTypeId) {
+    const type = activityTypeById(activityTypeId);
+    if (!type) return null;
+    for (const key of Object.keys(DISCIPLINE_NAME_PATTERNS)) {
+      if (DISCIPLINE_NAME_PATTERNS[key].test(type.name || '')) return key;
+    }
+    return null;
+  }
+
+  // Recent pace (minutes/km), averaged over the last up-to-10 logged
+  // sessions of this exact activity type that have BOTH distanceKm and
+  // durationMin — used to convert a longSession/easyVolume slot's
+  // targetAmount (km) into an estimated minutes duration. Falls back
+  // to GENERIC_FALLBACK_PACE_MIN_PER_KM (a documented, deliberately
+  // middling assumption — not a real pace, just "better than refusing
+  // to estimate at all") when there's no logged history yet for that
+  // type — same "sane default, clearly an assumption" spirit as
+  // DEFAULT_SESSION_MINUTES below.
+  const GENERIC_FALLBACK_PACE_MIN_PER_KM = 6; // ~10km/h — a moderate run/brisk-bike blend; purely a starting assumption for a type with zero logged history
+  function recentAvgPaceMinPerKm(activityTypeId) {
+    const matches = activityLoad()
+      .filter((a) => a && a.activityTypeId === activityTypeId && a.distanceKm && a.durationMin)
+      .slice(0, 10);
+    if (!matches.length) return null;
+    const paces = matches.map((a) => a.durationMin / a.distanceKm);
+    return paces.reduce((sum, p) => sum + p, 0) / paces.length;
+  }
+
+  // Duration estimate for one of the week plan's 4 possible slots.
+  // Documented assumptions (per the task's own "document the
+  // assumptions" requirement):
+  //   - interval: weekPlan already states targetMinutes directly — used as-is.
+  //   - strength: no duration field anywhere in weekPlan.strength or
+  //     strengthContext — DEFAULT_SESSION_MINUTES.strength (45) is a
+  //     flat, documented assumption, not derived from anything logged.
+  //   - longSession / easyVolume with a distance unitKind: targetAmount
+  //     (km) × recentAvgPaceMinPerKm (or the generic fallback pace).
+  //   - longSession / easyVolume with a duration unitKind: targetAmount
+  //     is already minutes — used as-is.
+  //   - longSession / easyVolume with a count unitKind (e.g. reps/
+  //     sets — no time-per-unit relationship at all): no sane per-unit
+  //     conversion exists, so DEFAULT_SESSION_MINUTES.genericCount (30)
+  //     is used as a flat assumption, same spirit as strength's.
+  const DEFAULT_SESSION_MINUTES = { strength: 45, genericCount: 30 };
+  function estimateSlotMinutes(kind, slot) {
+    if (!slot) return null;
+    if (kind === 'strength') return DEFAULT_SESSION_MINUTES.strength;
+    if (kind === 'interval') return Number(slot.targetMinutes) || 0;
+    // longSession / easyVolume
+    if (!slot.activityTypeId) return null; // slot not actually assigned to a real type — nothing to estimate
+    const type = activityTypeById(slot.activityTypeId);
+    const unitKind = type ? type.unitKind : 'distance';
+    if (unitKind === 'duration') return Math.round(Number(slot.targetAmount) || 0);
+    if (unitKind === 'count') return DEFAULT_SESSION_MINUTES.genericCount;
+    const pace = recentAvgPaceMinPerKm(slot.activityTypeId) || GENERIC_FALLBACK_PACE_MIN_PER_KM;
+    return Math.round((Number(slot.targetAmount) || 0) * pace);
+  }
+
+  // Builds the `feasibility` object sent to mode=today. Returns
+  // {configured:false} whenever there's nothing to constrain with — no
+  // availability template configured at all, or no weekly plan to draw
+  // candidates from — so the server's own prompt stays COMPLETELY
+  // unchanged in that case (verified: see api/training.js's own
+  // isRaceDay-style branch for this same "configured:false means
+  // behave exactly as before" convention already established there).
+  function buildTodayFeasibility(ctx, plan) {
+    const availability = ctx && ctx.availability;
+    if (!availability || !availability.configured || !availability.today || !plan) {
+      return { configured: false };
+    }
+    const nowMs = Date.now();
+    const bedtimeMs = resolveTodayBedtimeMs();
+    const upcoming = (ctx.calendar && Array.isArray(ctx.calendar.upcoming)) ? ctx.calendar.upcoming : [];
+    const gaps = computeTodayFreeGaps(upcoming, nowMs, bedtimeMs);
+    const longestFreeBlockMin = Math.round(longestGapMinutes(gaps));
+
+    // budgetMin: the template/override's own configured minutes for
+    // today, capped by however much time is ACTUALLY left before
+    // bedtime — a template value set for a normal day shouldn't imply
+    // more time than literally remains if it's already late.
+    let budgetMin = availability.today.minutes;
+    if (budgetMin != null) {
+      const remainingMin = Math.max(0, (bedtimeMs - nowMs) / 60000);
+      budgetMin = Math.round(Math.min(budgetMin, remainingMin));
+    }
+    const allowedDisciplines = availability.today.disciplines || { swim: false, bike: false, run: false, strength: false };
+
+    function fitsToday(discipline, estMinutes) {
+      if (estMinutes == null) return false;
+      if (discipline && allowedDisciplines[discipline] === false) return false; // explicitly disallowed (unclassified/null discipline is never blocked — see disciplineForActivityType)
+      if (budgetMin != null && estMinutes > budgetMin) return false;
+      if (estMinutes > longestFreeBlockMin) return false;
+      return true;
+    }
+
+    const candidates = [];
+    if (plan.strength && (Number(plan.strength.targetSessions) || 0) > 0) {
+      const est = estimateSlotMinutes('strength', plan.strength);
+      candidates.push({ key: 'strength', label: 'Strength', estMinutes: est, feasible: fitsToday('strength', est) });
+    }
+    ['interval', 'longSession', 'easyVolume'].forEach((kind) => {
+      const slot = plan.cardio && plan.cardio[kind];
+      if (!slot || !slot.activityTypeId) return;
+      const est = estimateSlotMinutes(kind, slot);
+      const discipline = disciplineForActivityType(slot.activityTypeId);
+      const typeForLabel = activityTypeById(slot.activityTypeId);
+      candidates.push({ key: kind, label: slot.activityName || (typeForLabel && typeForLabel.name) || 'Session', estMinutes: est, feasible: fitsToday(discipline, est) });
+    });
+
+    return {
+      configured: true,
+      budgetMin,
+      longestFreeBlockMin: Math.round(longestFreeBlockMin),
+      allowedDisciplines,
+      candidates,
+    };
   }
 
   // ---------- today's recommendation cache ----------
@@ -5809,8 +6008,16 @@ img, video, canvas, svg { max-width: 100%; }
       const whoopTrend = await fetchWhoopTrend(7);
       const whoopToday = whoopTrend.connected ? whoopTrend.today : null;
       const strengthContext = buildTodayStrengthContext();
-      const todayCalendar = await detectPadelToday();
+      // Fetched once here and reused for both padel detection and Phase 2's
+      // availability/calendar feasibility (see detectPadelToday's and
+      // buildTodayFeasibility's own comments) — one gatherTodayContext()
+      // call instead of two independent ones.
+      let ctx = null;
+      const ctxReady = await waitForGatherTodayContext(3000);
+      if (ctxReady) { try { ctx = await window.gatherTodayContext(); } catch (e) {} }
+      const todayCalendar = await detectPadelToday(ctx);
       const restrictions = await fetchActiveRestrictions();
+      const feasibility = buildTodayFeasibility(ctx, plan);
 
       const res = await fetch('/api/training?mode=today&secret=' + encodeURIComponent(secret), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -5832,6 +6039,7 @@ img, video, canvas, svg { max-width: 100%; }
           whoopRecentStrain: whoopTrend.connected ? whoopTrend.recentStrain : null,
           todayCalendar,
           restrictions,
+          feasibility,
         }),
       });
       const json = await res.json();
