@@ -184,5 +184,42 @@
     return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
   }
 
-  window.DayLib = { DEFAULT_PROFILE, loadProfile, saveProfile, resolveTimeZone, effectiveDateKey, parseDateKey, plainDateKey };
+  // Monday-of-week helper — added for the Training Availability feature,
+  // but genuinely shared: before this, "Monday of this week" was
+  // independently reimplemented in at least 4 places (gym.html's
+  // mondayOf()/thisWeekMondayKey(), main.html's mondayOfKey() — twice,
+  // in two separate script closures — and topbar.js's mondayOfLocal()/
+  // thisWeekMondayKeyLocal()), and the topbar.js copy was subtly wrong:
+  // it used a raw `new Date()` instead of going through
+  // DayLib.effectiveDateKey() first, so right around the configured
+  // day-end time (e.g. Monday 1am with a 2am day-end, which is still
+  // effectively Sunday) it could disagree with gym.html's own version
+  // about which week "this week" even is. This does NOT touch any of
+  // those 4 existing call sites — they're unchanged and out of scope —
+  // it only gives NEW code one correct, canonical version to call
+  // instead of writing a 5th copy.
+  //
+  // mondayOfWeek(key) takes any "YYYY-MM-DD" key (e.g. an already-
+  // resolved effectiveDateKey(), or any other calendar date) and
+  // returns that week's Monday as a "YYYY-MM-DD" key — pure date math,
+  // no day-end-time logic of its own (same division of responsibility
+  // as parseDateKey/plainDateKey: resolve "today" via effectiveDateKey()
+  // first, then hand the result in here).
+  function mondayOfWeek(key) {
+    const d = parseDateKey(key);
+    const day = d.getDay(); // 0 = Sun .. 6 = Sat
+    const diff = (day === 0 ? -6 : 1) - day; // shift back to Monday
+    d.setDate(d.getDate() + diff);
+    return plainDateKey(d);
+  }
+  // Convenience for the overwhelmingly common case: "what's the Monday
+  // key of the CURRENT effective week, right now" — anchors on
+  // effectiveDateKey() (so a day-end-time-aware "today") before finding
+  // its Monday, exactly like gym.html's own thisWeekMondayKey() already
+  // does. date/profile are optional passthroughs to effectiveDateKey().
+  function currentWeekMondayKey(date, profile) {
+    return mondayOfWeek(effectiveDateKey(date, profile));
+  }
+
+  window.DayLib = { DEFAULT_PROFILE, loadProfile, saveProfile, resolveTimeZone, effectiveDateKey, parseDateKey, plainDateKey, mondayOfWeek, currentWeekMondayKey };
 })();

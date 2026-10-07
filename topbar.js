@@ -1549,7 +1549,59 @@ body {
       } catch (e) { /* leave calendar.connected true but upcoming empty — token exists but fetch failed */ }
     }
 
-    return { date: todayKey, nutrition, goals, foodScans, gym, activities, whoop, plan, finance, dailyStack, calendar };
+    // ---------- training availability (see api/sync-state.js's own
+    // "training-availability"/"training-availability-override" doc
+    // section for the full shapes) — lets the chat answer "what's my
+    // availability like this week" and decide when
+    // propose_availability_override actually applies, without it
+    // having to re-derive the merge logic itself. Same
+    // fetch-failure-falls-back-to-"unconfigured" convention as
+    // activityTypesForContext above — a missing secret/offline/never-
+    // configured-yet all collapse to the same configured:false shape,
+    // never a thrown error that could block the rest of this function.
+    // Uses DayLib.effectiveDateKey()/currentWeekMondayKey() (matches
+    // planTodayKey above) rather than this function's own 6am-rollover
+    // todayKey — training features consistently use DayLib's
+    // configurable-day-end convention elsewhere (gym.html's
+    // thisWeekMondayKey, General Settings' own override-banner check),
+    // this keeps the same week boundary that those use. -->
+    const availabilitySecret = (() => { try { return localStorage.getItem('dashboard:secret') || ''; } catch (e) { return ''; } })();
+    const AVAIL_WEEKDAY_NAMES = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+    let availability = { configured: false };
+    if (availabilitySecret && typeof window.DayLib !== 'undefined') {
+      try {
+        const [templateRes, overrideRes] = await Promise.all([
+          fetch('/api/sync-state?secret=' + encodeURIComponent(availabilitySecret) + '&resource=training-availability').then((r) => r.json()).catch(() => null),
+          fetch('/api/sync-state?secret=' + encodeURIComponent(availabilitySecret) + '&resource=training-availability-override').then((r) => r.json()).catch(() => null),
+        ]);
+        const template = (templateRes && templateRes.ok) ? templateRes.template : null;
+        if (template) {
+          const rawOverride = (overrideRes && overrideRes.ok) ? overrideRes.override : null;
+          const currentMonday = window.DayLib.currentWeekMondayKey();
+          const activeOverride = (rawOverride && rawOverride.weekStart === currentMonday) ? rawOverride : null;
+          const availTodayKey = window.DayLib.effectiveDateKey();
+          const availTodayWeekday = AVAIL_WEEKDAY_NAMES[window.DayLib.parseDateKey(availTodayKey).getDay()];
+          function effectiveDay(weekday) {
+            const base = template[weekday] || { minutes: null, disciplines: {} };
+            const o = activeOverride && activeOverride.days && activeOverride.days[weekday];
+            return {
+              weekday,
+              minutes: (o && o.minutes !== undefined) ? o.minutes : base.minutes,
+              disciplines: Object.assign({}, base.disciplines, o && o.disciplines),
+            };
+          }
+          availability = {
+            configured: true,
+            preferredLongDay: template.preferredLongDay || null,
+            today: effectiveDay(availTodayWeekday),
+            thisWeek: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'].map(effectiveDay),
+            activeOverride: activeOverride ? { weekStart: activeOverride.weekStart, days: Object.keys(activeOverride.days || {}) } : null,
+          };
+        }
+      } catch (e) { /* keep configured:false — chat treats this exactly like "no template ever saved" */ }
+    }
+
+    return { date: todayKey, nutrition, goals, foodScans, gym, activities, whoop, plan, finance, dailyStack, calendar, availability };
   };
 
   // =============================================================
@@ -2252,6 +2304,99 @@ body {
       container.appendChild(card);
     }
 
+    // ---------- availability override (see api/chat.js's
+    // propose_availability_override tool) ----------
+    // Same explicit-confirmation pattern as renderRestrictionCard
+    // above. The server's normalizeProposedAvailabilityOverride gives
+    // us {appliesTo, days: [{weekday, minutes?, disciplines?}], reason}
+    // — appliesTo is resolved into a real weekStart date HERE (code,
+    // not the model — see the tool's own header comment in
+    // api/chat.js), and the days ARRAY is converted into the {weekday:
+    // {...}} OBJECT shape api/sync-state.js's resource=
+    // training-availability-override actually stores (see that file's
+    // own doc comment). Saving REPLACES the whole stored override
+    // (there is only ever one at a time, same as General Settings'
+    // "clear override" button removes it wholesale) — if the user
+    // already had a different override active for the same week, this
+    // intentionally overwrites it rather than merging two separate
+    // overrides together, which would get confusing fast.
+    const AVAIL_CARD_WEEKDAY_LABELS = { monday: 'Monday', tuesday: 'Tuesday', wednesday: 'Wednesday', thursday: 'Thursday', friday: 'Friday', saturday: 'Saturday', sunday: 'Sunday' };
+    function describeAvailabilityDay(d) {
+      const parts = [];
+      if (d.minutes !== undefined) parts.push(d.minutes === null ? 'no limit' : d.minutes + ' min');
+      if (d.disciplines) {
+        const on = Object.keys(d.disciplines).filter((k) => d.disciplines[k]);
+        const off = Object.keys(d.disciplines).filter((k) => !d.disciplines[k]);
+        if (on.length) parts.push(on.join('/') + ' ok');
+        if (off.length) parts.push('no ' + off.join('/'));
+      }
+      return parts.length ? parts.join(', ') : '(no change)';
+    }
+    function renderAvailabilityOverrideCard(container, override) {
+      const card = document.createElement('div');
+      card.className = 'chat-plan-card';
+
+      card.appendChild(planRow('Applies to', override.appliesTo === 'next_week' ? 'Next week' : 'This week', override.reason || ''));
+      override.days.forEach((d) => {
+        card.appendChild(planRow(AVAIL_CARD_WEEKDAY_LABELS[d.weekday] || d.weekday, describeAvailabilityDay(d), ''));
+      });
+
+      const actions = document.createElement('div');
+      actions.className = 'chat-plan-actions';
+      const saveBtn = document.createElement('button');
+      saveBtn.type = 'button'; saveBtn.className = 'chat-plan-save-btn';
+      saveBtn.textContent = 'Save override';
+      const dismissBtn = document.createElement('button');
+      dismissBtn.type = 'button'; dismissBtn.className = 'chat-plan-dismiss-btn';
+      dismissBtn.textContent = 'Not now';
+      actions.appendChild(saveBtn);
+      actions.appendChild(dismissBtn);
+      card.appendChild(actions);
+
+      function showStatus(text, isSaved) {
+        actions.remove();
+        const status = document.createElement('div');
+        status.className = 'chat-plan-status ' + (isSaved ? 'is-saved' : 'is-dismissed');
+        status.textContent = text;
+        card.appendChild(status);
+      }
+
+      saveBtn.addEventListener('click', async () => {
+        const secret = getSecret();
+        if (!secret) { showStatus('Set your dashboard secret first (on the Cronometer page).', false); return; }
+        if (typeof window.DayLib === 'undefined') { showStatus('Could not save: date library unavailable.', false); return; }
+        saveBtn.disabled = true;
+        try {
+          const thisMonday = window.DayLib.currentWeekMondayKey();
+          const weekStart = override.appliesTo === 'next_week'
+            ? window.DayLib.plainDateKey((() => { const d = window.DayLib.parseDateKey(thisMonday); d.setDate(d.getDate() + 7); return d; })())
+            : thisMonday;
+          const days = {};
+          override.days.forEach((d) => {
+            const entry = {};
+            if (d.minutes !== undefined) entry.minutes = d.minutes;
+            if (d.disciplines) entry.disciplines = d.disciplines;
+            days[d.weekday] = entry;
+          });
+          // resource= must be in the QUERY STRING, not just the body —
+          // same real bug this project already hit once (see
+          // renderRestrictionCard's own comment above).
+          const r = await fetch('/api/sync-state?secret=' + encodeURIComponent(secret) + '&resource=training-availability-override', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ resource: 'training-availability-override', override: { weekStart, days } }),
+          });
+          const j = await r.json();
+          if (!r.ok || !j.ok) throw new Error((j && j.error) || ('HTTP ' + r.status));
+          showStatus('Saved ✓ — Training will respect this for ' + (override.appliesTo === 'next_week' ? 'next week' : 'this week'), true);
+        } catch (e) {
+          showStatus('Could not save: ' + (e.message || String(e)), false);
+        }
+      });
+      dismissBtn.addEventListener('click', () => showStatus('Not saved', false));
+
+      container.appendChild(card);
+    }
+
     // ---------- today's session override (see api/chat.js's
     // propose_today_session tool) ----------
     // Same explicit-confirmation pattern as the cards above, but purely
@@ -2528,7 +2673,7 @@ body {
     // merged into one), so the user sees and approves every real-
     // calendar change individually. See api/chat.js's handler comment
     // on why this can't just be a single object per type.
-    function addBubble(role, text, proposedObjectives, proposedCalendarEvents, proposedRestriction, proposedTodaySession, proposedCalendarEventUpdates, proposedCalendarEventDeletes, proposedLongTermPlan, proposedPlanStatusChange) {
+    function addBubble(role, text, proposedObjectives, proposedCalendarEvents, proposedRestriction, proposedTodaySession, proposedCalendarEventUpdates, proposedCalendarEventDeletes, proposedLongTermPlan, proposedPlanStatusChange, proposedAvailabilityOverride) {
       emptyEl.style.display = 'none';
       const el = document.createElement('div');
       el.className = 'chat-bubble ' + role;
@@ -2536,6 +2681,7 @@ body {
       if (proposedObjectives) renderPlanCard(el, proposedObjectives);
       (proposedCalendarEvents || []).forEach((ev) => renderCalendarEventCard(el, ev));
       if (proposedRestriction) renderRestrictionCard(el, proposedRestriction);
+      if (proposedAvailabilityOverride) renderAvailabilityOverrideCard(el, proposedAvailabilityOverride);
       if (proposedTodaySession) renderTodaySessionCard(el, proposedTodaySession);
       (proposedCalendarEventUpdates || []).forEach((u) => renderCalendarEventUpdateCard(el, u));
       (proposedCalendarEventDeletes || []).forEach((d) => renderCalendarEventDeleteCard(el, d));
@@ -2868,13 +3014,14 @@ body {
           ? "Here's what I'm proposing for this week:"
           : (events.length ? (events.length > 1 ? "Here are the events I'm proposing:" : "Here's the event I'm proposing:")
           : (json.proposedRestriction ? "Here's the restriction I'm proposing:"
+          : (json.proposedAvailabilityOverride ? "Here's the availability change I'm proposing:"
           : (json.proposedTodaySession ? "Here's the replacement I'm proposing for today's session:"
           : (json.proposedLongTermPlan ? "Here's the plan I'm proposing:"
           : (json.proposedPlanStatusChange ? "Here's what I'm proposing:"
           : (updates.length ? (updates.length > 1 ? "Here are the changes I'm proposing:" : "Here's the change I'm proposing:")
           : (deletes.length ? (deletes.length > 1 ? "Here are the events I'm proposing to delete:" : "Here's what I'm proposing to delete:")
-          : '(no reply)')))))));
-        addBubble('assistant', json.reply || fallbackText, json.proposedObjectives || null, events, json.proposedRestriction || null, json.proposedTodaySession || null, updates, deletes, json.proposedLongTermPlan || null, json.proposedPlanStatusChange || null);
+          : '(no reply)'))))))));
+        addBubble('assistant', json.reply || fallbackText, json.proposedObjectives || null, events, json.proposedRestriction || null, json.proposedTodaySession || null, updates, deletes, json.proposedLongTermPlan || null, json.proposedPlanStatusChange || null, json.proposedAvailabilityOverride || null);
         archiveToServer(chatTodayKey(), chatHistory); // best-effort, doesn't block the UI
       } catch (e) {
         typingEl.remove();

@@ -1227,6 +1227,51 @@ body {
 .gs-weekday-time-day { font-size: 12.5px; color: var(--text-secondary); font-weight: 600; width: 36px; flex-shrink: 0; }
 .gs-weekday-time-inputs { display: flex; align-items: center; gap: 6px; flex: 1; }
 .gs-weekday-time-sep { font-size: 11px; color: var(--text-tertiary); flex-shrink: 0; }
+/* Training availability section — same gs-weekday-time-* row/grid
+   pattern as Schedule above, extended with a minutes input + 4
+   discipline toggles per day. min-width:0 on the flexible pieces
+   (wrap-safe convention this project uses everywhere) so a long
+   weekday abbreviation or a narrow phone width never forces
+   horizontal overflow. */
+.gs-avail-grid { display: flex; flex-direction: column; gap: 8px; }
+.gs-avail-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.gs-avail-day { font-size: 12.5px; color: var(--text-secondary); font-weight: 600; width: 30px; flex-shrink: 0; }
+.gs-avail-minutes {
+  width: 52px; min-width: 0; flex-shrink: 0; background: var(--inset-bg); border: 1px solid var(--line); color: var(--text-primary);
+  font-family: inherit; font-size: 12.5px; padding: 6px 7px; border-radius: var(--radius-xs, 6px); outline: none; -moz-appearance: textfield;
+}
+.gs-avail-minutes::placeholder { color: var(--text-tertiary); }
+.gs-avail-toggles { display: flex; gap: 4px; min-width: 0; flex: 1; }
+.gs-avail-toggle {
+  flex: 1; min-width: 0; background: var(--inset-bg); border: 1px solid var(--line); color: var(--text-tertiary);
+  font-family: inherit; font-size: 11px; font-weight: 700; padding: 6px 0; border-radius: var(--radius-xs, 6px);
+  cursor: pointer; -webkit-tap-highlight-color: transparent; transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.gs-avail-toggle.is-active { background: var(--btn-primary-a); color: var(--btn-primary-text); border-color: var(--btn-primary-a); }
+.gs-avail-longday-label { font-size: 12.5px; color: var(--text-secondary); margin-bottom: 6px; display: block; }
+/* display:none as the DEFAULT, not flex - this element's visibility is
+   controlled via an inline style (renderAvailabilityOverrideBanner()
+   sets el.style.display directly), not the `hidden` attribute, same
+   fix already established elsewhere in this project (see topbar.js's
+   applyChatVisibility() comment): a plain `hidden` attribute is only
+   as strong as the UA stylesheet's own `[hidden]{display:none}` rule,
+   which any author-level class selector with its own `display`
+   property beats regardless of specificity - confirmed live here
+   (getComputedStyle still said "flex" with hidden=true before this
+   fix). JS sets style.display to 'flex' explicitly when showing it. */
+.gs-avail-override-banner {
+  display: none; align-items: center; justify-content: space-between; gap: 10px;
+  background: var(--inset-bg); border: 1px solid var(--line); border-radius: var(--radius-sm, 10px);
+  padding: 9px 12px; margin-bottom: 12px; font-size: 12.5px; color: var(--text-secondary);
+}
+.gs-avail-override-clear {
+  background: transparent; border: none; color: var(--text-tertiary); font-family: inherit;
+  font-size: 12px; font-weight: 700; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; flex-shrink: 0;
+}
+.gs-avail-override-clear:hover { color: var(--danger); }
+.gs-avail-save-status { font-size: 11.5px; color: var(--text-tertiary); margin-top: 10px; min-height: 14px; }
+.gs-avail-save-status.is-saved { color: var(--success); }
+.gs-avail-save-status.is-error { color: var(--danger); }
 /* [type="time"] here ties in specificity with ".gs-field input[type='time']" above (both one class + one attribute selector) — placed AFTER it in the cascade so width:auto correctly wins over that rule's width:100%, same specificity gotcha already hit once in the Routines feature's .po-field input[type="number"] fix. */
 .gs-weekday-time-row input[type="time"] { width: auto; flex: 1; min-width: 0; }
 
@@ -1457,6 +1502,49 @@ body {
             <div class="gs-weekday-time-row"><span class="gs-weekday-time-day">Sun</span><span class="gs-weekday-time-inputs"><input type="time" data-day="sunday" data-field="wake"><span class="gs-weekday-time-sep">–</span><input type="time" data-day="sunday" data-field="sleep"></span></div>
           </div>
           <div class="gs-habits-note" style="margin-top:6px">Each day can have its own wake/sleep window — e.g. stay up later on weekends. A sleep time earlier than that day's wake time (like 1:00 AM) means "after midnight."</div>
+        </div>
+      </div>
+
+      <div class="set-divider"></div>
+
+      <!-- Training availability — per-weekday minutes + allowed
+           disciplines, used by Training/Plan my day to avoid
+           recommending something that can't actually fit a day (see
+           cronometer-lib.js-style doc comments in api/sync-state.js's
+           own "training-availability" section for the full data
+           shape). Unlike every other field in this modal, this
+           section AUTO-SAVES per change instead of waiting for the
+           big Save button below — a deliberate, explicit exception
+           (the task that added this asked for it specifically) from
+           the Schedule section's bulk-save pattern right above it;
+           every input here has its own change handler that POSTs
+           immediately, so this section's own state is never part of
+           the generalSettingsSaveBtn handler's assembled `settings`
+           object at all. -->
+      <div class="set-section">
+        <h4>Training availability</h4>
+        <div class="gs-habits-note">How many minutes you can train each day, and which disciplines are possible (e.g. no pool access that day) — used by Today's session, Plan my day, and Training's weekly objectives to avoid recommending something that can't actually fit. Leave minutes blank for no limit. Changes here save automatically.</div>
+        <button type="button" class="hf-advanced-toggle" id="gsAvailToggleBtn">Set weekly availability ▾</button>
+        <div class="hf-advanced-body" id="gsAvailBody" hidden>
+          <div class="gs-avail-override-banner" id="gsAvailOverrideBanner">
+            <span id="gsAvailOverrideText"></span>
+            <button type="button" class="gs-avail-override-clear" id="gsAvailOverrideClearBtn">Clear override</button>
+          </div>
+          <div class="gs-avail-grid" id="gsAvailGrid"></div>
+          <div class="gs-field" style="margin-top:12px">
+            <label for="gsAvailLongDay" class="gs-avail-longday-label">Preferred long-session day</label>
+            <select id="gsAvailLongDay">
+              <option value="">No preference</option>
+              <option value="monday">Monday</option>
+              <option value="tuesday">Tuesday</option>
+              <option value="wednesday">Wednesday</option>
+              <option value="thursday">Thursday</option>
+              <option value="friday">Friday</option>
+              <option value="saturday">Saturday</option>
+              <option value="sunday">Sunday</option>
+            </select>
+          </div>
+          <div class="gs-avail-save-status" id="gsAvailSaveStatus"></div>
         </div>
       </div>
 
@@ -4667,6 +4755,145 @@ document.addEventListener('DOMContentLoaded', function () {
     try { await saveActivityTypesToServer(activityTypesDraft); } catch (e) { alert("Couldn't save: " + (e.message || e)); }
   });
 
+  // ---------- Training availability (see api/sync-state.js's own
+  // "training-availability"/"training-availability-override" doc
+  // section for the full shapes) — auto-saves per change, same
+  // established pattern as Activity Types directly above (saveField on
+  // a `change` listener), NOT the big generalSettingsSaveBtn this
+  // modal otherwise uses for Schedule/Category Weights/etc. ----------
+  const AVAIL_WEEKDAY_LABELS = { monday: 'Mon', tuesday: 'Tue', wednesday: 'Wed', thursday: 'Thu', friday: 'Fri', saturday: 'Sat', sunday: 'Sun' };
+  const AVAIL_DISCIPLINES = [['swim', 'S'], ['bike', 'B'], ['run', 'R'], ['strength', 'St']];
+  function defaultAvailabilityDay() { return { minutes: null, disciplines: { swim: false, bike: false, run: false, strength: false } }; }
+  function defaultAvailabilityTemplate() {
+    const t = { preferredLongDay: null };
+    GS_WEEKDAY_KEYS.forEach((day) => { t[day] = defaultAvailabilityDay(); });
+    return t;
+  }
+  async function fetchTrainingAvailabilityTemplate() {
+    const secret = getSecret();
+    if (!secret) return defaultAvailabilityTemplate();
+    try {
+      const r = await fetch('/api/sync-state?secret=' + encodeURIComponent(secret) + '&resource=training-availability');
+      const j = await r.json();
+      if (j && j.ok && j.template) return j.template;
+    } catch (e) {}
+    return defaultAvailabilityTemplate();
+  }
+  async function saveTrainingAvailabilityTemplateToServer(template) {
+    const secret = getSecret();
+    if (!secret) throw new Error('Set your dashboard secret first');
+    // resource= must be in the QUERY STRING, not just the body — same
+    // real bug this project already hit once (see
+    // saveActivityTypesToServer's own comment above).
+    const r = await fetch('/api/sync-state?secret=' + encodeURIComponent(secret) + '&resource=training-availability', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ resource: 'training-availability', template }),
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok) throw new Error((j && j.error) || ('HTTP ' + r.status));
+  }
+  async function fetchTrainingAvailabilityOverride() {
+    const secret = getSecret();
+    if (!secret) return null;
+    try {
+      const r = await fetch('/api/sync-state?secret=' + encodeURIComponent(secret) + '&resource=training-availability-override');
+      const j = await r.json();
+      return (j && j.ok) ? j.override : null;
+    } catch (e) { return null; }
+  }
+  async function saveTrainingAvailabilityOverrideToServer(override) {
+    const secret = getSecret();
+    if (!secret) throw new Error('Set your dashboard secret first');
+    const r = await fetch('/api/sync-state?secret=' + encodeURIComponent(secret) + '&resource=training-availability-override', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ resource: 'training-availability-override', override }),
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok) throw new Error((j && j.error) || ('HTTP ' + r.status));
+  }
+
+  let availabilityDraft = null; // the template, kept in sync with the grid's own DOM state
+  function readAvailabilityDayFromRow(row) {
+    const minutesInput = row.querySelector('.gs-avail-minutes');
+    const minutes = minutesInput.value === '' ? null : Math.max(0, Math.min(1440, Math.round(Number(minutesInput.value) || 0)));
+    const disciplines = {};
+    AVAIL_DISCIPLINES.forEach(([key]) => { disciplines[key] = row.querySelector('.gs-avail-toggle[data-discipline="' + key + '"]').classList.contains('is-active'); });
+    return { minutes, disciplines };
+  }
+  function setAvailSaveStatus(ok, errMsg) {
+    const el = $('gsAvailSaveStatus');
+    el.classList.remove('is-saved', 'is-error');
+    if (ok) { el.textContent = 'Saved ✓'; el.classList.add('is-saved'); setTimeout(() => { if (el.textContent === 'Saved ✓') el.textContent = ''; }, 2000); }
+    else { el.textContent = "Couldn't save: " + (errMsg || 'unknown error'); el.classList.add('is-error'); }
+  }
+  async function saveAvailabilityTemplateFromGrid() {
+    const grid = $('gsAvailGrid');
+    const template = { preferredLongDay: $('gsAvailLongDay').value || null };
+    GS_WEEKDAY_KEYS.forEach((day) => {
+      const row = grid.querySelector('.gs-avail-row[data-day="' + day + '"]');
+      template[day] = readAvailabilityDayFromRow(row);
+    });
+    availabilityDraft = template;
+    try { await saveTrainingAvailabilityTemplateToServer(template); setAvailSaveStatus(true); }
+    catch (e) { setAvailSaveStatus(false, e.message || String(e)); }
+  }
+  function renderAvailabilityGrid() {
+    const grid = $('gsAvailGrid');
+    grid.innerHTML = GS_WEEKDAY_KEYS.map((day) => {
+      const d = availabilityDraft[day] || defaultAvailabilityDay();
+      const toggles = AVAIL_DISCIPLINES.map(([key, label]) => (
+        '<button type="button" class="gs-avail-toggle' + (d.disciplines && d.disciplines[key] ? ' is-active' : '') + '" data-discipline="' + key + '">' + label + '</button>'
+      )).join('');
+      return (
+        '<div class="gs-avail-row" data-day="' + day + '">' +
+          '<span class="gs-avail-day">' + AVAIL_WEEKDAY_LABELS[day] + '</span>' +
+          '<input type="number" class="gs-avail-minutes" min="0" max="1440" step="5" placeholder="—" value="' + (d.minutes == null ? '' : d.minutes) + '">' +
+          '<div class="gs-avail-toggles">' + toggles + '</div>' +
+        '</div>'
+      );
+    }).join('');
+    grid.querySelectorAll('.gs-avail-minutes').forEach((input) => input.addEventListener('change', saveAvailabilityTemplateFromGrid));
+    grid.querySelectorAll('.gs-avail-toggle').forEach((btn) => {
+      btn.addEventListener('click', () => { btn.classList.toggle('is-active'); saveAvailabilityTemplateFromGrid(); });
+    });
+    $('gsAvailLongDay').value = availabilityDraft.preferredLongDay || '';
+  }
+  function renderAvailabilityOverrideBanner(override) {
+    const banner = $('gsAvailOverrideBanner');
+    // override.weekStart (not just override being non-null) is the real
+    // test — a stale override from a past week (see api/sync-state.js's
+    // own doc comment: "ignored automatically when weekStart isn't the
+    // current week") is treated exactly like no override at all here,
+    // never shown as "active".
+    const isActiveThisWeek = override && override.weekStart && override.weekStart === window.DayLib.currentWeekMondayKey();
+    if (!isActiveThisWeek) { banner.style.display = 'none'; return; }
+    const overriddenDays = Object.keys(override.days || {}).map((d) => AVAIL_WEEKDAY_LABELS[d]).filter(Boolean);
+    $('gsAvailOverrideText').textContent = 'This week has an override' + (overriddenDays.length ? ' (' + overriddenDays.join(', ') + ')' : '') + '.';
+    banner.style.display = 'flex';
+  }
+  async function renderTrainingAvailability() {
+    $('gsAvailGrid').innerHTML = 'Loading…';
+    const [template, override] = await Promise.all([fetchTrainingAvailabilityTemplate(), fetchTrainingAvailabilityOverride()]);
+    availabilityDraft = template;
+    renderAvailabilityGrid();
+    renderAvailabilityOverrideBanner(override);
+    $('gsAvailBody').hidden = true;
+    $('gsAvailToggleBtn').textContent = 'Set weekly availability ▾';
+    $('gsAvailSaveStatus').textContent = '';
+  }
+  $('gsAvailToggleBtn').addEventListener('click', () => {
+    const body = $('gsAvailBody');
+    body.hidden = !body.hidden;
+    $('gsAvailToggleBtn').textContent = 'Set weekly availability ' + (body.hidden ? '▾' : '▴');
+  });
+  $('gsAvailLongDay').addEventListener('change', saveAvailabilityTemplateFromGrid);
+  $('gsAvailOverrideClearBtn').addEventListener('click', async () => {
+    try {
+      await saveTrainingAvailabilityOverrideToServer(null);
+      renderAvailabilityOverrideBanner(null);
+    } catch (e) { alert("Couldn't clear override: " + (e.message || e)); }
+  });
+
   // Day Ring's per-weekday wake/sleep schedule — a field of the same
   // shared "General Settings" profile object DayLib stores/syncs
   // (dayEndTime/timezone/categoryWeights all live there too), but this
@@ -4701,6 +4928,7 @@ document.addEventListener('DOMContentLoaded', function () {
     updateWeightSum();
     renderActivityTypesList();
     renderRestrictionsList();
+    renderTrainingAvailability();
     $('generalSettingsModalBg').classList.add('show');
   }
   $('generalSettingsGearBtn').addEventListener('click', openGeneralSettings);

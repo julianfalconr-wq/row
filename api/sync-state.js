@@ -222,6 +222,67 @@
 //   -> upserts habit_config's "raceChecklist" row
 //
 // -------------------------------------------------------------
+// training-availability / training-availability-override — the per-
+// weekday training availability feature (how many minutes free each
+// day, which disciplines are possible that day, and a preferred long-
+// session day). Reuses habit_config as a fifth/sixth row ("training
+// Availability"/"trainingAvailabilityOverride"), same reasoning as
+// activity-types/race-checklist/general-settings: a single blob per
+// user, no new Supabase table needed, and this file is already at
+// Vercel's Hobby-plan 12-function cap. Both are plain OBJECT blobs
+// (not arrays) — null/never-saved means "unconfigured", which every
+// reader treats as fully unconstrained (no behavior change for anyone
+// who hasn't set this up).
+//
+// TEMPLATE shape (the base weekly pattern, edited once):
+//   {
+//     monday:    { minutes: Number|null, disciplines: { swim, bike, run, strength: Boolean } },
+//     tuesday:   { ... }, ... sunday: { ... },   // all 7 weekdays, always present once saved
+//     preferredLongDay: 'monday'|'tuesday'|...|'sunday'|null,
+//   }
+//   minutes:null = unconstrained for that day (same as the whole
+//   template not existing at all, just scoped to one day) — a user
+//   can leave some days open-ended and only cap others.
+//
+// OVERRIDE shape (a single PENDING-OR-ACTIVE per-week exception, not a
+// history — proposed by the chat's propose_availability_override tool,
+// api/chat.js, and confirmed/dismissed via the same card pattern as
+// propose_training_objectives):
+//   {
+//     weekStart: 'YYYY-MM-DD',   // a Monday key (DayLib.currentWeekMondayKey()
+//                                // or the following week's Monday)
+//     days: { <weekday>: { minutes?: Number, disciplines?: {...} } },
+//          // PARTIAL per day - only the days/fields actually being
+//          // overridden; everything else still comes from the template
+//   }
+//   Callers apply this by comparing weekStart to the ACTUAL current
+//   week's Monday (DayLib.currentWeekMondayKey()) at read time — an
+//   override whose weekStart doesn't match is simply ignored (stale,
+//   from a past week), never auto-deleted here, so "what was proposed
+//   for next week" still round-trips correctly once that week arrives.
+//   This file does zero date comparison itself (same "server stays
+//   dumb, client owns date logic" discipline as daily-habits/plans
+//   above) - it just stores/returns whatever object it's given.
+//
+// GET  /api/sync-state?secret=...&resource=training-availability
+//   -> { ok:true, template: {...} | null }
+// POST /api/sync-state?secret=...  { resource: "training-availability", template: {...} }
+//   -> upserts habit_config's "trainingAvailability" row
+//
+// GET  /api/sync-state?secret=...&resource=training-availability-override
+//   -> { ok:true, override: {...} | null }  (null if never saved yet;
+//      once saved it's always a real object - see CLEARED_OVERRIDE
+//      below for why "cleared" isn't represented as a bare null)
+// POST /api/sync-state?secret=...  { resource: "training-availability-override", override: {...} | null }
+//   -> upserts habit_config's "trainingAvailabilityOverride" row;
+//      sending override:null (e.g. from a "clear override" button) is
+//      how a client clears it, but it's stored as {weekStart:null,
+//      days:{}} rather than an actual SQL null - habit_config.data is
+//      `jsonb NOT NULL` (see the table's own create statement above),
+//      so a literal null would violate that constraint. Every reader
+//      treats weekStart:null the same as "no override" either way.
+//
+// -------------------------------------------------------------
 // GET  /api/sync-state?secret=...&resource=plans
 //   -> { ok:true, plans: [...] }  ALL plans (active + past), most
 //      recently updated first — the client filters for status==="active"
@@ -242,6 +303,7 @@
 const ALLOWED_KEYS = ['gym', 'finance', 'dailystack'];
 const MAX_BODY_CHARS = 20000; // generous ceiling for a "summary" — guards against accidental raw dumps
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const WEEKDAY_KEYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']; // same list main.html's GS_WEEKDAY_KEYS already uses
 
 function supabaseHeaders() {
   const key = process.env.SUPABASE_SERVICE_KEY;
@@ -263,6 +325,92 @@ function checkAuth(req, res) {
     return false;
   }
   return true;
+}
+
+// ---------- training-availability validation ----------
+// Template day: minutes and disciplines are ALWAYS both concrete on
+// every template day (minutes:null just means "unconstrained", it's
+// still a present, valid value) - used only by sanitizeAvailabilityTemplate.
+function sanitizeAvailabilityDay(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const out = {};
+  if (raw.minutes === null || raw.minutes === undefined) {
+    out.minutes = null;
+  } else {
+    const n = Number(raw.minutes);
+    if (!Number.isFinite(n)) return null;
+    out.minutes = Math.max(0, Math.min(1440, Math.round(n)));
+  }
+  const d = (raw.disciplines && typeof raw.disciplines === 'object' && !Array.isArray(raw.disciplines)) ? raw.disciplines : {};
+  out.disciplines = { swim: !!d.swim, bike: !!d.bike, run: !!d.run, strength: !!d.strength };
+  return out;
+}
+function sanitizeAvailabilityTemplate(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const out = {};
+  for (const wd of WEEKDAY_KEYS) {
+    const day = sanitizeAvailabilityDay(raw[wd]);
+    if (!day) return null; // template requires every weekday to be a valid (if unconstrained) entry
+    out[wd] = day;
+  }
+  out.preferredLongDay = WEEKDAY_KEYS.includes(raw.preferredLongDay) ? raw.preferredLongDay : null;
+  return out;
+}
+// Override day: TRUE partial - minutes and disciplines are each
+// independently optional (per the feature spec: "days:[{weekday,
+// minutes?, disciplines?}]"). Omitting a field here must mean "inherit
+// the template's value for this field on this day", NOT "set it to a
+// default" - unlike sanitizeAvailabilityDay (the template's own
+// all-fields-always-present version), this only includes a field in
+// its output when the raw input actually provided one, so a
+// minutes-only override (e.g. "shorten Tuesday to 30 minutes") doesn't
+// silently zero out Tuesday's disciplines as a side effect.
+function sanitizeAvailabilityOverrideDay(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const out = {};
+  if (raw.minutes !== undefined) {
+    if (raw.minutes === null) {
+      out.minutes = null;
+    } else {
+      const n = Number(raw.minutes);
+      if (Number.isFinite(n)) out.minutes = Math.max(0, Math.min(1440, Math.round(n)));
+    }
+  }
+  if (raw.disciplines && typeof raw.disciplines === 'object' && !Array.isArray(raw.disciplines)) {
+    const d = raw.disciplines;
+    // Only the keys actually present on the raw object are included -
+    // same partial principle one level deeper: a day's disciplines
+    // override can itself say just "swim:false" without implying
+    // bike/run/strength were also touched.
+    const disc = {};
+    if (d.swim !== undefined) disc.swim = !!d.swim;
+    if (d.bike !== undefined) disc.bike = !!d.bike;
+    if (d.run !== undefined) disc.run = !!d.run;
+    if (d.strength !== undefined) disc.strength = !!d.strength;
+    if (Object.keys(disc).length) out.disciplines = disc;
+  }
+  return Object.keys(out).length ? out : null; // an entry with nothing real in it isn't worth keeping
+}
+// habit_config.data is `jsonb NOT NULL` (see the table's own create
+// statement, above) - writing an actual SQL NULL for "clear the
+// override" would violate that constraint and 500. So "cleared" is
+// represented as a real (non-null) object with weekStart:null instead
+// of a bare JSON null - CLEARED_OVERRIDE below is that sentinel, and
+// every reader (this file's own GET handler, and every client) treats
+// weekStart:null the same as "no override exists at all".
+const CLEARED_OVERRIDE = { weekStart: null, days: {} };
+function sanitizeAvailabilityOverride(raw) {
+  if (raw === null || raw === undefined) return CLEARED_OVERRIDE;
+  if (typeof raw !== 'object' || Array.isArray(raw)) return undefined; // invalid, distinct from CLEARED_OVERRIDE (a real clear)
+  if (!DATE_RE.test(raw.weekStart)) return undefined;
+  const rawDays = (raw.days && typeof raw.days === 'object' && !Array.isArray(raw.days)) ? raw.days : {};
+  const days = {};
+  for (const wd of Object.keys(rawDays)) {
+    if (!WEEKDAY_KEYS.includes(wd)) continue; // silently drop an unrecognized key rather than rejecting the whole override
+    const day = sanitizeAvailabilityOverrideDay(rawDays[wd]);
+    if (day) days[wd] = day;
+  }
+  return { weekStart: raw.weekStart, days };
 }
 
 async function readRow(key) {
@@ -308,6 +456,10 @@ const getActivityTypes = () => getConfigRow('activityTypes');
 const saveActivityTypes = (types) => saveConfigRow('activityTypes', types);
 const getRaceChecklist = () => getConfigRow('raceChecklist');
 const saveRaceChecklistRow = (items) => saveConfigRow('raceChecklist', items);
+const getTrainingAvailability = () => getConfigRow('trainingAvailability');
+const saveTrainingAvailabilityRow = (template) => saveConfigRow('trainingAvailability', template);
+const getTrainingAvailabilityOverride = () => getConfigRow('trainingAvailabilityOverride');
+const saveTrainingAvailabilityOverrideRow = (override) => saveConfigRow('trainingAvailabilityOverride', override);
 
 // ---------- daily_habits ----------
 async function getDailyHabits(date) {
@@ -416,7 +568,7 @@ export default async function handler(req, res) {
 
   const resource = req.query && req.query.resource;
 
-  if (resource === 'habit-config' || resource === 'daily-habits' || resource === 'general-settings' || resource === 'restrictions' || resource === 'activity-types' || resource === 'plans' || resource === 'race-checklist') {
+  if (resource === 'habit-config' || resource === 'daily-habits' || resource === 'general-settings' || resource === 'restrictions' || resource === 'activity-types' || resource === 'plans' || resource === 'race-checklist' || resource === 'training-availability' || resource === 'training-availability-override') {
     if (!checkAuth(req, res)) return;
     if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_KEY) {
       return res.status(500).json({ error: 'missing SUPABASE_URL / SUPABASE_SERVICE_KEY' });
@@ -490,6 +642,38 @@ export default async function handler(req, res) {
             return res.status(400).json({ error: 'items must be an array of {id, label}' });
           }
           await saveRaceChecklistRow(items.slice(0, 40).map((it) => ({ id: it.id.slice(0, 60), label: it.label.slice(0, 120) })));
+          return res.status(200).json({ ok: true });
+        }
+        return res.status(405).json({ error: 'method not allowed' });
+      }
+
+      if (resource === 'training-availability') {
+        if (req.method === 'GET') {
+          const template = await getTrainingAvailability();
+          return res.status(200).json({ ok: true, template });
+        }
+        if (req.method === 'POST') {
+          let body = req.body;
+          if (typeof body === 'string') { try { body = JSON.parse(body); } catch (e) { body = {}; } }
+          const template = sanitizeAvailabilityTemplate(body && body.template);
+          if (!template) return res.status(400).json({ error: 'template must have a valid {minutes, disciplines} entry for every weekday' });
+          await saveTrainingAvailabilityRow(template);
+          return res.status(200).json({ ok: true });
+        }
+        return res.status(405).json({ error: 'method not allowed' });
+      }
+
+      if (resource === 'training-availability-override') {
+        if (req.method === 'GET') {
+          const override = await getTrainingAvailabilityOverride();
+          return res.status(200).json({ ok: true, override });
+        }
+        if (req.method === 'POST') {
+          let body = req.body;
+          if (typeof body === 'string') { try { body = JSON.parse(body); } catch (e) { body = {}; } }
+          const override = sanitizeAvailabilityOverride(body && body.override);
+          if (override === undefined) return res.status(400).json({ error: 'override must be {weekStart (YYYY-MM-DD), days} or null to clear' });
+          await saveTrainingAvailabilityOverrideRow(override);
           return res.status(200).json({ ok: true });
         }
         return res.status(405).json({ error: 'method not allowed' });

@@ -291,6 +291,66 @@ const PROPOSE_RESTRICTION_TOOL = {
   },
 };
 
+// ---------- propose_availability_override tool ----------
+// Lets the user tell the chat about a ONE-WEEK exception to their
+// normal training availability template (e.g. "pool's closed Tuesday
+// this week", "traveling Thu-Fri, way less time those days") without
+// editing the base template in General Settings, which stays the same
+// every other week. Same explicit-confirmation pattern as every other
+// propose_* tool here — nothing is saved until the user taps Save on
+// the card. Saved via api/sync-state.js's resource=
+// training-availability-override (see that file's own doc comment for
+// the full shape); read by Today's session/Plan my day/weekly
+// objectives (api/training.js) alongside the base template, with the
+// override's values winning for whichever day/field it actually
+// specifies.
+//
+// appliesTo is "this_week"|"next_week" rather than asking the model
+// for an exact weekStart date - the client resolves the actual Monday
+// key in CODE (DayLib.currentWeekMondayKey(), +7 days for next week)
+// when the user taps Save, per this project's own "arithmetic belongs
+// in code, not the model" discipline elsewhere (fit/overlap checks,
+// week boundaries, etc.) - the model only ever needs to know WHICH of
+// the two weeks is meant, never compute a date itself.
+const AVAILABILITY_OVERRIDE_WEEKDAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+const PROPOSE_AVAILABILITY_OVERRIDE_TOOL = {
+  name: 'propose_availability_override',
+  description:
+    'Propose a one-week exception to the user\'s normal training availability (minutes free + which disciplines ' +
+    'are possible each day) — e.g. "no pool Tuesday this week", "traveling Thu/Fri, only 20 minutes those days". ' +
+    'This does NOT save anything by itself — the user sees the proposal in the chat and explicitly chooses to ' +
+    'save it or not. Only include the specific day(s) and field(s) actually changing — a day/field you omit ' +
+    'keeps using the user\'s normal template for that week, it is not cleared or zeroed out. Use this ONLY for a ' +
+    'single-week exception; if the user wants to change their PERMANENT weekly pattern instead ("I never have ' +
+    'time on Mondays"), tell them to use General Settings\' Training availability section directly rather than ' +
+    'proposing a one-week override for something they mean every week.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      appliesTo: { type: 'string', description: 'Exactly "this_week" or "next_week" — resolve "this week"/"next week" phrasing against TODAY\'S DATA\'s own date field, never guess.' },
+      days: {
+        type: 'array',
+        description: 'Only the days actually changing this week — omit any day that stays at its normal template value.',
+        items: {
+          type: 'object',
+          properties: {
+            weekday: { type: 'string', description: 'One of: monday, tuesday, wednesday, thursday, friday, saturday, sunday' },
+            minutes: { type: 'integer', description: 'Minutes available THAT DAY this week — omit entirely if only disciplines are changing for this day, not minutes' },
+            disciplines: {
+              type: 'object',
+              description: 'Only the disciplines actually changing for this day — omit any that stay the same as the normal template',
+              properties: { swim: { type: 'boolean' }, bike: { type: 'boolean' }, run: { type: 'boolean' }, strength: { type: 'boolean' } },
+            },
+          },
+          required: ['weekday'],
+        },
+      },
+      reason: { type: 'string', description: 'Short human-readable reason, e.g. "Pool closed Tuesday" or "Traveling Thu-Fri"' },
+    },
+    required: ['appliesTo', 'days', 'reason'],
+  },
+};
+
 // ---------- propose_today_session tool ----------
 // Lets the user directly override what Training's "Today's session"
 // card currently recommends — e.g. "today I want to run 10km instead,
@@ -571,6 +631,46 @@ function normalizeProposedRestriction(raw) {
     scope: scope || null,
     starts_on: typeof r.starts_on === 'string' ? r.starts_on.slice(0, 10) : '',
     ends_on: typeof r.ends_on === 'string' ? r.ends_on.slice(0, 10) : '',
+  };
+}
+
+// Defensive normalization for propose_availability_override, same
+// spirit as the others — guarantees the frontend always gets a shape
+// matching what api/sync-state.js's resource=
+// training-availability-override POST expects for its `days` object
+// (keyed by weekday, each a genuinely PARTIAL {minutes?, disciplines?}
+// entry — see that file's own sanitizeAvailabilityOverrideDay for why
+// omitted fields must stay omitted here too, not defaulted). Note this
+// returns {appliesTo, days, reason} — NOT the final {weekStart, days}
+// shape the server resource expects; the client resolves appliesTo
+// into a real weekStart date (see this tool's own header comment on
+// why that's code's job, not the model's) before saving.
+function normalizeProposedAvailabilityOverride(raw) {
+  const r = raw || {};
+  const appliesTo = r.appliesTo === 'next_week' ? 'next_week' : 'this_week';
+  const rawDays = Array.isArray(r.days) ? r.days : [];
+  const days = rawDays.slice(0, 7).map((d) => {
+    if (!d || typeof d !== 'object' || !AVAILABILITY_OVERRIDE_WEEKDAYS.includes(d.weekday)) return null;
+    const out = { weekday: d.weekday };
+    if (d.minutes !== undefined) {
+      if (d.minutes === null) {
+        out.minutes = null;
+      } else {
+        const n = Number(d.minutes);
+        if (Number.isFinite(n)) out.minutes = Math.max(0, Math.min(1440, Math.round(n)));
+      }
+    }
+    if (d.disciplines && typeof d.disciplines === 'object' && !Array.isArray(d.disciplines)) {
+      const disc = {};
+      ['swim', 'bike', 'run', 'strength'].forEach((k) => { if (d.disciplines[k] !== undefined) disc[k] = !!d.disciplines[k]; });
+      if (Object.keys(disc).length) out.disciplines = disc;
+    }
+    return out;
+  }).filter(Boolean);
+  return {
+    appliesTo,
+    days,
+    reason: typeof r.reason === 'string' ? r.reason.slice(0, 300) : '',
   };
 }
 
@@ -1008,6 +1108,21 @@ function buildStaticSystemPrompt() {
     'of those; leave it unset for anything else (e.g. an injury affecting several activities at once) ' +
     'rather than forcing a bad fit. When you do call it, also say a short summary sentence in your normal ' +
     'reply text (the proposal is shown as its own card with a Save button).\n\n' +
+    'AVAILABILITY OVERRIDE: TODAY\'S DATA\'s own "availability" field (when configured:true) is the user\'s ' +
+    'normal weekly training pattern — minutes free and which disciplines (swim/bike/run/strength) are ' +
+    'possible each day, used so Today\'s session/Plan my day/weekly objectives never recommend something ' +
+    'that can\'t actually fit. The user can tell you about a ONE-WEEK exception to that normal pattern — ' +
+    '"no pool Tuesday this week", "traveling Thu/Fri, way less time those days", "I actually have extra ' +
+    'time Saturday this week". Call propose_availability_override with appliesTo ("this_week" or ' +
+    '"next_week" — resolve "this week"/"next week" against TODAY\'S DATA\'s own "date" field, never guess), ' +
+    'ONLY the day(s)/field(s) actually changing (omit everything else — it keeps using the normal template, ' +
+    'it is not cleared), and a short reason. If availability.configured is false, there is no base template ' +
+    'yet for an override to modify — tell the user to set up Training availability in General Settings ' +
+    'first rather than calling this tool. If the user describes a PERMANENT change to their normal pattern ' +
+    'instead of a one-week exception ("I never have time on Mondays", "I don\'t have pool access anymore"), ' +
+    'tell them to edit it directly in General Settings\' Training availability section — do not call this ' +
+    'tool for something meant to apply every week going forward. When you do call it, also say a short ' +
+    'summary sentence in your normal reply text (the proposal is shown as its own card with a Save button).\n\n' +
     'TODAY\'S SESSION OVERRIDE: the user can also directly override what Training\'s "Today\'s session" ' +
     'card currently recommends — e.g. "today I want to run 10km instead, I have great recovery", "put Push ' +
     '+ 5K in today\'s session", "my knee feels fine now, change today\'s pick to Legs". This is a DIFFERENT ' +
@@ -1133,7 +1248,7 @@ export default async function handler(req, res) {
           output_config: { effort: 'medium' },
           system: systemBlocks,
           messages,
-          tools: [{ type: 'memory_20250818', name: 'memory' }, PROPOSE_OBJECTIVES_TOOL, PROPOSE_CALENDAR_EVENT_TOOL, PROPOSE_CALENDAR_EVENT_UPDATE_TOOL, PROPOSE_CALENDAR_EVENT_DELETE_TOOL, PROPOSE_RESTRICTION_TOOL, PROPOSE_TODAY_SESSION_TOOL, PROPOSE_LONG_TERM_PLAN_TOOL, PROPOSE_PLAN_STATUS_CHANGE_TOOL],
+          tools: [{ type: 'memory_20250818', name: 'memory' }, PROPOSE_OBJECTIVES_TOOL, PROPOSE_CALENDAR_EVENT_TOOL, PROPOSE_CALENDAR_EVENT_UPDATE_TOOL, PROPOSE_CALENDAR_EVENT_DELETE_TOOL, PROPOSE_RESTRICTION_TOOL, PROPOSE_AVAILABILITY_OVERRIDE_TOOL, PROPOSE_TODAY_SESSION_TOOL, PROPOSE_LONG_TERM_PLAN_TOOL, PROPOSE_PLAN_STATUS_CHANGE_TOOL],
         }),
       });
 
@@ -1177,6 +1292,7 @@ export default async function handler(req, res) {
       const proposedCalendarEventUpdates = [];
       const proposedCalendarEventDeletes = [];
       let proposedRestriction = null;
+      let proposedAvailabilityOverride = null; // singular, same reasoning as proposedRestriction above — one coherent override to propose at a time
       let proposedTodaySession = null;
       let proposedLongTermPlan = null;
       let proposedPlanStatusChange = null;
@@ -1251,6 +1367,15 @@ export default async function handler(req, res) {
           });
           continue;
         }
+        if (toolUse.name === 'propose_availability_override') {
+          proposedAvailabilityOverride = normalizeProposedAvailabilityOverride(toolUse.input);
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: toolUse.id,
+            content: 'Proposal shown to the user in the chat UI for review. Not saved automatically — only the user can save it.',
+          });
+          continue;
+        }
         if (toolUse.name === 'propose_today_session') {
           proposedTodaySession = normalizeProposedTodaySession(toolUse.input);
           toolResults.push({
@@ -1298,7 +1423,7 @@ export default async function handler(req, res) {
       }
       messages.push({ role: 'user', content: toolResults });
 
-      if (proposedObjectives || proposedCalendarEvents.length || proposedCalendarEventUpdates.length || proposedCalendarEventDeletes.length || proposedRestriction || proposedTodaySession || proposedLongTermPlan || proposedPlanStatusChange) {
+      if (proposedObjectives || proposedCalendarEvents.length || proposedCalendarEventUpdates.length || proposedCalendarEventDeletes.length || proposedRestriction || proposedAvailabilityOverride || proposedTodaySession || proposedLongTermPlan || proposedPlanStatusChange) {
         const textBlock = (data.content || []).find((b) => b.type === 'text');
         const responseBody = { reply: textBlock ? textBlock.text : '', history: messages };
         if (proposedObjectives) responseBody.proposedObjectives = proposedObjectives;
@@ -1306,6 +1431,7 @@ export default async function handler(req, res) {
         if (proposedCalendarEventUpdates.length) responseBody.proposedCalendarEventUpdates = proposedCalendarEventUpdates;
         if (proposedCalendarEventDeletes.length) responseBody.proposedCalendarEventDeletes = proposedCalendarEventDeletes;
         if (proposedRestriction) responseBody.proposedRestriction = proposedRestriction;
+        if (proposedAvailabilityOverride) responseBody.proposedAvailabilityOverride = proposedAvailabilityOverride;
         if (proposedTodaySession) responseBody.proposedTodaySession = proposedTodaySession;
         if (proposedLongTermPlan) responseBody.proposedLongTermPlan = proposedLongTermPlan;
         if (proposedPlanStatusChange) responseBody.proposedPlanStatusChange = proposedPlanStatusChange;
