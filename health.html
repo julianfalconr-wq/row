@@ -792,20 +792,14 @@ main {
   .stack-search-results { width: 100%; }
 }
 
-/* Desktop-only wide-screen grid (>=1024px): pairs Cronometer + Scan
-   Food with AI into one 2-column row (both manual nutrition-input
-   tools, adjacent in DOM so grouping them doesn't create any visual/
-   DOM-order mismatch for keyboard/screen reader navigation). Whoop +
-   Daily Stack were paired here too during the original bento-grid
-   task but that pairing was reverted back to full-width stacking per
-   direct feedback - this class now only wraps the Cronometer/Scan
-   Food pair. Water Tracker (an embedded iframe) and the phone layout
-   (<1024px, still one column top to bottom) are both untouched.
-   align-items:start so one column's card never stretches to match a
-   taller neighbor — these aren't the same height and shouldn't be. */
-@media (min-width: 1024px) {
-  .wide-grid-row { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
-}
+/* The desktop wide-screen grid (.wide-grid-row) that used to pair
+   Whoop + Daily Stack, then just Cronometer + Scan Food with AI, has
+   been fully reverted per direct feedback — every section on this
+   page stacks full-width, one after another, at all widths including
+   desktop, same as before the original bento-grid task. No grid rule
+   or wrapper class remains for this page; see main.html/gym.html if
+   you're looking for the wide-screen grid pattern itself, which is
+   still in use there. */
 
 ::selection { background: rgba(224, 118, 88, 0.3); color: var(--text-primary); }
 ::-webkit-scrollbar { width: 10px; }
@@ -1053,7 +1047,6 @@ main {
     </div>
   </div>
 
-  <div class="wide-grid-row">
   <section id="cronometer" class="crono-embed">
     <div class="section-title">Cronometer</div>
     <div class="crono-card">
@@ -1171,7 +1164,6 @@ main {
       </div>
     </div>
   </section>
-  </div>
 
   <section id="water" class="water-embed">
     <div class="section-title">Water Tracker</div>
