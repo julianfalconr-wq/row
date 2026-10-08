@@ -1729,9 +1729,25 @@ img, video, canvas, svg { max-width: 100%; }
         <div class="tp-progress-label"><span>Strength</span><span id="tpStrengthProgressText">0 of 0 sessions</span></div>
         <div class="tp-progress-track"><div class="tp-progress-fill" id="tpStrengthProgressFill" style="width:0%"></div></div>
       </div>
-      <div class="tp-progress-row">
-        <div class="tp-progress-label"><span>Cardio</span><span id="tpRunningProgressText">0 of 0</span></div>
-        <div class="tp-progress-track"><div class="tp-progress-fill" id="tpRunningProgressFill" style="width:0%"></div></div>
+      <!-- Phase 3.1: one bar PER DISCIPLINE (never a combined "Cardio X of
+           Y" that adds km of different sports together) — see
+           computeWeekProgressByDiscipline(), a separate display-only
+           function from computeWeekProgress() (whose own return shape
+           main.html's teaser and the score engine still rely on
+           unchanged). Each row is hidden via inline style when that
+           discipline has no target this week, rather than removed from
+           the DOM, so renderWeeklyProgress() never has to touch markup. -->
+      <div class="tp-progress-row" id="tpRunProgressRow">
+        <div class="tp-progress-label"><span>Run</span><span id="tpRunProgressText">0 of 0 km</span></div>
+        <div class="tp-progress-track"><div class="tp-progress-fill" id="tpRunProgressFill" style="width:0%"></div></div>
+      </div>
+      <div class="tp-progress-row" id="tpBikeProgressRow">
+        <div class="tp-progress-label"><span>Bike</span><span id="tpBikeProgressText">0 of 0 km</span></div>
+        <div class="tp-progress-track"><div class="tp-progress-fill" id="tpBikeProgressFill" style="width:0%"></div></div>
+      </div>
+      <div class="tp-progress-row" id="tpSwimProgressRow">
+        <div class="tp-progress-label"><span>Swim</span><span id="tpSwimProgressText">0 of 0 sessions</span></div>
+        <div class="tp-progress-track"><div class="tp-progress-fill" id="tpSwimProgressFill" style="width:0%"></div></div>
       </div>
       <div class="tp-plan-grid">
         <div class="tp-plan-item">
@@ -5472,6 +5488,32 @@ img, video, canvas, svg { max-width: 100%; }
   }
   function saveStoredPlan(p) { try { localStorage.setItem(PLAN_KEY, JSON.stringify(p)); } catch (e) {} }
 
+  // Discipline classification is NAME-based (swim/bike/run keyword
+  // matching against the configured Activity Type's own name) rather
+  // than a new dedicated field on Activity Types — kept deliberately
+  // simple for this phase; an activity type whose name doesn't match
+  // any pattern is treated as unclassified, and an unclassified type
+  // is NEVER blocked by a discipline restriction (better to under-
+  // restrict an activity we can't confidently classify than to
+  // silently hide a legitimate option the user configured). Declared
+  // here (ABOVE computeWeekProgressByDiscipline, which needs it at
+  // page-load time via the plain renderWeeklyProgress() call a few
+  // lines below, not just from a later click handler) rather than
+  // down in the Phase 2 section where it originated — a `const`
+  // referenced before its own declaration line executes throws a real
+  // ReferenceError regardless of function-hoisting, caught via a live
+  // Playwright run that showed the progress bars silently failing to
+  // render on page load with this exact error.
+  const DISCIPLINE_NAME_PATTERNS = { swim: /swim/i, bike: /\b(bike|cycl|ride|spin)/i, run: /\b(run|jog)/i };
+  function disciplineForActivityType(activityTypeId) {
+    const type = activityTypeById(activityTypeId);
+    if (!type) return null;
+    for (const key of Object.keys(DISCIPLINE_NAME_PATTERNS)) {
+      if (DISCIPLINE_NAME_PATTERNS[key].test(type.name || '')) return key;
+    }
+    return null;
+  }
+
   function computeWeekProgress(plan) {
     const monday = thisWeekMondayKey();
     let doneDays = {};
@@ -5507,6 +5549,73 @@ img, video, canvas, svg { max-width: 100%; }
     };
   }
 
+  // Phase 3.1 (amendment A) — per-discipline targets for a plan that
+  // has NO plan.targets key yet (every plan generated before this
+  // phase, or any week whose active long-term plan has no `disciplines`
+  // configured for it). Groups the 3 legacy cardio slots BY the
+  // activity type they were actually assigned, via the SAME
+  // disciplineForActivityType() name-matching Phase 2 already
+  // established — never invents a 4th bucket, never sums across
+  // different disciplines. A slot with session-count semantics
+  // (currently only `interval`, via targetSessions) contributes to
+  // that discipline's `sessions`; a distance slot (longSession/
+  // easyVolume, via targetAmount+unit) contributes to its `km`. Swim
+  // under a legacy plan only ever shows whichever of these two shapes
+  // the slot that happened to be assigned to it actually carries — an
+  // approximation, not the richer {sessions,meters} shape plan.targets
+  // itself carries, which is the whole point of 3.1's backfill.
+  function deriveLegacyDisciplineTargets(plan) {
+    const out = { run: { km: 0, sessions: 0 }, bike: { km: 0, sessions: 0 }, swim: { km: 0, sessions: 0 } };
+    const cardio = plan && plan.cardio;
+    if (!cardio) return out;
+    [cardio.interval, cardio.longSession, cardio.easyVolume].forEach((slot) => {
+      if (!slot || !slot.activityTypeId) return;
+      const disc = disciplineForActivityType(slot.activityTypeId);
+      if (!disc || !out[disc]) return; // unclassified type (e.g. a strength-only or padel type) — not one of run/bike/swim, nothing to bucket
+      if (slot.unit && slot.targetAmount) out[disc].km = Math.round((out[disc].km + Number(slot.targetAmount)) * 10) / 10;
+      if (slot.targetSessions) out[disc].sessions += Number(slot.targetSessions) || 0;
+    });
+    return out;
+  }
+
+  // Phase 3.1 (amendment A) — the card's ACTUAL display source: one
+  // real number per discipline, matched against REAL logged activities
+  // by activityTypeId -> discipline (never summed across disciplines).
+  // Deliberately a SEPARATE function from computeWeekProgress() above —
+  // that function's return shape ({strengthDone, amountDone/
+  // amountTarget, cardioUnit, ...}) is still relied on unchanged by
+  // main.html's "Plan my day" Tomorrow teaser and the score engine
+  // (both read po_coach_weekly_plan_v1's plan.cardio/plan.strength
+  // directly, not this function, but computeWeekProgress() itself is
+  // also called as-is a few lines below in generateTodayRecommendation
+  // — verified via grep before touching anything here) — so this is
+  // purely additive, read by the card's rendering only.
+  function computeWeekProgressByDiscipline(plan) {
+    const monday = thisWeekMondayKey();
+    const weekActivities = activityEntries.filter((a) => a.dateKey >= monday);
+    function doneFor(disc) {
+      const matching = weekActivities.filter((a) => disciplineForActivityType(a.activityTypeId) === disc);
+      const km = Math.round(matching.reduce((sum, a) => sum + (Number(a.distanceKm) || 0), 0) * 10) / 10;
+      const meters = Math.round(km * 1000);
+      return { km, meters, sessions: matching.length };
+    }
+    const targets = (plan && plan.targets) || deriveLegacyDisciplineTargets(plan);
+    const legacy = computeWeekProgress(plan); // read-only reuse — strengthDone/strengthTarget are the exact same numbers, not recomputed differently here
+    const runDone = doneFor('run');
+    const bikeDone = doneFor('bike');
+    const swimDone = doneFor('swim');
+    return {
+      run: { doneKm: runDone.km, targetKm: (targets.run && Number(targets.run.km)) || 0 },
+      bike: { doneKm: bikeDone.km, targetKm: (targets.bike && Number(targets.bike.km)) || 0 },
+      swim: {
+        doneSessions: swimDone.sessions, doneMeters: swimDone.meters,
+        targetSessions: (targets.swim && Number(targets.swim.sessions)) || 0,
+        targetMeters: (targets.swim && Number(targets.swim.meters)) || 0,
+      },
+      strength: { doneSessions: legacy.strengthDone, targetSessions: legacy.strengthTarget },
+    };
+  }
+
   function renderWeeklyProgress() {
     const stored = loadStoredPlan();
     const isCurrentWeek = !!(stored && stored.weekStart === thisWeekMondayKey() && stored.plan);
@@ -5522,8 +5631,25 @@ img, video, canvas, svg { max-width: 100%; }
 
     $$('tpStrengthProgressText').textContent = progress.strengthDone + ' of ' + progress.strengthTarget + ' sessions';
     $$('tpStrengthProgressFill').style.width = (progress.strengthTarget ? Math.min(100, (progress.strengthDone / progress.strengthTarget) * 100) : 0) + '%';
-    $$('tpRunningProgressText').textContent = progress.amountTarget ? (progress.amountDone + ' of ' + progress.amountTarget + ' ' + progress.cardioUnit) : 'No cardio target this week';
-    $$('tpRunningProgressFill').style.width = (progress.amountTarget ? Math.min(100, (progress.amountDone / progress.amountTarget) * 100) : 0) + '%';
+
+    // Phase 3.1 (amendment A): one bar per discipline, never a combined
+    // "Cardio X of Y" that adds km of different sports — see
+    // computeWeekProgressByDiscipline()'s own comment. A discipline
+    // with no target this week hides its row entirely (inline
+    // style.display, not the `hidden` attribute — see this project's
+    // own established [hidden]-vs-display gotcha) rather than showing
+    // a meaningless "0 of 0".
+    const byDiscipline = computeWeekProgressByDiscipline(plan);
+    $$('tpRunProgressRow').style.display = byDiscipline.run.targetKm ? 'flex' : 'none';
+    $$('tpRunProgressText').textContent = byDiscipline.run.doneKm + ' of ' + byDiscipline.run.targetKm + ' km';
+    $$('tpRunProgressFill').style.width = (byDiscipline.run.targetKm ? Math.min(100, (byDiscipline.run.doneKm / byDiscipline.run.targetKm) * 100) : 0) + '%';
+    $$('tpBikeProgressRow').style.display = byDiscipline.bike.targetKm ? 'flex' : 'none';
+    $$('tpBikeProgressText').textContent = byDiscipline.bike.doneKm + ' of ' + byDiscipline.bike.targetKm + ' km';
+    $$('tpBikeProgressFill').style.width = (byDiscipline.bike.targetKm ? Math.min(100, (byDiscipline.bike.doneKm / byDiscipline.bike.targetKm) * 100) : 0) + '%';
+    $$('tpSwimProgressRow').style.display = byDiscipline.swim.targetSessions ? 'flex' : 'none';
+    $$('tpSwimProgressText').textContent = byDiscipline.swim.doneSessions + ' of ' + byDiscipline.swim.targetSessions + ' sessions'
+      + (byDiscipline.swim.targetMeters ? ' (' + byDiscipline.swim.doneMeters + ' of ' + byDiscipline.swim.targetMeters + ' m)' : '');
+    $$('tpSwimProgressFill').style.width = (byDiscipline.swim.targetSessions ? Math.min(100, (byDiscipline.swim.doneSessions / byDiscipline.swim.targetSessions) * 100) : 0) + '%';
 
     $$('tpStrengthValue').textContent = plan.strength.targetSessions + ' sessions/wk';
     $$('tpStrengthDesc').textContent = plan.strength.focus || '';
@@ -5543,6 +5669,49 @@ img, video, canvas, svg { max-width: 100%; }
     $$('tpRationale').textContent = plan.rationale || '';
 
     return { plan, progress };
+  }
+
+  // Phase 3.1 — the active long-term plan (plan.html's po_coach
+  // "plans" resource, a DIFFERENT thing from po_coach_weekly_plan_v1)
+  // is the source of truth for this week's per-discipline targets,
+  // when it has any (see plan.html's own backfill comment for how
+  // `disciplines` gets attached to a checkpoint). Returns null
+  // whenever there's no active running_distance plan, or none of its
+  // checkpoints covers the CURRENT week, or that week's checkpoint has
+  // no `disciplines` at all — every one of those collapses to the
+  // exact pre-3.1 behavior (handlePlan invents cardio slots itself,
+  // same as always) rather than throwing.
+  async function fetchActiveWeekDisciplines() {
+    const secret = getSecret();
+    if (!secret) return null;
+    try {
+      const r = await fetch('/api/sync-state?resource=plans&secret=' + encodeURIComponent(secret));
+      const j = await r.json();
+      const plans = (j && j.ok && Array.isArray(j.plans)) ? j.plans : [];
+      const todayK = DayLib.effectiveDateKey();
+      for (const p of plans) {
+        if (p.status !== 'active' || !Array.isArray(p.weeklyCheckpoints)) continue;
+        const cp = p.weeklyCheckpoints.find((c) => {
+          if (!c.weekStartDate) return false;
+          const start = DayLib.parseDateKey(c.weekStartDate);
+          const end = new Date(start); end.setDate(end.getDate() + 6);
+          return todayK >= c.weekStartDate && todayK <= dateKey(end);
+        });
+        if (cp && cp.disciplines) return cp.disciplines;
+      }
+      return null;
+    } catch (e) { return null; }
+  }
+  // Inverse of disciplineForActivityType() (Phase 2) — given a
+  // discipline key (run/bike/swim), finds the first recommendable type
+  // whose NAME matches it, so the server can zero the target out if
+  // that type turns out to be restricted (same isCardioTypeBlocked
+  // spirit the legacy cardio slots already enforce). null when nothing
+  // recommendable matches — handlePlan then zeroes that discipline.
+  function resolveActivityTypeForDiscipline(disciplineKey, types) {
+    const pattern = DISCIPLINE_NAME_PATTERNS[disciplineKey];
+    if (!pattern) return null;
+    return types.find((t) => pattern.test(t.name || '')) || null;
   }
 
   async function generateWeeklyPlan() {
@@ -5596,9 +5765,29 @@ img, video, canvas, svg { max-width: 100%; }
       const whoop = whoopTrend.connected ? { recentRecovery: whoopTrend.recentRecovery, recentStrain: whoopTrend.recentStrain } : null;
       const restrictions = await fetchActiveRestrictions();
 
+      // Phase 3.1 — resolve each discipline's actual activityTypeId (if
+      // any recommendable type matches it by name) so the server can
+      // output `targets` with real activityTypeId's attached (needed
+      // for the card's per-discipline progress bars AND for Today's
+      // session to match real logged activities against them) and so
+      // it can zero out a discipline whose only matching type turns
+      // out to be restricted/non-recommendable.
+      const rawDisciplines = await fetchActiveWeekDisciplines();
+      let activeWeekDisciplines = null;
+      if (rawDisciplines) {
+        activeWeekDisciplines = {};
+        ['run', 'bike', 'swim'].forEach((disc) => {
+          const d = rawDisciplines[disc];
+          if (!d) return;
+          const type = resolveActivityTypeForDiscipline(disc, recommendableActivityTypes);
+          activeWeekDisciplines[disc] = Object.assign({}, d, { activityTypeId: type ? type.id : null });
+        });
+        if (rawDisciplines.strength) activeWeekDisciplines.strength = rawDisciplines.strength;
+      }
+
       const res = await fetch('/api/training?mode=plan&secret=' + encodeURIComponent(secret), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ strengthSessions, recentExerciseNames, activitySessions, recommendableActivityTypes, whoop, restrictions }),
+        body: JSON.stringify({ strengthSessions, recentExerciseNames, activitySessions, recommendableActivityTypes, whoop, restrictions, activeWeekDisciplines }),
       });
       const json = await res.json();
       if (!res.ok || !json.ok) throw new Error((json && json.error) || ('HTTP ' + res.status));
@@ -5832,24 +6021,6 @@ img, video, canvas, svg { max-width: 100%; }
     return gaps.reduce((max, g) => Math.max(max, (g.endMs - g.startMs) / 60000), 0);
   }
 
-  // Discipline classification is NAME-based (swim/bike/run keyword
-  // matching against the configured Activity Type's own name) rather
-  // than a new dedicated field on Activity Types — kept deliberately
-  // simple for this phase; an activity type whose name doesn't match
-  // any pattern is treated as unclassified, and an unclassified type
-  // is NEVER blocked by a discipline restriction (better to under-
-  // restrict an activity we can't confidently classify than to
-  // silently hide a legitimate option the user configured).
-  const DISCIPLINE_NAME_PATTERNS = { swim: /swim/i, bike: /\b(bike|cycl|ride|spin)/i, run: /\b(run|jog)/i };
-  function disciplineForActivityType(activityTypeId) {
-    const type = activityTypeById(activityTypeId);
-    if (!type) return null;
-    for (const key of Object.keys(DISCIPLINE_NAME_PATTERNS)) {
-      if (DISCIPLINE_NAME_PATTERNS[key].test(type.name || '')) return key;
-    }
-    return null;
-  }
-
   // Recent pace (minutes/km), averaged over the last up-to-10 logged
   // sessions of this exact activity type that have BOTH distanceKm and
   // durationMin — used to convert a longSession/easyVolume slot's
@@ -5899,6 +6070,49 @@ img, video, canvas, svg { max-width: 100%; }
     return Math.round((Number(slot.targetAmount) || 0) * pace);
   }
 
+  // Phase 3.1 — remaining volume this week for a targets-mode
+  // discipline (run/bike km, or swim sessions), matched against REAL
+  // logged activities by activityTypeId -> discipline, same
+  // disciplineForActivityType() matching computeWeekProgressByDiscipline
+  // uses for the card's progress bars. Never negative — "done more
+  // than the target" means nothing is outstanding, not a negative
+  // recommendation.
+  function remainingWeekKmForDiscipline(disc, targetKm) {
+    if (!targetKm) return 0;
+    const monday = thisWeekMondayKey();
+    const doneKm = activityEntries
+      .filter((a) => a.dateKey >= monday && disciplineForActivityType(a.activityTypeId) === disc)
+      .reduce((sum, a) => sum + (Number(a.distanceKm) || 0), 0);
+    return Math.max(0, Math.round((targetKm - doneKm) * 10) / 10);
+  }
+  function remainingWeekSwimSessions(targetSessions) {
+    if (!targetSessions) return 0;
+    const monday = thisWeekMondayKey();
+    const doneSessions = activityEntries.filter((a) => a.dateKey >= monday && disciplineForActivityType(a.activityTypeId) === 'swim').length;
+    return Math.max(0, targetSessions - doneSessions);
+  }
+  // Swim pace, minutes per 100m — same "recent logged pace, else a
+  // conservative documented default" spirit as recentAvgPaceMinPerKm/
+  // GENERIC_FALLBACK_PACE_MIN_PER_KM above, just in swim's own natural
+  // unit (100m splits) rather than km, since swim targets are tracked
+  // in meters, not km, and a basic swimmer's pace is far slower per km
+  // than a runner's/cyclist's (the generic fallback above would wildly
+  // overestimate swim duration if reused here).
+  const BASIC_SWIMMER_PACE_MIN_PER_100M = 2.5; // ~40m/min — a conservative recreational-swimmer default; purely a starting assumption for a user with zero logged swim history
+  function recentAvgSwimPaceMinPer100m(activityTypeId) {
+    const matches = activityLoad()
+      .filter((a) => a && a.activityTypeId === activityTypeId && a.distanceKm && a.durationMin)
+      .slice(0, 10);
+    if (!matches.length) return null;
+    const paces = matches.map((a) => a.durationMin / (a.distanceKm * 10)); // distanceKm*10 = distance in 100m units
+    return paces.reduce((sum, p) => sum + p, 0) / paces.length;
+  }
+  function estimateSwimMinutesForMeters(meters, activityTypeId) {
+    if (!meters) return 0;
+    const pace = recentAvgSwimPaceMinPer100m(activityTypeId) || BASIC_SWIMMER_PACE_MIN_PER_100M;
+    return Math.round((meters / 100) * pace);
+  }
+
   // Builds the `feasibility` object sent to mode=today. Returns
   // {configured:false} whenever there's nothing to constrain with — no
   // availability template configured at all, or no weekly plan to draw
@@ -5937,18 +6151,61 @@ img, video, canvas, svg { max-width: 100%; }
     }
 
     const candidates = [];
-    if (plan.strength && (Number(plan.strength.targetSessions) || 0) > 0) {
+    if (plan.strength && (Number(plan.strength.targetSessions) || 0) > 0 && !(plan.targets && plan.targets.strength)) {
+      // Only when targets ISN'T already driving strength (below) —
+      // avoids a duplicate "Strength" candidate.
       const est = estimateSlotMinutes('strength', plan.strength);
       candidates.push({ key: 'strength', label: 'Strength', estMinutes: est, feasible: fitsToday('strength', est) });
     }
-    ['interval', 'longSession', 'easyVolume'].forEach((kind) => {
-      const slot = plan.cardio && plan.cardio[kind];
-      if (!slot || !slot.activityTypeId) return;
-      const est = estimateSlotMinutes(kind, slot);
-      const discipline = disciplineForActivityType(slot.activityTypeId);
-      const typeForLabel = activityTypeById(slot.activityTypeId);
-      candidates.push({ key: kind, label: slot.activityName || (typeForLabel && typeForLabel.name) || 'Session', estMinutes: est, feasible: fitsToday(discipline, est) });
-    });
+
+    if (plan.targets) {
+      // Phase 3.1: candidates come from the REMAINING volume per real
+      // discipline target (run/bike km, swim sessions+meters), not the
+      // legacy longSession/easyVolume slots — those are just a derived
+      // mirror of targets.run/targets.bike (see deriveLegacyCardioFromTargets
+      // in api/training.js) and would duplicate these candidates if
+      // also used. `interval` has no targets-mode equivalent (a
+      // qualitative VO2-max piece layered on top of weekly volume, not
+      // itself a volume target) and is still read from the legacy slot
+      // either way.
+      const t = plan.targets;
+      if (t.strength && t.strength.sessions > 0) {
+        const est = estimateSlotMinutes('strength', { targetSessions: t.strength.sessions });
+        candidates.push({ key: 'strength', label: 'Strength', estMinutes: est, feasible: fitsToday('strength', est) });
+      }
+      ['run', 'bike'].forEach((disc) => {
+        const d = t[disc];
+        if (!d || !d.km || !d.activityTypeId) return;
+        const remainingKm = remainingWeekKmForDiscipline(disc, d.km);
+        if (remainingKm <= 0) return; // already done this week — nothing left to recommend
+        const pace = recentAvgPaceMinPerKm(d.activityTypeId) || GENERIC_FALLBACK_PACE_MIN_PER_KM;
+        const est = Math.round(remainingKm * pace);
+        candidates.push({ key: disc, label: d.activityName || disc, estMinutes: est, feasible: fitsToday(disc, est) });
+      });
+      if (t.swim && t.swim.sessions > 0 && t.swim.activityTypeId) {
+        const remainingSessions = remainingWeekSwimSessions(t.swim.sessions);
+        if (remainingSessions > 0) {
+          const metersPerSession = Math.round((Number(t.swim.meters) || 0) / t.swim.sessions);
+          const est = estimateSwimMinutesForMeters(metersPerSession, t.swim.activityTypeId);
+          candidates.push({ key: 'swim', label: t.swim.activityName || 'Swim', estMinutes: est, feasible: fitsToday('swim', est) });
+        }
+      }
+      const intervalSlot = plan.cardio && plan.cardio.interval;
+      if (intervalSlot && intervalSlot.activityTypeId) {
+        const est = estimateSlotMinutes('interval', intervalSlot);
+        const discipline = disciplineForActivityType(intervalSlot.activityTypeId);
+        candidates.push({ key: 'interval', label: intervalSlot.activityName || 'Interval', estMinutes: est, feasible: fitsToday(discipline, est) });
+      }
+    } else {
+      ['interval', 'longSession', 'easyVolume'].forEach((kind) => {
+        const slot = plan.cardio && plan.cardio[kind];
+        if (!slot || !slot.activityTypeId) return;
+        const est = estimateSlotMinutes(kind, slot);
+        const discipline = disciplineForActivityType(slot.activityTypeId);
+        const typeForLabel = activityTypeById(slot.activityTypeId);
+        candidates.push({ key: kind, label: slot.activityName || (typeForLabel && typeForLabel.name) || 'Session', estMinutes: est, feasible: fitsToday(discipline, est) });
+      });
+    }
 
     return {
       configured: true,

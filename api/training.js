@@ -53,6 +53,16 @@
 //     activitySessions: [{ activityTypeId, date, distanceKm, count, durationMin, pace, effort, notes }], // last ~21 days, any type
 //     recommendableActivityTypes: [{ id, name, unit, unitKind }],  // recommendable:true only; empty array means no cardio is possible this week
 //     whoop: { recentRecovery: [{date, recoveryPct}], recentStrain: [{date, strain}] } | null,
+//     activeWeekDisciplines: {   // Phase 3.1 — gym.html's fetchActiveWeekDisciplines(): the CURRENT week's
+//     // checkpoint `disciplines` from the user's own active long-term plan (plan.html's "plans" resource —
+//     // a different thing from this week's po_coach_weekly_plan_v1 itself), when that plan/week/field
+//     // exists at all. null (the common case for most users / most weeks) means exactly the pre-3.1
+//     // behavior: the model invents all cardio numbers itself, same as always.
+//       run: { km: Number, activityTypeId: String|null } | undefined,
+//       bike: { km: Number, activityTypeId: String|null } | undefined,
+//       swim: { sessions: Number, meters: Number, activityTypeId: String|null } | undefined,
+//       strength: { sessions: Number } | undefined,
+//     } | null,
 //   }
 //   -> { ok: true, plan: {
 //     strength: { targetSessions: Number, focus: String },
@@ -61,6 +71,20 @@
 //       longSession: { activityTypeId: String|null, activityName: String, targetAmount: Number, unit: String, description: String },
 //       easyVolume:  { activityTypeId: String|null, activityName: String, targetAmount: Number, unit: String, description: String },
 //     },
+//     // Phase 3.1 — present ONLY when activeWeekDisciplines was non-null; absent (not null) otherwise, so
+//     // JSON.stringify drops the key and an unconfigured response is byte-for-byte what this endpoint
+//     // already produced before this phase existed. Computed entirely in CODE from activeWeekDisciplines
+//     // (see buildTargetsFromActiveWeek), never asked of the model — cardio.longSession/easyVolume above
+//     // are DERIVED from these same numbers when targets is present (see deriveLegacyCardioFromTargets),
+//     // so old renderers (main.html's teaser, score-lib.js — neither touched by this phase) keep seeing
+//     // representative numbers in the shape they already expect, while gym.html's new per-discipline
+//     // progress bars and Today's session feasibility candidates read `targets` itself.
+//     targets: {
+//       run: { activityTypeId: String|null, activityName: String, km: Number },
+//       bike: { activityTypeId: String|null, activityName: String, km: Number },
+//       swim: { activityTypeId: String|null, activityName: String, sessions: Number, meters: Number },
+//       strength: { sessions: Number },
+//     } | undefined,
 //     rationale: String,
 //   } }
 //
@@ -505,11 +529,14 @@ function sanitizeActivityTypes(raw) {
   })).filter((t) => t.id && t.name);
 }
 
-function buildPlanSystemPrompt(restrictions, recommendableTypes) {
+function buildPlanSystemPrompt(restrictions, recommendableTypes, activeWeekDisciplines) {
   const typesList = recommendableTypes.length
     ? JSON.stringify(recommendableTypes.map((t) => ({ id: t.id, name: t.name, unit: t.unit, unitKind: t.unitKind })), null, 2)
     : null;
   return (
+    (activeWeekDisciplines
+      ? 'THIS WEEK\'S VOLUME TARGETS ARE ALREADY FIXED — ' + describeActiveWeekDisciplinesForPrompt(activeWeekDisciplines, recommendableTypes) + '. These come from the user\'s own long-term training plan, not from you, and the server computes the real numbers in code from that plan — it will IGNORE whatever longSession.targetAmount/easyVolume.targetAmount/strength.targetSessions numbers you write for the disciplines listed above. Do NOT invent different volume numbers for them. Your job here is only: (1) still propose ONE concrete interval/VO2-max session (activityTypeId from the recommendable list below, matching whichever of run/bike makes sense, or null if neither does) with real structure — the fixed targets above have no interval/intensity piece of their own; (2) write a one-sentence, concrete description for cardio.longSession and cardio.easyVolume (effort/pacing guidance for the run/bike volume above) and for strength.focus; (3) mention the swim target explicitly in the rationale even though it has no legacy slot of its own to sit in. Never contradict these fixed numbers anywhere in your rationale or descriptions.\n\n'
+      : '') +
     'You are a training coach generating ONE week of concrete objectives for a personal dashboard. ' +
     'The user does two kinds of training: strength (equipment-limited, see below) and cardio. Cardio needs ' +
     'two distinct goals served every week, regardless of which specific activity fills them: improving VO2 ' +
@@ -604,7 +631,141 @@ function normalizeCardioVolume(raw, types, restrictedScopes, defaultAmount) {
   };
 }
 
-function normalizePlan(raw, restrictions, recommendableTypes) {
+// ------------------------------------------------------------
+// Phase 3.1 — per-discipline weekly targets, sourced from the user's
+// OWN active long-term plan (plan.html's "plans" resource — a
+// different thing from this week's po_coach_weekly_plan_v1), not
+// invented by the model. The client resolves each discipline's
+// activityTypeId itself (gym.html's resolveActivityTypeForDiscipline,
+// Phase 2's name-matching heuristic run in reverse) and sends it
+// already attached; this file only re-validates it the same way every
+// other client-supplied activityTypeId here already is (isCardioTypeBlocked)
+// — never trusts it blindly.
+// ------------------------------------------------------------
+
+function sanitizeDisciplineAmount(raw, numKeys) {
+  if (!raw || typeof raw !== 'object') return null;
+  const out = { activityTypeId: typeof raw.activityTypeId === 'string' ? raw.activityTypeId.slice(0, 60) : null };
+  numKeys.forEach((k) => { out[k] = Math.max(0, num(raw[k], 0)); });
+  return out;
+}
+// null (not {}) whenever there's nothing to act on at all — this is
+// what lets handlePlan/buildPlanSystemPrompt tell "no active-plan
+// disciplines were ever sent" (every old client; behavior must stay
+// byte-identical) apart from "sent, but every discipline was empty"
+// (treated the same way — no targets section, nothing to pass to the
+// model, no `targets` key on the response).
+function sanitizeActiveWeekDisciplines(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const out = {};
+  const run = sanitizeDisciplineAmount(raw.run, ['km']);
+  const bike = sanitizeDisciplineAmount(raw.bike, ['km']);
+  const swim = sanitizeDisciplineAmount(raw.swim, ['sessions', 'meters']);
+  if (run && run.km > 0) out.run = run;
+  if (bike && bike.km > 0) out.bike = bike;
+  if (swim && (swim.sessions > 0 || swim.meters > 0)) out.swim = swim;
+  if (raw.strength && typeof raw.strength === 'object') {
+    const sessions = Math.max(0, Math.round(num(raw.strength.sessions, 0)));
+    if (sessions > 0) out.strength = { sessions };
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+// Builds the response's `targets` key — the ACTUAL numbers, computed
+// here in code from the user's own plan, never asked of the model
+// (fixes the "generator invents numbers instead of following the
+// user's plan" bug 3.1 was written to verify and close). A discipline
+// whose resolved type is non-recommendable/restricted is zeroed, same
+// isCardioTypeBlocked check the legacy cardio slots already enforce —
+// re-validated here independently of whatever the client resolved,
+// since recommendable/restricted status can change between gym.html
+// resolving it and this request landing.
+function buildTargetsFromActiveWeek(activeWeekDisciplines, types, restrictedScopes, strengthRestricted) {
+  const out = {};
+  ['run', 'bike'].forEach((disc) => {
+    const d = activeWeekDisciplines[disc];
+    if (!d) return;
+    const type = resolveCardioType(d.activityTypeId, types);
+    const blocked = isCardioTypeBlocked(type, types, restrictedScopes);
+    out[disc] = {
+      activityTypeId: blocked ? null : type.id,
+      activityName: blocked ? '' : type.name,
+      km: blocked ? 0 : Math.round(d.km * 10) / 10,
+    };
+  });
+  if (activeWeekDisciplines.swim) {
+    const d = activeWeekDisciplines.swim;
+    const type = resolveCardioType(d.activityTypeId, types);
+    const blocked = isCardioTypeBlocked(type, types, restrictedScopes);
+    out.swim = {
+      activityTypeId: blocked ? null : type.id,
+      activityName: blocked ? '' : type.name,
+      sessions: blocked ? 0 : Math.round(d.sessions),
+      meters: blocked ? 0 : Math.round(d.meters),
+    };
+  }
+  if (activeWeekDisciplines.strength) {
+    out.strength = { sessions: strengthRestricted ? 0 : activeWeekDisciplines.strength.sessions };
+  }
+  return out;
+}
+
+// The legacy schema has exactly 2 distance-volume slots (longSession/
+// easyVolume) — not enough to hold 3 independent disciplines (run/
+// bike/swim), and swim's own {sessions,meters} shape doesn't map to a
+// km-based slot at all. Rather than let the model re-invent these two
+// slots' amounts (reopening the exact bug this sub-step fixes), they
+// are DERIVED deterministically from `targets` — run then bike fill
+// the two slots (in that priority; swim is simply not representable
+// in this legacy shape and is left out of it, same as "nothing
+// recommendable" already does today), keeping only the model's own
+// free-text `description` for whichever slot it still lines up with.
+// This is what keeps main.html's "Plan my day" Tomorrow teaser and the
+// score engine (both read plan.cardio.longSession/easyVolume directly
+// — verified before writing this, neither is touched) seeing *some*
+// representative distance progress instead of a sudden blank, exactly
+// as before this phase existed; `targets` is the new, actually-
+// accurate source for anything discipline-aware.
+function deriveLegacyCardioFromTargets(targets, modelCardio) {
+  const distanceDisciplines = ['run', 'bike'].filter((d) => targets[d] && targets[d].km > 0 && targets[d].activityTypeId);
+  function volumeSlotFor(disc, modelSlot) {
+    if (!disc) return { activityTypeId: null, activityName: '', targetAmount: 0, unit: '', description: '' };
+    const t = targets[disc];
+    return {
+      activityTypeId: t.activityTypeId,
+      activityName: t.activityName,
+      targetAmount: t.km,
+      unit: 'km',
+      description: (modelSlot && typeof modelSlot.description === 'string') ? modelSlot.description.slice(0, 300) : '',
+    };
+  }
+  return {
+    longSession: volumeSlotFor(distanceDisciplines[0] || null, modelCardio && modelCardio.longSession),
+    easyVolume: volumeSlotFor(distanceDisciplines[1] || null, modelCardio && modelCardio.easyVolume),
+  };
+}
+
+// Human-readable summary injected into the prompt so the model can
+// write a coherent rationale/descriptions around numbers it is told
+// NOT to change — see buildPlanSystemPrompt's targets-mode section.
+function describeActiveWeekDisciplinesForPrompt(activeWeekDisciplines, types) {
+  const parts = [];
+  ['run', 'bike'].forEach((disc) => {
+    const d = activeWeekDisciplines[disc];
+    if (!d) return;
+    const type = resolveCardioType(d.activityTypeId, types);
+    parts.push(disc + ': ' + d.km + 'km' + (type ? ' (' + type.name + ')' : ' — no matching recommendable activity type, will be zeroed'));
+  });
+  const swim = activeWeekDisciplines.swim;
+  if (swim) {
+    const type = resolveCardioType(swim.activityTypeId, types);
+    parts.push('swim: ' + swim.sessions + ' sessions' + (swim.meters ? ' (~' + swim.meters + 'm total)' : '') + (type ? ' (' + type.name + ')' : ' — no matching recommendable activity type, will be zeroed'));
+  }
+  if (activeWeekDisciplines.strength) parts.push('strength: ' + activeWeekDisciplines.strength.sessions + ' sessions');
+  return parts.join('; ');
+}
+
+function normalizePlan(raw, restrictions, recommendableTypes, activeWeekDisciplines) {
   const restricted = restrictedScopeSet(restrictions);
   const types = Array.isArray(recommendableTypes) ? recommendableTypes : [];
   const r = raw || {};
@@ -613,16 +774,25 @@ function normalizePlan(raw, restrictions, recommendableTypes) {
   // Strength side is completely untouched by this generalization — same
   // hard-override-to-0 enforcement as before.
   const strengthRestricted = restricted.has('strength');
+
+  const targets = activeWeekDisciplines ? buildTargetsFromActiveWeek(activeWeekDisciplines, types, restricted, strengthRestricted) : null;
+  const legacyOverride = targets ? deriveLegacyCardioFromTargets(targets, cardio) : null;
+
   return {
     strength: {
-      targetSessions: strengthRestricted ? 0 : Math.max(1, Math.round(num(strength.targetSessions, 3))),
+      targetSessions: (targets && targets.strength) ? targets.strength.sessions : (strengthRestricted ? 0 : Math.max(1, Math.round(num(strength.targetSessions, 3)))),
       focus: typeof strength.focus === 'string' ? strength.focus.slice(0, 200) : '',
     },
     cardio: {
       interval: normalizeCardioInterval(cardio.interval, types, restricted),
-      longSession: normalizeCardioVolume(cardio.longSession, types, restricted, 8),
-      easyVolume: normalizeCardioVolume(cardio.easyVolume, types, restricted, 10),
+      longSession: legacyOverride ? legacyOverride.longSession : normalizeCardioVolume(cardio.longSession, types, restricted, 8),
+      easyVolume: legacyOverride ? legacyOverride.easyVolume : normalizeCardioVolume(cardio.easyVolume, types, restricted, 10),
     },
+    // Absent (not null) when there's no active-plan disciplines data at
+    // all — JSON.stringify drops an `undefined` key entirely, so an
+    // unconfigured/legacy response is byte-for-byte what this endpoint
+    // already produced before this sub-step existed.
+    targets: targets || undefined,
     rationale: typeof r.rationale === 'string' ? r.rationale.slice(0, 600) : '',
   };
 }
@@ -630,16 +800,21 @@ function normalizePlan(raw, restrictions, recommendableTypes) {
 async function handlePlan(req, res, apiKey, body) {
   const restrictions = sanitizeRestrictions(body.restrictions);
   const recommendableTypes = sanitizeActivityTypes(body.recommendableActivityTypes);
+  // Phase 3.1 — see this mode's own doc comment for the field's shape
+  // and sanitizeActiveWeekDisciplines's own comment for why null (not
+  // {}) means "nothing to do here, behave exactly as before".
+  const activeWeekDisciplines = sanitizeActiveWeekDisciplines(body.activeWeekDisciplines);
   const context = {
     recentStrengthSessions: Array.isArray(body.strengthSessions) ? body.strengthSessions.slice(0, 30) : [],
     recentExerciseNames: Array.isArray(body.recentExerciseNames) ? body.recentExerciseNames.slice(0, 30) : [],
     recentActivitySessions: Array.isArray(body.activitySessions) ? body.activitySessions.slice(0, 40) : [],
     whoop: body.whoop && typeof body.whoop === 'object' ? body.whoop : null,
     activeRestrictions: restrictions,
+    activeWeekDisciplines,
   };
 
   const text = await callClaude(apiKey, {
-    system: buildPlanSystemPrompt(restrictions, recommendableTypes),
+    system: buildPlanSystemPrompt(restrictions, recommendableTypes, activeWeekDisciplines),
     userContent: 'Recent history:\n' + JSON.stringify(context, null, 2),
     // Confirmed via the [plan debug] log (not assumed): stop_reason
     // was 'max_tokens' with 327 of the 800-token budget spent on
@@ -659,7 +834,7 @@ async function handlePlan(req, res, apiKey, body) {
   const parsed = extractJson(text);
   if (!parsed) return res.status(502).json({ ok: false, error: 'Model did not return valid JSON.' });
 
-  return res.status(200).json({ ok: true, plan: normalizePlan(parsed, restrictions, recommendableTypes) });
+  return res.status(200).json({ ok: true, plan: normalizePlan(parsed, restrictions, recommendableTypes, activeWeekDisciplines) });
 }
 
 // ------------------------------------------------------------

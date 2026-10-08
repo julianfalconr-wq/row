@@ -151,10 +151,24 @@ body {
 @media (max-width: 480px) { .plan-chart-wrap { height: 175px; } }
 
 .plan-checkpoints { margin-top: 20px; }
+.plan-checkpoints-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
 .plan-checkpoints-title {
   font-size: 10.5px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
-  color: var(--text-tertiary); margin-bottom: 10px;
+  color: var(--text-tertiary); margin-bottom: 0;
 }
+/* Phase 3.1 one-time backfill action — only shown while the active
+   running_distance plan's checkpoints have no `disciplines` yet (see
+   planBackfillEligible()'s own comment); hides itself permanently for
+   this plan the moment the backfill succeeds, same as any other
+   "nothing left to do here" affordance in this app. */
+.plan-backfill-btn {
+  padding: 5px 10px; border-radius: var(--radius-sm); border: 1px solid var(--line);
+  background: var(--inset-bg); color: var(--text-secondary);
+  font-family: inherit; font-size: 11px; font-weight: 600;
+  cursor: pointer; -webkit-tap-highlight-color: transparent; flex-shrink: 0;
+}
+.plan-backfill-btn:hover { background: var(--line-soft); color: var(--text-primary); }
+.plan-checkpoint-disciplines { font-size: 10.5px; color: var(--text-tertiary); margin-top: 2px; }
 .plan-checkpoint-row {
   display: flex; align-items: center; gap: 12px;
   padding: 10px 12px; border-radius: var(--radius-sm);
@@ -317,7 +331,10 @@ body {
     <div class="plan-chart-wrap"><canvas id="planChart"></canvas></div>
 
     <div class="plan-checkpoints">
-      <div class="plan-checkpoints-title">Weekly checkpoints</div>
+      <div class="plan-checkpoints-head">
+        <div class="plan-checkpoints-title">Weekly checkpoints</div>
+        <button type="button" class="plan-backfill-btn" id="planBackfillDisciplinesBtn" style="display:none">Backfill triathlon disciplines</button>
+      </div>
       <div id="planCheckpointList"></div>
     </div>
 
@@ -583,6 +600,64 @@ document.addEventListener('DOMContentLoaded', function () {
       return !!(j && j.ok);
     } catch (e) { return false; }
   }
+
+  // Phase 3.1 one-time backfill — the user's OWN real targets (given
+  // directly, not re-derived from anything stored), keyed by
+  // weekNumber so they attach to whichever real weekStartDate/
+  // targetValue each checkpoint already has, completely untouched.
+  // Source of truth is this literal data, not the existing plan text —
+  // see planBackfillEligible()'s own comment for why this can only
+  // ever apply to weeks 1-6 and only once per plan.
+  const PLAN_BACKFILL_DISCIPLINES = {
+    1: { disciplines: { run: { km: 18 }, swim: { sessions: 2, meters: 1000 }, bike: { km: 30 }, strength: { sessions: 3 } } },
+    2: { disciplines: { run: { km: 20 }, swim: { sessions: 2, meters: 1200 }, bike: { km: 35 }, strength: { sessions: 3 } } },
+    3: { disciplines: { run: { km: 20 }, swim: { sessions: 2, meters: 1400 }, bike: { km: 40 }, strength: { sessions: 3 } }, note: 'Swim: 300-400m continuous blocks' },
+    4: { disciplines: { run: { km: 22 }, swim: { sessions: 2, meters: 1600 }, bike: { km: 40 }, strength: { sessions: 3 } }, note: 'Swim: one 500m continuous attempt · Bike: one interval ride' },
+    5: { disciplines: { run: { km: 18 }, swim: { sessions: 2, meters: 1800 }, bike: { km: 45 }, strength: { sessions: 3 } }, note: 'Swim: one 750m race-pace simulation · Bike: one brick' },
+    6: { disciplines: { run: { km: 10 }, swim: { sessions: 2, meters: 1000 }, bike: { km: 20 }, strength: { sessions: 3 } }, note: 'Lighter weights — easy week' },
+  };
+  // Eligible only for the one plan this data actually describes
+  // (running_distance, since that's the only goalType that ever had a
+  // real numeric weekly target before this phase — see 3.1's own
+  // verification notes) AND only while at least one of weeks 1-6 is
+  // still missing `disciplines` — once applied, every week 1-6
+  // checkpoint carries it, so this naturally returns false forever
+  // after and the button stays hidden on every future render.
+  function planBackfillEligible(plan) {
+    if (!plan || plan.goalType !== 'running_distance' || !Array.isArray(plan.weeklyCheckpoints)) return false;
+    return plan.weeklyCheckpoints.some((cp) => PLAN_BACKFILL_DISCIPLINES[cp.weekNumber] && !cp.disciplines);
+  }
+  async function backfillPlanDisciplines(plan) {
+    const diffLines = [];
+    const newCheckpoints = plan.weeklyCheckpoints.map((cp) => {
+      const fill = PLAN_BACKFILL_DISCIPLINES[cp.weekNumber];
+      if (!fill || cp.disciplines) return cp; // no data for this week, or already backfilled — leave byte-for-byte as-is
+      diffLines.push('Week ' + cp.weekNumber + ': + ' + describeDisciplines(fill.disciplines) + (fill.note ? ' (' + fill.note + ')' : ''));
+      return Object.assign({}, cp, { disciplines: fill.disciplines, note: fill.note || cp.note });
+    });
+    if (!diffLines.length) return false; // nothing eligible — shouldn't happen given planBackfillEligible's own check, but never send a no-op patch
+    if (!confirm('Backfill these weekly discipline targets?\n\n' + diffLines.join('\n'))) return false;
+    const secret = getSecret();
+    if (!secret) { alert('Set your dashboard secret first.'); return false; }
+    try {
+      const r = await fetch('/api/sync-state?resource=plans&secret=' + encodeURIComponent(secret), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'update', id: plan.id, patch: { weeklyCheckpoints: newCheckpoints } }),
+      });
+      const j = await r.json();
+      if (!(j && j.ok)) { alert('Could not save — try again.'); return false; }
+      plan.weeklyCheckpoints = newCheckpoints;
+      return true;
+    } catch (e) { alert('Could not save: ' + (e.message || String(e))); return false; }
+  }
+  function describeDisciplines(d) {
+    const parts = [];
+    if (d.run && d.run.km) parts.push('Run ' + d.run.km + 'km');
+    if (d.bike && d.bike.km) parts.push('Bike ' + d.bike.km + 'km');
+    if (d.swim && d.swim.sessions) parts.push('Swim ' + d.swim.sessions + '×' + (d.swim.meters ? '~' + d.swim.meters + 'm' : ''));
+    if (d.strength && d.strength.sessions) parts.push('Strength ' + d.strength.sessions);
+    return parts.join(' · ');
+  }
   // Shared with main.html's own countdown badge — kept in sync by
   // hand per this project's established per-page small-duplication
   // convention (see e.g. trends.html's own date-helpers header
@@ -706,14 +781,30 @@ document.addEventListener('DOMContentLoaded', function () {
       const cpCurrent = plan.goalType === 'other' ? null : actualAsOf(plan, dataSources, asOf);
       const status = plan.goalType === 'other' ? 'upcoming' : checkpointStatus(plan, cp, cpCurrent, todayK);
       const statusLabel = { hit: 'Hit', missed: 'Missed', current: 'This week', upcoming: 'Upcoming' }[status];
+      // Phase 3.1: an optional per-discipline breakdown alongside the
+      // existing single numeric targetValue/dot/status machinery above
+      // — completely untouched by this, since that's still what drives
+      // the chart/progress bar/hit-or-missed logic for every goalType.
+      const disciplinesLine = cp.disciplines
+        ? '<div class="plan-checkpoint-disciplines">' + escapeHtml(describeDisciplines(cp.disciplines)) + (cp.note ? ' — ' + escapeHtml(cp.note) : '') + '</div>'
+        : '';
       return (
         '<div class="plan-checkpoint-row status-' + status + (status === 'current' ? ' is-current' : '') + '">' +
           '<div class="plan-checkpoint-dot"></div>' +
-          '<div class="plan-checkpoint-label">Week ' + cp.weekNumber + '<div class="plan-checkpoint-week">' + shortLabel(cp.weekStartDate) + ' – ' + shortLabel(weekEnd) + ' · ' + statusLabel + '</div></div>' +
+          '<div class="plan-checkpoint-label">Week ' + cp.weekNumber + '<div class="plan-checkpoint-week">' + shortLabel(cp.weekStartDate) + ' – ' + shortLabel(weekEnd) + ' · ' + statusLabel + '</div>' + disciplinesLine + '</div>' +
           '<div class="plan-checkpoint-val">' + formatValue(cp.targetValue, unit) + '</div>' +
         '</div>'
       );
     }).join('');
+
+    const backfillBtn = $('planBackfillDisciplinesBtn');
+    backfillBtn.style.display = planBackfillEligible(plan) ? 'inline-block' : 'none';
+    backfillBtn.onclick = async () => {
+      backfillBtn.disabled = true;
+      const ok = await backfillPlanDisciplines(plan);
+      backfillBtn.disabled = false;
+      if (ok) renderActivePlan(plan); // re-render: checkpoint list shows the new disciplines lines, button hides itself
+    };
   }
 
   // See .plan-multi-warning's own CSS comment — a defensive backstop
