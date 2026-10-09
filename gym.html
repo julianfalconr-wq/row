@@ -315,6 +315,31 @@ img, video, canvas, svg { max-width: 100%; }
 .tp-refresh-btn:disabled { opacity: 0.5; cursor: default; }
 .tp-empty { font-size: 13px; color: var(--text-3); line-height: 1.5; margin-bottom: 12px; }
 .tp-rationale { font-size: 12.5px; color: var(--text-3); line-height: 1.5; margin-top: 12px; }
+/* Phase 3.4 — capacity summary + week layout, both tolerate absence
+   (plans generated before this phase have neither key) via plain
+   display:none toggling, same convention as every other optional
+   section on this card. */
+.tp-capacity-line {
+  display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--text-3);
+  margin-bottom: 12px; padding: 8px 10px; background: rgba(255,255,255,0.025);
+  border: 1px solid var(--border); border-radius: 10px; flex-wrap: wrap;
+}
+.tp-capacity-trim-note { color: var(--warning, #E8B339); }
+.tp-layout { margin-top: 14px; }
+.tp-layout-title {
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--text-3); margin-bottom: 8px;
+}
+.tp-layout-day {
+  display: flex; align-items: baseline; gap: 8px; padding: 6px 0; font-size: 12px;
+  border-bottom: 1px solid var(--border); min-width: 0;
+}
+.tp-layout-day:last-child { border-bottom: none; }
+.tp-layout-day-label { flex-shrink: 0; width: 38px; font-weight: 700; color: var(--text-2); }
+.tp-layout-day-sessions { flex: 1; min-width: 0; color: var(--text-3); }
+.tp-layout-session { margin-right: 10px; }
+.tp-layout-session.is-done { color: var(--good); text-decoration: line-through; }
+.tp-layout-unplaced { margin-top: 8px; font-size: 11.5px; color: var(--text-3); }
 .tp-progress-row { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
 .tp-progress-label {
   display: flex; justify-content: space-between; font-size: 11.5px; color: var(--text-2); font-weight: 600;
@@ -1725,6 +1750,15 @@ img, video, canvas, svg { max-width: 100%; }
     </div>
     <div id="tpWeeklyEmpty" class="tp-empty">No objectives generated yet this week — tap the refresh icon to have Claude build a strength + triathlon training plan from your recent history.</div>
     <div id="tpWeeklyBody" style="display:none">
+      <!-- Phase 3.4 (amendment B): "Available this week: 6h20 across 5
+           days", plus a trim note when the week couldn't hold the
+           full target. Hidden entirely when capacity wasn't computed
+           (no availability template, or a plan generated before this
+           phase). -->
+      <div class="tp-capacity-line" id="tpCapacityLine" style="display:none">
+        <span id="tpCapacityText"></span>
+        <span class="tp-capacity-trim-note" id="tpCapacityTrimNote" style="display:none"></span>
+      </div>
       <div class="tp-progress-row">
         <div class="tp-progress-label"><span>Strength</span><span id="tpStrengthProgressText">0 of 0 sessions</span></div>
         <div class="tp-progress-track"><div class="tp-progress-fill" id="tpStrengthProgressFill" style="width:0%"></div></div>
@@ -1766,6 +1800,13 @@ img, video, canvas, svg { max-width: 100%; }
           <div class="tp-plan-item-head"><span class="tp-plan-item-label" id="tpEasyLabel">Easy volume</span><span class="tp-plan-item-value" id="tpEasyValue">—</span></div>
           <div class="tp-plan-item-desc" id="tpEasyDesc">—</div>
         </div>
+      </div>
+      <!-- Phase 3.4: compact per-day layout, tolerating plans with no
+           `layout` key at all (hidden entirely in that case). -->
+      <div class="tp-layout" id="tpLayoutSection" style="display:none">
+        <div class="tp-layout-title">This week's layout</div>
+        <div id="tpLayoutDays"></div>
+        <div class="tp-layout-unplaced" id="tpLayoutUnplaced" style="display:none"></div>
       </div>
       <div class="tp-rationale" id="tpRationale"></div>
     </div>
@@ -5679,6 +5720,55 @@ img, video, canvas, svg { max-width: 100%; }
     $$('tpEasyLabel').textContent = 'Easy volume' + (easyVolume.activityName ? ' — ' + easyVolume.activityName : '');
     $$('tpEasyValue').textContent = easyVolume.targetAmount + (easyVolume.unit ? ' ' + easyVolume.unit : '');
     $$('tpEasyDesc').textContent = easyVolume.description || '';
+
+    // Phase 3.4 (amendment B) — "Available this week: 6h20 across 5
+    // days" (spec's exact wording) + a trim note when anything had to
+    // be cut to fit. Absent entirely on a plan generated before this
+    // phase (no .availableSummary key at all) — hidden, not an empty line.
+    if (plan.availableSummary) {
+      const totalMin = plan.availableSummary.totalFreeMin;
+      const h = Math.floor(totalMin / 60), m = Math.round(totalMin % 60);
+      // Spec's own exact example format: "6h20" (no trailing 'm' when
+      // hours are present; zero-padded minutes), "45m" alone below 1h.
+      const timeLabel = h > 0 ? (h + 'h' + String(m).padStart(2, '0')) : (m + 'm');
+      $$('tpCapacityLine').style.display = 'flex';
+      $$('tpCapacityText').textContent = 'Available this week: ' + timeLabel + ' across ' + plan.availableSummary.daysWithTimeCount + ' day' + (plan.availableSummary.daysWithTimeCount === 1 ? '' : 's');
+      const hasTrim = typeof plan.capacityNote === 'string' && plan.capacityNote;
+      $$('tpCapacityTrimNote').style.display = hasTrim ? 'inline' : 'none';
+      $$('tpCapacityTrimNote').textContent = hasTrim ? plan.capacityNote : '';
+    } else {
+      $$('tpCapacityLine').style.display = 'none';
+    }
+
+    // Phase 3.4 — week layout: compact per-day list, done/pending from
+    // real logs. Tolerates plans with no `layout` key (every plan
+    // generated before this phase, or a week with nothing placeable)
+    // by hiding the section entirely.
+    if (Array.isArray(plan.layout) && plan.layout.length) {
+      $$('tpLayoutSection').style.display = 'block';
+      let doneDaysMap = {};
+      try { doneDaysMap = (window.PoCoach && window.PoCoach.getDoneDays()) || {}; } catch (e) {}
+      const WEEKDAY_SHORT = { sunday: 'Sun', monday: 'Mon', tuesday: 'Tue', wednesday: 'Wed', thursday: 'Thu', friday: 'Fri', saturday: 'Sat' };
+      $$('tpLayoutDays').innerHTML = plan.layout.map((day) => {
+        const sessionsHtml = day.sessions.map((s) => {
+          let isDone;
+          if (s.discipline === 'strength') {
+            isDone = !!doneDaysMap[day.dateKey];
+          } else {
+            isDone = activityEntries.some((a) => a.dateKey === day.dateKey && disciplineForActivityType(a.activityTypeId) === s.discipline);
+          }
+          const label = s.discipline === 'strength' ? 'Strength' : (s.activityName || s.discipline) + (s.targetAmount ? ' ' + s.targetAmount + s.unit : '');
+          return '<span class="tp-layout-session' + (isDone ? ' is-done' : '') + '">' + escapeHtml(label) + '</span>';
+        }).join('');
+        return '<div class="tp-layout-day"><span class="tp-layout-day-label">' + (WEEKDAY_SHORT[day.weekday] || day.weekday) + '</span><span class="tp-layout-day-sessions">' + sessionsHtml + '</span></div>';
+      }).join('');
+      const unplaced = Array.isArray(plan.unplaced) ? plan.unplaced : [];
+      $$('tpLayoutUnplaced').style.display = unplaced.length ? 'block' : 'none';
+      $$('tpLayoutUnplaced').textContent = unplaced.length ? ('Could not fit this week: ' + unplaced.map((u) => u.reason).join(' ')) : '';
+    } else {
+      $$('tpLayoutSection').style.display = 'none';
+    }
+
     $$('tpRationale').textContent = plan.rationale || '';
 
     return { plan, progress };
@@ -5725,6 +5815,206 @@ img, video, canvas, svg { max-width: 100%; }
     const pattern = DISCIPLINE_NAME_PATTERNS[disciplineKey];
     if (!pattern) return null;
     return types.find((t) => pattern.test(t.name || '')) || null;
+  }
+
+  // ---------- Phase 3.4 (amendment B): weekly capacity ----------
+  // For every remaining day THIS week (today through Sunday —
+  // thisWeekMondayKey() + 6 days, the same week-start the weekly plan
+  // itself already uses), compute in CODE: the day's actually-usable
+  // minutes (template/override budget AND real calendar free time,
+  // whichever is smaller — a session can't happen during a real
+  // conflict regardless of what the template says) and its allowed
+  // disciplines. Per-discipline weekly capacity = the SUM of days
+  // where that discipline is allowed, each day's minutes counted ONCE
+  // (a day can't be double-booked across disciplines) — an upper
+  // bound for "could this fit the week at all", not a conflict-free
+  // schedule (buildWeekLayout below handles actual day assignment).
+  // "needed" minutes reuse the exact SAME duration estimator Phase 2
+  // built (recentAvgPaceMinPerKm/GENERIC_FALLBACK_PACE_MIN_PER_KM for
+  // run/bike, recentAvgSwimPaceMinPer100m/BASIC_SWIMMER_PACE_MIN_PER_100M
+  // for swim) — computed HERE (client-side, where the logged-activity
+  // history actually lives) and sent to the server as plain pace
+  // figures, so api/training.js's own capacity backstop can re-check/
+  // re-trim with pure arithmetic, never needing this file's history.
+
+  // Generic free-window resolution for an ARBITRARY date — same
+  // "after midnight" rollover rule as resolveTodayBedtimeMs, just not
+  // anchored on "now": a day other than today hasn't started yet, so
+  // its whole wake-to-sleep window is open, not just the remainder
+  // after some already-elapsed time.
+  function resolveDayWindowMs(dateKeyStr, weekday) {
+    const profile = DayLib.loadProfile();
+    const entry = (profile.dayRingSchedule && profile.dayRingSchedule[weekday]) || {};
+    const wake = (typeof entry.wake === 'string' && entry.wake) || '08:00';
+    const sleep = (typeof entry.sleep === 'string' && entry.sleep) || '00:00';
+    const [wakeH, wakeM] = wake.split(':').map(Number);
+    const [sleepH, sleepM] = sleep.split(':').map(Number);
+    const wakeDate = DayLib.parseDateKey(dateKeyStr); wakeDate.setHours(wakeH, wakeM, 0, 0);
+    const bedtime = DayLib.parseDateKey(dateKeyStr); bedtime.setHours(sleepH, sleepM, 0, 0);
+    if (sleepH < wakeH || (sleepH === wakeH && sleepM <= wakeM)) bedtime.setDate(bedtime.getDate() + 1);
+    return { startMs: wakeDate.getTime(), endMs: bedtime.getTime() };
+  }
+  // Fully generic free-gap computation for an arbitrary
+  // [windowStartMs, windowEndMs) — Phase 2's computeTodayFreeGaps
+  // achieves the same thing for today specifically via
+  // todayCalendarWindow()'s own pre-filter; here the window bounds
+  // alone already restrict to the target day, so no separate filter
+  // is needed, and today's own row below still uses
+  // computeTodayFreeGaps unchanged (lower risk than rerouting
+  // already-tested Phase 2 code through this new generic version).
+  function computeFreeGapsInWindow(upcomingEvents, windowStartMs, windowEndMs) {
+    const events = (upcomingEvents || [])
+      .filter((ev) => !ev.allDay && ev.start && ev.end)
+      .map((ev) => ({ start: new Date(ev.start).getTime(), end: new Date(ev.end).getTime() }))
+      .filter((ev) => !isNaN(ev.start) && !isNaN(ev.end) && ev.end > windowStartMs && ev.start < windowEndMs)
+      .map((ev) => ({ start: Math.max(ev.start, windowStartMs), end: Math.min(ev.end, windowEndMs) }))
+      .sort((a, b) => a.start - b.start);
+    const gaps = [];
+    let cursor = windowStartMs;
+    events.forEach((ev) => {
+      if (ev.start > cursor) gaps.push({ startMs: cursor, endMs: ev.start });
+      cursor = Math.max(cursor, ev.end);
+    });
+    if (cursor < windowEndMs) gaps.push({ startMs: cursor, endMs: windowEndMs });
+    return gaps;
+  }
+  function sumGapMinutes(gaps) {
+    return gaps.reduce((sum, g) => sum + (g.endMs - g.startMs) / 60000, 0);
+  }
+
+  // gatherTodayContext()'s own calendar fetch only covers today + 5
+  // days (confirmed in topbar.js) — enough for every remaining day of
+  // the week EXCEPT when today is Monday (needs through Sunday, 6
+  // days ahead). Rather than special-case that one weekday, this
+  // always checks the actual coverage and, only when the week's last
+  // day falls outside it, does ONE supplemental range fetch through
+  // the SAME existing Google list action main.html/topbar.js already
+  // use (no new endpoint) for just the uncovered tail. Tolerates no
+  // Google connection at all (returns []) — every day's capacity then
+  // simply falls back to template minutes with no calendar
+  // subtraction, never an error.
+  const GOOGLE_KEY_CAPACITY = 'google_tokens_v1';
+  async function fetchExtraCalendarForCapacity(fromDateKey, toDateKey) {
+    let tokens = null;
+    try { tokens = JSON.parse(localStorage.getItem(GOOGLE_KEY_CAPACITY)); } catch (e) {}
+    if (!tokens || !tokens.access) return [];
+    async function refreshIfNeeded(t) {
+      if (!(t.expires && Date.now() > t.expires - 60000) || !t.refresh) return t;
+      try {
+        const r = await fetch('/api/google-callback?action=refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refresh_token: t.refresh }) });
+        const j = await r.json();
+        if (j.access_token) {
+          const next = { access: j.access_token, refresh: j.refresh_token || t.refresh, expires: Date.now() + (j.expires_in || 3500) * 1000 };
+          try { localStorage.setItem(GOOGLE_KEY_CAPACITY, JSON.stringify(next)); } catch (e) {}
+          return next;
+        }
+      } catch (e) {}
+      return t;
+    }
+    try {
+      const t = await refreshIfNeeded(tokens);
+      const qs = new URLSearchParams({ timeMin: fromDateKey + 'T00:00:00', timeMax: toDateKey + 'T23:59:59' }).toString();
+      const r = await fetch('/api/google-callback?action=list&' + qs, { headers: { Authorization: 'Bearer ' + t.access } });
+      if (!r.ok) return [];
+      const data = await r.json();
+      return (Array.isArray(data.items) ? data.items : []).map((ev) => ({
+        title: ev.summary || '(untitled)',
+        start: (ev.start && (ev.start.dateTime || ev.start.date)) || null,
+        end: (ev.end && (ev.end.dateTime || ev.end.date)) || null,
+        allDay: !!(ev.start && ev.start.date),
+      }));
+    } catch (e) { return []; }
+  }
+
+  // Full capacity summary sent to handlePlan. rawDisciplines is the
+  // SAME object fetchActiveWeekDisciplines() resolved (3.1) — may be
+  // null (no active-plan disciplines configured), in which case
+  // perDiscipline stays {} (still returns configured:true with
+  // perDay, useful context either way, but nothing to compare needed-
+  // vs-available for).
+  async function buildWeekCapacity(ctx, rawDisciplines) {
+    const availability = ctx && ctx.availability;
+    if (!availability || !availability.configured) return { configured: false };
+    const todayKey = DayLib.effectiveDateKey();
+    const mondayKey = thisWeekMondayKey();
+    const sundayDate = DayLib.parseDateKey(mondayKey); sundayDate.setDate(sundayDate.getDate() + 6);
+    const sundayKey = dateKey(sundayDate);
+
+    const upcoming = (ctx.calendar && Array.isArray(ctx.calendar.upcoming)) ? ctx.calendar.upcoming : [];
+    const coveredThroughDate = new Date(); coveredThroughDate.setDate(coveredThroughDate.getDate() + 5);
+    const coveredThroughKey = dateKey(coveredThroughDate);
+    let extraEvents = [];
+    if (sundayKey > coveredThroughKey) {
+      const fromKey = dateKey(new Date(coveredThroughDate.getTime() + 86400000));
+      extraEvents = await fetchExtraCalendarForCapacity(fromKey, sundayKey);
+    }
+    const allEvents = upcoming.concat(extraEvents);
+
+    const perDay = [];
+    const cursor = DayLib.parseDateKey(todayKey);
+    while (dateKey(cursor) <= sundayKey) {
+      const dk = dateKey(cursor);
+      const weekday = AVAIL_WEEKDAY_NAMES[cursor.getDay()];
+      let dayAvail, win, gaps;
+      if (dk === todayKey) {
+        dayAvail = availability.today || { minutes: null, disciplines: {} };
+        const nowMs = Date.now();
+        const bedtimeMs = resolveTodayBedtimeMs();
+        gaps = computeTodayFreeGaps(allEvents, nowMs, bedtimeMs);
+        win = { startMs: nowMs, endMs: bedtimeMs };
+      } else {
+        dayAvail = (availability.thisWeek || []).find((d) => d.weekday === weekday) || { minutes: null, disciplines: {} };
+        win = resolveDayWindowMs(dk, weekday);
+        gaps = computeFreeGapsInWindow(allEvents, win.startMs, win.endMs);
+      }
+      const freeMin = Math.round(sumGapMinutes(gaps));
+      const rawBudget = dayAvail.minutes;
+      const windowMin = Math.max(0, Math.round((win.endMs - win.startMs) / 60000));
+      const budgetMin = rawBudget != null ? Math.min(rawBudget, windowMin) : null;
+      // The day's REALISTIC usable minutes: template cap AND real
+      // calendar gaps both applied — a session can't happen during an
+      // actual conflict no matter what the template says.
+      const availableMin = budgetMin != null ? Math.min(budgetMin, freeMin) : freeMin;
+      perDay.push({
+        weekday, dateKey: dk,
+        availableMin: Math.round(availableMin),
+        allowedDisciplines: dayAvail.disciplines || { swim: false, bike: false, run: false, strength: false },
+      });
+      cursor.setDate(cursor.getDate() + 1);
+    }
+
+    function capacityForDiscipline(disc) {
+      return perDay.filter((d) => d.allowedDisciplines[disc] !== false).reduce((sum, d) => sum + d.availableMin, 0);
+    }
+    const swimAllowedDaysCount = perDay.filter((d) => d.allowedDisciplines.swim !== false).length;
+
+    const perDiscipline = {};
+    if (rawDisciplines && rawDisciplines.run && rawDisciplines.run.km) {
+      const pace = recentAvgPaceMinPerKm(rawDisciplines.run.activityTypeId) || GENERIC_FALLBACK_PACE_MIN_PER_KM;
+      perDiscipline.run = { neededMin: Math.round(rawDisciplines.run.km * pace), availableMin: Math.round(capacityForDiscipline('run')), paceMinPerKm: pace };
+    }
+    if (rawDisciplines && rawDisciplines.bike && rawDisciplines.bike.km) {
+      const pace = recentAvgPaceMinPerKm(rawDisciplines.bike.activityTypeId) || GENERIC_FALLBACK_PACE_MIN_PER_KM;
+      perDiscipline.bike = { neededMin: Math.round(rawDisciplines.bike.km * pace), availableMin: Math.round(capacityForDiscipline('bike')), paceMinPerKm: pace };
+    }
+    if (rawDisciplines && rawDisciplines.swim && rawDisciplines.swim.sessions) {
+      const pace = recentAvgSwimPaceMinPer100m(rawDisciplines.swim.activityTypeId) || BASIC_SWIMMER_PACE_MIN_PER_100M;
+      const neededMin = Math.round(((Number(rawDisciplines.swim.meters) || 0) / 100) * pace);
+      perDiscipline.swim = { neededMin, availableMin: Math.round(capacityForDiscipline('swim')), paceMinPer100m: pace, swimAllowedDaysCount };
+    }
+    if (rawDisciplines && rawDisciplines.strength && rawDisciplines.strength.sessions) {
+      perDiscipline.strength = { neededMin: rawDisciplines.strength.sessions * DEFAULT_SESSION_MINUTES.strength, availableMin: Math.round(capacityForDiscipline('strength')) };
+    }
+
+    const totalFreeMin = perDay.reduce((sum, d) => sum + d.availableMin, 0);
+    return {
+      configured: true,
+      totalFreeMin: Math.round(totalFreeMin),
+      daysWithTimeCount: perDay.filter((d) => d.availableMin > 0).length,
+      preferredLongDay: availability.preferredLongDay || null,
+      perDiscipline,
+      perDay,
+    };
   }
 
   async function generateWeeklyPlan() {
@@ -5798,9 +6088,25 @@ img, video, canvas, svg { max-width: 100%; }
         if (rawDisciplines.strength) activeWeekDisciplines.strength = rawDisciplines.strength;
       }
 
+      // Phase 3.4 — capacity summary (needed vs available per
+      // discipline, per-day budgets) for the SAME week the targets
+      // above are for. Any failure anywhere in this chain
+      // (gatherTodayContext not ready, no availability template,
+      // network error) collapses to {configured:false}, which gets
+      // zero new prompt section server-side — never blocks generating
+      // the plan itself.
+      let capacity = { configured: false };
+      try {
+        const ready = await waitForGatherTodayContext(3000);
+        if (ready) {
+          const ctx = await window.gatherTodayContext();
+          capacity = await buildWeekCapacity(ctx, activeWeekDisciplines);
+        }
+      } catch (e) { capacity = { configured: false }; }
+
       const res = await fetch('/api/training?mode=plan&secret=' + encodeURIComponent(secret), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ strengthSessions, recentExerciseNames, activitySessions, recommendableActivityTypes, whoop, restrictions, activeWeekDisciplines }),
+        body: JSON.stringify({ strengthSessions, recentExerciseNames, activitySessions, recommendableActivityTypes, whoop, restrictions, activeWeekDisciplines, capacity }),
       });
       const json = await res.json();
       if (!res.ok || !json.ok) throw new Error((json && json.error) || ('HTTP ' + res.status));

@@ -63,6 +63,20 @@
 //       swim: { sessions: Number, meters: Number, activityTypeId: String|null } | undefined,
 //       strength: { sessions: Number } | undefined,
 //     } | null,
+//     capacity: {   // Phase 3.4 — gym.html's buildWeekCapacity(): this week's REAL remaining-day
+//     // availability/calendar capacity, computed client-side (that's where Google Calendar access and
+//     // logged-activity pace history live). configured:false (the only other shape) when no availability
+//     // template exists — the response then has no capacityNote/layout/unplaced at all, byte-for-byte the
+//     // pre-3.4 shape.
+//       perDiscipline: {
+//         run: { neededMin: Number, availableMin: Number, paceMinPerKm: Number } | undefined,
+//         bike: { neededMin: Number, availableMin: Number, paceMinPerKm: Number } | undefined,
+//         swim: { neededMin: Number, availableMin: Number, paceMinPer100m: Number, swimAllowedDaysCount: Number } | undefined,
+//         strength: { neededMin: Number, availableMin: Number } | undefined,
+//       },
+//       perDay: [{ weekday: String, dateKey: String, availableMin: Number, allowedDisciplines: {swim,bike,run,strength: Boolean} }],
+//       preferredLongDay: String | null,
+//     } | undefined,
 //   }
 //   -> { ok: true, plan: {
 //     strength: { targetSessions: Number, focus: String },
@@ -85,6 +99,25 @@
 //       swim: { activityTypeId: String|null, activityName: String, sessions: Number, meters: Number },
 //       strength: { sessions: Number },
 //     } | undefined,
+//     // Phase 3.4 — capacityNote/layout/unplaced are ALL absent (not null) whenever targets or capacity
+//     // isn't configured, so a legacy/unconfigured response stays byte-for-byte what this endpoint already
+//     // produced before this phase existed. capacityNote is set only when applyCapacityBackstop actually
+//     // had to reduce a discipline's number to fit the week's real free time (the deterministic, code-only
+//     // guarantee behind "never present a target the week cannot hold" — targets above are already final).
+//     capacityNote: String | undefined,
+//     availableSummary: { totalFreeMin: Number, daysWithTimeCount: Number } | undefined,   // the card's
+//     // "Available this week: 6h20 across 5 days" line — present whenever capacity was configured,
+//     // trimmed or not.
+//     // layout: each remaining day that received at least one session (days with nothing placed are
+//     // simply absent, not an empty entry). Each session is pre-sized in code (buildSessionsToPlace) —
+//     // the model only chose WHICH day; code re-validated every placement (budget, allowed discipline, no
+//     // two hard:true sessions on adjacent dates) before this shape was built (buildFinalLayout).
+//     layout: [{ weekday: String, dateKey: String, sessions: [{ id, discipline, kind, activityTypeId: String|null, activityName: String, targetAmount: Number|null, unit: String, estMinutes: Number }] }] | undefined,
+//     // unplaced: every targets-mode session that could NOT be placed anywhere this week, each with a
+//     // real reason — never silently dropped. Includes sessions seeded unplaceable before the model was
+//     // even asked (e.g. a discipline with no allowed day at all this week) as well as ones the model
+//     // failed to place or whose placement violated a constraint.
+//     unplaced: [{ id: String, reason: String }] | undefined,
 //     rationale: String,
 //   } }
 //
@@ -586,10 +619,14 @@ function buildPlanSystemPrompt(restrictions, recommendableTypes, activeWeekDisci
         easyVolume: { activityTypeId: 'id from the list above, or null', activityName: 'name, or ""', targetAmount: 10, unit: 'the chosen type\'s own unit', description: 'concrete guidance, e.g. "2-3 easy sessions, conversational effort"' },
       },
       rationale: '1-3 sentences explaining the targets AND which activity type went where, given the recent history provided',
+      assignments: [{ id: 'exact id from sessionsToPlace below, if any was given', dateKey: 'exact dateKey from feasibleDays below' }],
+      unplaced: [{ id: 'exact id from sessionsToPlace that could not be placed', reason: 'short, specific reason' }],
     }, null, 2) +
     '\n\nEvery number must be concrete (sessions, distance/count amount, or minutes) — never vague advice ' +
     'like "do more cardio". If recent history is thin or empty, use sensible conservative defaults for ' +
-    'someone building both VO2 max and aerobic capacity, and say so in the rationale.'
+    'someone building both VO2 max and aerobic capacity, and say so in the rationale. assignments/unplaced ' +
+    'are ONLY relevant when the WEEK LAYOUT section below gives you a non-empty sessionsToPlace list — ' +
+    'otherwise leave both as empty arrays.'
   );
 }
 
@@ -780,7 +817,289 @@ function describeActiveWeekDisciplinesForPrompt(activeWeekDisciplines, types) {
   return parts.join('; ');
 }
 
-function normalizePlan(raw, restrictions, recommendableTypes, activeWeekDisciplines) {
+// ------------------------------------------------------------
+// Phase 3.4 (amendment B) — capacity-aware targets + week layout.
+// Capacity itself (perDay/perDiscipline, including the pace figures
+// used to compute "needed" minutes) is computed CLIENT-SIDE
+// (gym.html's buildWeekCapacity — that's where the real Google
+// Calendar access and logged-activity pace history actually live);
+// this server re-validates the shape defensively but does the
+// capacity-vs-target ARITHMETIC itself from the numbers given, never
+// asking the model to do it (same "all arithmetic in code" rule as
+// everywhere else in this file).
+// ------------------------------------------------------------
+
+const WEEKDAY_SET = new Set(['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']);
+const CAPACITY_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+function sanitizeCapacityPerDiscipline(raw) {
+  const out = {};
+  ['run', 'bike'].forEach((disc) => {
+    const d = raw && raw[disc];
+    if (!d || typeof d !== 'object') return;
+    out[disc] = {
+      neededMin: Math.max(0, num(d.neededMin, 0)),
+      availableMin: Math.max(0, num(d.availableMin, 0)),
+      paceMinPerKm: num(d.paceMinPerKm, 6),
+    };
+  });
+  if (raw && raw.swim && typeof raw.swim === 'object') {
+    out.swim = {
+      neededMin: Math.max(0, num(raw.swim.neededMin, 0)),
+      availableMin: Math.max(0, num(raw.swim.availableMin, 0)),
+      paceMinPer100m: num(raw.swim.paceMinPer100m, 2.5),
+      swimAllowedDaysCount: Math.max(0, Math.round(num(raw.swim.swimAllowedDaysCount, 0))),
+    };
+  }
+  if (raw && raw.strength && typeof raw.strength === 'object') {
+    out.strength = { neededMin: Math.max(0, num(raw.strength.neededMin, 0)), availableMin: Math.max(0, num(raw.strength.availableMin, 0)) };
+  }
+  return out;
+}
+function sanitizeCapacityPerDay(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw.slice(0, 7).map((d) => {
+    const weekday = (d && typeof d.weekday === 'string' && WEEKDAY_SET.has(d.weekday)) ? d.weekday : null;
+    const dateKey = (d && typeof d.dateKey === 'string' && CAPACITY_DATE_RE.test(d.dateKey)) ? d.dateKey : null;
+    const rawDisc = (d && d.allowedDisciplines && typeof d.allowedDisciplines === 'object') ? d.allowedDisciplines : {};
+    return {
+      weekday, dateKey,
+      availableMin: Math.max(0, Math.round(num(d && d.availableMin, 0))),
+      allowedDisciplines: {
+        swim: rawDisc.swim !== false, bike: rawDisc.bike !== false, run: rawDisc.run !== false, strength: rawDisc.strength !== false,
+      },
+    };
+  }).filter((d) => d.weekday && d.dateKey);
+}
+// null (not {}) when nothing to act on — same "collapse to the
+// pre-existing behavior" convention sanitizeActiveWeekDisciplines
+// already established.
+function sanitizeCapacity(raw) {
+  if (!raw || typeof raw !== 'object' || !raw.configured) return { configured: false };
+  return {
+    configured: true,
+    perDiscipline: sanitizeCapacityPerDiscipline(raw.perDiscipline),
+    perDay: sanitizeCapacityPerDay(raw.perDay),
+    preferredLongDay: (typeof raw.preferredLongDay === 'string' && WEEKDAY_SET.has(raw.preferredLongDay)) ? raw.preferredLongDay : null,
+  };
+}
+
+// The ONE hard guarantee from the task spec — "never present a target
+// the week cannot hold" — is enforced HERE, deterministically, not
+// left to the model's compliance. Trim order: running first, then
+// bike (per spec); swim is never trimmed below 2 sessions while swim
+// is allowed on at least 2 days this week (also per spec) — if swim
+// genuinely can't fit even at 2 sessions, that's buildUnplaceableSeed/
+// the layout step's problem (reported as unplaced), not this
+// function's: it only ever reduces swim's SESSION COUNT for capacity
+// purposes down to the floor, never all the way to 0 on its own.
+// Strength is included for completeness (spec: "apply the same logic
+// if truly needed") but, at a flat 45min/session, rarely binds.
+function applyCapacityBackstop(targets, capacity) {
+  if (!capacity || !capacity.configured) return { targets, trimNote: null };
+  const out = JSON.parse(JSON.stringify(targets));
+  const notes = [];
+  ['run', 'bike'].forEach((disc) => {
+    const cap = capacity.perDiscipline[disc];
+    const t = out[disc];
+    if (!cap || !t || !t.km || !cap.paceMinPerKm) return;
+    const estMin = t.km * cap.paceMinPerKm;
+    if (cap.availableMin != null && estMin > cap.availableMin) {
+      const maxKm = Math.max(0, cap.availableMin / cap.paceMinPerKm);
+      const newKm = Math.round(maxKm * 10) / 10;
+      if (newKm < t.km) {
+        notes.push(disc + ' ' + t.km + 'km -> ' + newKm + 'km');
+        t.km = newKm;
+      }
+    }
+  });
+  const swimCap = capacity.perDiscipline.swim;
+  if (swimCap && out.swim && out.swim.sessions && swimCap.paceMinPer100m) {
+    const metersPerSession = out.swim.sessions ? out.swim.meters / out.swim.sessions : 0;
+    const floor = swimCap.swimAllowedDaysCount >= 2 ? 2 : 0;
+    const originalSessions = out.swim.sessions;
+    let estMin = out.swim.sessions * (metersPerSession / 100) * swimCap.paceMinPer100m;
+    while (swimCap.availableMin != null && estMin > swimCap.availableMin && out.swim.sessions > floor) {
+      out.swim.sessions -= 1;
+      estMin = out.swim.sessions * (metersPerSession / 100) * swimCap.paceMinPer100m;
+    }
+    if (out.swim.sessions < originalSessions) {
+      out.swim.meters = Math.round(out.swim.sessions * metersPerSession);
+      notes.push('swim ' + originalSessions + ' -> ' + out.swim.sessions + ' sessions');
+    }
+  }
+  const strengthCap = capacity.perDiscipline.strength;
+  if (strengthCap && out.strength && out.strength.sessions) {
+    const perSessionMin = 45;
+    const originalSessions = out.strength.sessions;
+    while (strengthCap.availableMin != null && out.strength.sessions * perSessionMin > strengthCap.availableMin && out.strength.sessions > 0) {
+      out.strength.sessions -= 1;
+    }
+    if (out.strength.sessions < originalSessions) notes.push('strength ' + originalSessions + ' -> ' + out.strength.sessions + ' sessions');
+  }
+  return {
+    targets: out,
+    trimNote: notes.length ? ('Trimmed to fit this week\'s available time: ' + notes.join(', ') + '.') : null,
+  };
+}
+
+// Informational only (the trim decision above is already final by
+// the time this prompt section is built) — lets the model's own
+// rationale mention the trim coherently instead of contradicting it.
+function buildCapacityPromptSection(capacity, trimNote) {
+  if (!capacity || !capacity.configured) return '';
+  return (
+    'CAPACITY (Phase 3.4) — this week\'s realistic free time has ALREADY been checked against the targets ' +
+    'above in code, and any trim needed to make them fit has ALREADY been applied (see targets themselves — ' +
+    'they are already the final, capacity-aware numbers). ' +
+    (trimNote ? trimNote + ' ' : 'Nothing needed trimming this week — the targets above already fit. ') +
+    'Mention this plainly in your rationale if a trim happened; do not re-propose different numbers or imply ' +
+    'a different trim than the one already stated.\n\n'
+  );
+}
+
+// ---------------------------------------------------------------
+// Phase 3.4 — week layout. Each discipline's (already capacity-
+// final) target is split into discrete, already-SIZED sessions in
+// CODE (session count/sizing is a documented heuristic, not asked of
+// the model); the model's only job is to ASSIGN each session's id to
+// one feasible day, and code re-validates every assignment afterward
+// — budget, allowed discipline, and no two "hard" sessions on
+// adjacent calendar dates — dropping violations into `unplaced`
+// rather than trusting placement blindly.
+// ---------------------------------------------------------------
+
+function buildSessionsToPlace(targets, capacity) {
+  const sessions = [];
+  const perDiscipline = (capacity && capacity.configured) ? capacity.perDiscipline : {};
+  ['run', 'bike'].forEach((disc) => {
+    const t = targets[disc];
+    if (!t || !t.km || !t.activityTypeId) return;
+    const pace = (perDiscipline[disc] && perDiscipline[disc].paceMinPerKm) || 6;
+    const longKm = Math.round(t.km * 0.6 * 10) / 10;
+    const easyKm = Math.round((t.km - longKm) * 10) / 10;
+    sessions.push({ id: disc + '-long', discipline: disc, kind: 'long', activityTypeId: t.activityTypeId, activityName: t.activityName, targetAmount: longKm, unit: 'km', estMinutes: Math.round(longKm * pace), hard: true });
+    if (easyKm >= 1) sessions.push({ id: disc + '-easy', discipline: disc, kind: 'easy', activityTypeId: t.activityTypeId, activityName: t.activityName, targetAmount: easyKm, unit: 'km', estMinutes: Math.round(easyKm * pace), hard: false });
+  });
+  if (targets.swim && targets.swim.sessions > 0 && targets.swim.activityTypeId) {
+    const pace = (perDiscipline.swim && perDiscipline.swim.paceMinPer100m) || 2.5;
+    const metersPerSession = Math.round((Number(targets.swim.meters) || 0) / targets.swim.sessions);
+    const est = Math.round((metersPerSession / 100) * pace);
+    for (let i = 0; i < targets.swim.sessions; i++) {
+      sessions.push({ id: 'swim-' + i, discipline: 'swim', kind: 'session', activityTypeId: targets.swim.activityTypeId, activityName: targets.swim.activityName, targetAmount: metersPerSession, unit: 'm', estMinutes: est, hard: false });
+    }
+  }
+  if (targets.strength && targets.strength.sessions > 0) {
+    for (let i = 0; i < targets.strength.sessions; i++) {
+      sessions.push({ id: 'strength-' + i, discipline: 'strength', kind: 'strength', activityTypeId: null, activityName: 'Strength', targetAmount: null, unit: '', estMinutes: 45, hard: false });
+    }
+  }
+  return sessions;
+}
+// A discipline with a real target but NO day this week allows it at
+// all is categorically unplaceable — not something a smarter
+// placement could ever fix. Checked BEFORE ever asking the model, so
+// "a no-swim-days week reports swim as unplaceable" is guaranteed by
+// code, not dependent on model behavior.
+function buildUnplaceableSeed(targets, capacity) {
+  const seed = [];
+  if (!capacity || !capacity.configured || !capacity.perDay.length) return seed;
+  ['run', 'bike', 'swim', 'strength'].forEach((disc) => {
+    const t = targets[disc];
+    const hasTarget = (disc === 'swim' || disc === 'strength') ? (t && t.sessions > 0) : (t && t.km > 0);
+    if (!hasTarget) return;
+    const anyDayAllows = capacity.perDay.some((d) => d.allowedDisciplines[disc] !== false);
+    if (!anyDayAllows) seed.push({ id: disc, reason: 'No day this week allows ' + disc + '.' });
+  });
+  return seed;
+}
+function buildLayoutPromptSection(sessionsToPlace, capacity) {
+  if (!sessionsToPlace.length || !capacity || !capacity.configured || !capacity.perDay.length) return '';
+  return (
+    'WEEK LAYOUT (Phase 3.4) — sessionsToPlace lists every session that needs a day this week, already ' +
+    'sized (estMinutes) in code; feasibleDays (in capacity.perDay below) lists each remaining day\'s real ' +
+    'availableMin and allowedDisciplines. Assign EVERY sessionsToPlace entry to exactly one feasibleDays ' +
+    'dateKey such that: the day\'s allowedDisciplines allows that session\'s discipline; the sum of ' +
+    'estMinutes for everything you assign to that day does not exceed its availableMin; and no two ' +
+    'sessions with hard:true land on calendar-adjacent dates (e.g. not both Tuesday and Wednesday). Prefer ' +
+    'capacity.preferredLongDay for a hard:true session when that day is actually feasible for it — a soft ' +
+    'preference, not a hard requirement. If a session genuinely cannot be placed anywhere under these rules, ' +
+    'do not force it — list its id in unplaced with a short, specific reason instead. Every sessionsToPlace ' +
+    'id must end up EITHER in assignments OR in unplaced, never neither.\nsessionsToPlace:\n' +
+    JSON.stringify(sessionsToPlace, null, 2) + '\n\n'
+  );
+}
+const HARD_ADJACENT_MS = 86400000;
+function sanitizeAssignments(raw, sessionsToPlace, perDay) {
+  const validIds = new Set(sessionsToPlace.map((s) => s.id));
+  const validDates = new Set(perDay.map((d) => d.dateKey));
+  if (!Array.isArray(raw)) return [];
+  return raw.slice(0, 20)
+    .filter((a) => a && typeof a.id === 'string' && validIds.has(a.id) && typeof a.dateKey === 'string' && validDates.has(a.dateKey))
+    .map((a) => ({ id: a.id, dateKey: a.dateKey }));
+}
+// The actual re-validation — never trusts a placement just because
+// the model proposed it (same discipline as
+// dropBlocksOverlappingFixedEvents elsewhere in this file): rebuilds
+// each day's running total from scratch in assignment order, drops
+// (into unplaced) anything that would blow the day's budget, land on
+// a disallowed discipline, or stack a second hard:true session next
+// to another one already placed on an adjacent date.
+function buildFinalLayout(assignments, sessionsToPlace, perDay, unplacedSeed) {
+  const sessionById = {};
+  sessionsToPlace.forEach((s) => { sessionById[s.id] = s; });
+  const dayByDate = {};
+  perDay.forEach((d) => { dayByDate[d.dateKey] = { weekday: d.weekday, dateKey: d.dateKey, availableMin: d.availableMin, allowedDisciplines: d.allowedDisciplines, usedMin: 0, sessions: [] }; });
+  const hardDates = new Set();
+  const unplaced = unplacedSeed.slice();
+  const seededIds = new Set(unplaced.map((u) => u.id));
+  const placedIds = new Set();
+
+  assignments.forEach((a) => {
+    if (seededIds.has(a.id) || placedIds.has(a.id)) return; // already resolved (seeded-unplaceable, or a duplicate assignment for the same id)
+    const session = sessionById[a.id];
+    const day = dayByDate[a.dateKey];
+    if (!session || !day) return;
+    if (day.allowedDisciplines[session.discipline] === false) {
+      unplaced.push({ id: a.id, reason: session.discipline + ' is not allowed on ' + day.weekday + '.' });
+      return;
+    }
+    if (day.usedMin + session.estMinutes > day.availableMin) {
+      unplaced.push({ id: a.id, reason: 'Does not fit ' + day.weekday + '\'s available time (' + day.availableMin + ' min).' });
+      return;
+    }
+    if (session.hard) {
+      const thisMs = Date.parse(a.dateKey);
+      const adjacent = [...hardDates].some((hd) => Math.abs(Date.parse(hd) - thisMs) === HARD_ADJACENT_MS);
+      if (adjacent) {
+        unplaced.push({ id: a.id, reason: 'Would stack two demanding sessions on back-to-back days.' });
+        return;
+      }
+      hardDates.add(a.dateKey);
+    }
+    day.usedMin += session.estMinutes;
+    day.sessions.push({ id: session.id, discipline: session.discipline, kind: session.kind, activityTypeId: session.activityTypeId, activityName: session.activityName, targetAmount: session.targetAmount, unit: session.unit, estMinutes: session.estMinutes });
+    placedIds.add(a.id);
+  });
+
+  // Every sessionsToPlace id ends up EITHER placed OR in unplaced —
+  // never silently dropped (same guarantee reconcileUserActivities
+  // already provides for day-plan's userActivities elsewhere in this
+  // file), covering both a session the model forgot to assign at all
+  // and one whose assignment got dropped by the validation above.
+  sessionsToPlace.forEach((s) => {
+    if (!placedIds.has(s.id) && !seededIds.has(s.id) && !unplaced.some((u) => u.id === s.id)) {
+      unplaced.push({ id: s.id, reason: 'Could not be placed — no day both allowed this discipline and had enough free time.' });
+    }
+  });
+
+  const layout = Object.values(dayByDate)
+    .filter((d) => d.sessions.length)
+    .sort((a, b) => a.dateKey.localeCompare(b.dateKey))
+    .map((d) => ({ weekday: d.weekday, dateKey: d.dateKey, sessions: d.sessions }));
+  return { layout, unplaced };
+}
+
+function normalizePlan(raw, restrictions, recommendableTypes, activeWeekDisciplines, capacity) {
   const restricted = restrictedScopeSet(restrictions);
   const types = Array.isArray(recommendableTypes) ? recommendableTypes : [];
   const r = raw || {};
@@ -790,8 +1109,35 @@ function normalizePlan(raw, restrictions, recommendableTypes, activeWeekDiscipli
   // hard-override-to-0 enforcement as before.
   const strengthRestricted = restricted.has('strength');
 
-  const targets = activeWeekDisciplines ? buildTargetsFromActiveWeek(activeWeekDisciplines, types, restricted, strengthRestricted) : null;
+  let targets = activeWeekDisciplines ? buildTargetsFromActiveWeek(activeWeekDisciplines, types, restricted, strengthRestricted) : null;
+  // Phase 3.4 — capacity-aware trim, deterministic, applied BEFORE
+  // anything downstream (legacy-slot mirror, layout session sizing)
+  // ever sees `targets` — "never present a target the week cannot
+  // hold" is a hard guarantee from code, not a model-compliance hope.
+  let trimNote = null;
+  if (targets) {
+    const trimmed = applyCapacityBackstop(targets, capacity);
+    targets = trimmed.targets;
+    trimNote = trimmed.trimNote;
+  }
   const legacyOverride = targets ? deriveLegacyCardioFromTargets(targets, cardio) : null;
+
+  // Phase 3.4 — week layout: only meaningful when there's a real,
+  // capacity-final `targets` to build sessions from AND real capacity
+  // day-slots to place them into. sessionsToPlace/unplaceableSeed are
+  // recomputed here (not trusted from earlier in the request) so they
+  // always reflect the FINAL, trimmed targets.
+  let layout = undefined;
+  let unplaced = undefined;
+  if (targets && capacity && capacity.configured && capacity.perDay.length) {
+    const sessionsToPlace = buildSessionsToPlace(targets, capacity);
+    const unplaceableSeed = buildUnplaceableSeed(targets, capacity);
+    const placeableSessions = sessionsToPlace.filter((s) => !unplaceableSeed.some((u) => u.id === s.discipline));
+    const assignments = sanitizeAssignments(r.assignments, placeableSessions, capacity.perDay);
+    const built = buildFinalLayout(assignments, placeableSessions, capacity.perDay, unplaceableSeed);
+    layout = built.layout;
+    unplaced = built.unplaced;
+  }
 
   return {
     strength: {
@@ -808,6 +1154,14 @@ function normalizePlan(raw, restrictions, recommendableTypes, activeWeekDiscipli
     // unconfigured/legacy response is byte-for-byte what this endpoint
     // already produced before this sub-step existed.
     targets: targets || undefined,
+    capacityNote: trimNote || undefined,
+    // "Available this week: 6h20 across 5 days" — the card's own
+    // one-line summary (spec's exact wording), computed straight from
+    // the client-provided capacity totals, present only alongside a
+    // real capacity computation.
+    availableSummary: (capacity && capacity.configured) ? { totalFreeMin: capacity.perDay.reduce((s, d) => s + d.availableMin, 0), daysWithTimeCount: capacity.perDay.filter((d) => d.availableMin > 0).length } : undefined,
+    layout,
+    unplaced,
     rationale: typeof r.rationale === 'string' ? r.rationale.slice(0, 600) : '',
   };
 }
@@ -819,6 +1173,27 @@ async function handlePlan(req, res, apiKey, body) {
   // and sanitizeActiveWeekDisciplines's own comment for why null (not
   // {}) means "nothing to do here, behave exactly as before".
   const activeWeekDisciplines = sanitizeActiveWeekDisciplines(body.activeWeekDisciplines);
+  // Phase 3.4 — see sanitizeCapacity's own comment.
+  const capacity = sanitizeCapacity(body.capacity);
+  // Pre-compute the FINAL targets/trim/sessions BEFORE calling the
+  // model, so the layout prompt section can list real feasible
+  // sessions in the SAME call (one round trip, not two) — see
+  // buildSessionsToPlace's own header comment on why sizing happens
+  // in code rather than being asked of the model at all.
+  const types = recommendableTypes;
+  const restrictedScopes = restrictedScopeSet(restrictions);
+  const strengthRestrictedForLayout = restrictedScopes.has('strength');
+  let preTargets = activeWeekDisciplines ? buildTargetsFromActiveWeek(activeWeekDisciplines, types, restrictedScopes, strengthRestrictedForLayout) : null;
+  let preTrimNote = null;
+  if (preTargets) {
+    const trimmed = applyCapacityBackstop(preTargets, capacity);
+    preTargets = trimmed.targets;
+    preTrimNote = trimmed.trimNote;
+  }
+  const sessionsToPlace = preTargets ? buildSessionsToPlace(preTargets, capacity) : [];
+  const unplaceableSeed = preTargets ? buildUnplaceableSeed(preTargets, capacity) : [];
+  const placeableSessions = sessionsToPlace.filter((s) => !unplaceableSeed.some((u) => u.id === s.discipline));
+
   const context = {
     recentStrengthSessions: Array.isArray(body.strengthSessions) ? body.strengthSessions.slice(0, 30) : [],
     recentExerciseNames: Array.isArray(body.recentExerciseNames) ? body.recentExerciseNames.slice(0, 30) : [],
@@ -829,7 +1204,9 @@ async function handlePlan(req, res, apiKey, body) {
   };
 
   const text = await callClaude(apiKey, {
-    system: buildPlanSystemPrompt(restrictions, recommendableTypes, activeWeekDisciplines),
+    system: buildPlanSystemPrompt(restrictions, recommendableTypes, activeWeekDisciplines)
+      + buildCapacityPromptSection(capacity, preTrimNote)
+      + buildLayoutPromptSection(placeableSessions, capacity),
     userContent: 'Recent history:\n' + JSON.stringify(context, null, 2),
     // Confirmed via the [plan debug] log (not assumed): stop_reason
     // was 'max_tokens' with 327 of the 800-token budget spent on
@@ -839,17 +1216,20 @@ async function handlePlan(req, res, apiKey, body) {
     // — the raw text was cut off mid-word. 800 was sized for this
     // output's shape from before activity types/restrictions/cardio-
     // slot logic were added; it never got re-sized as that output grew.
-    // 2000 matches how day-plan (4000, ~9 blocks) and find-patterns
-    // (2000) were each sized to their own actual output, with real
-    // margin above the truncated example's own ~800-tokens-and-still-
-    // incomplete size, not a shared generic default.
-    maxTokens: 2000,
+    // 2000 matched day-plan/find-patterns' own sizing at the time.
+    // Phase 3.4 adds a potentially-large `assignments` array (one
+    // entry per session, each session already described in the
+    // prompt) on top of the unchanged plan/rationale output — 3200
+    // keeps the same real margin above a plausible full-size response
+    // (up to ~7 sessions in a typical week) that 2000 gave the
+    // smaller pre-3.4 output.
+    maxTokens: 3200,
     debugLabel: 'plan', // TEMPORARY — see callClaude's own comment on this
   });
   const parsed = extractJson(text);
   if (!parsed) return res.status(502).json({ ok: false, error: 'Model did not return valid JSON.' });
 
-  return res.status(200).json({ ok: true, plan: normalizePlan(parsed, restrictions, recommendableTypes, activeWeekDisciplines) });
+  return res.status(200).json({ ok: true, plan: normalizePlan(parsed, restrictions, recommendableTypes, activeWeekDisciplines, capacity) });
 }
 
 // ------------------------------------------------------------
