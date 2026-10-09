@@ -440,26 +440,84 @@ document.addEventListener('DOMContentLoaded', function () {
     return best;
   }
 
-  // Total distance logged for the matched activity type (or every
-  // distance-based activity, if the plan didn't pin one) within one
-  // 7-day checkpoint window — a WEEKLY volume goal (e.g. "20km/week by
-  // week 6"), not a cumulative-since-start total, matching how each
-  // checkpoint carries its own independent targetValue rather than a
-  // running total.
+  // BUG FIX (reported): actualAsOf() for running_distance used to sum
+  // only ONE 7-day checkpoint window (resetting every week) and
+  // compare that weekly number against cp.targetValue/plan.targetValue
+  // as if it were cumulative. It isn't — propose_long_term_plan's own
+  // tool description is explicit: weeklyTargets is "the target value
+  // to have reached BY THE END of each week" (api/chat.js), and
+  // normalizeProposedLongTermPlan's linear fallback
+  // (startValue + (targetValue-startValue)*(i+1)/durationWeeks) only
+  // makes sense as a cumulative ramp. So cp.targetValue and
+  // plan.targetValue are BOTH cumulative-since-startDate numbers, but
+  // the old actualAsOf was feeding them a single week's own total —
+  // explaining every symptom in the bug report: a tiny-looking "9.9 of
+  // 108" (that's just one week's km against a 6-week cumulative sum),
+  // an "Actual" line that goes down whenever a week's own mileage is
+  // lower than the previous week's (no running total to smooth it),
+  // and early weeks showing "Missed" because one week's mileage will
+  // almost never reach a multi-week cumulative target. Fixed below:
+  // actualAsOf now sums every matching activity from plan.startDate
+  // through asOfKey — genuinely cumulative, non-decreasing by
+  // construction (summing more non-negative days of real logged
+  // distance can only add, never subtract).
   function findActivityType(activityTypes, id) {
     if (!id) return null;
     return (activityTypes || []).find((t) => t.id === id) || null;
   }
-  function runningTotalForWeek(activities, activityTypeId, weekStartKey, weekEndKey) {
+  function runningCumulativeAsOf(activities, activityTypeId, startDateKey, asOfKey) {
     let total = 0;
-    let any = false;
     activities.forEach((a) => {
       if (!a || !a.dateKey || a.distanceKm == null) return;
-      if (a.dateKey < weekStartKey || a.dateKey > weekEndKey) return;
+      if (a.dateKey < startDateKey || a.dateKey > asOfKey) return;
       if (activityTypeId && a.activityTypeId !== activityTypeId) return;
-      total += a.distanceKm; any = true;
+      total += a.distanceKm;
     });
-    return any ? Math.round(total * 100) / 100 : null;
+    // A cumulative total is always a real number (0 is a legitimate
+    // "nothing logged yet" answer, not an unknown) — unlike
+    // weightAsOf/strengthBestAsOf, which return null when there is
+    // genuinely no data point to carry forward.
+    return Math.round(total * 100) / 100;
+  }
+
+  // BUG FIX (reported): checkpoints are stored on a fixed 7-day cycle
+  // anchored to plan.startDate's own weekday (here a Tuesday, since
+  // that's the day the plan happened to be created/saved) — NOT the
+  // Monday-Sunday week every other part of this app (gym.html's
+  // weekly objectives, api/training.js's mode=plan/mode=today, every
+  // DayLib-based week boundary) uses. canonicalWeekStart maps any
+  // date to the Monday of its real calendar week (DayLib's own
+  // Monday-week-start convention — see daylib.js's header comment),
+  // so checkpoint display/status can be reasoned about using the same
+  // week definition as the rest of the app rather than inventing a
+  // second one. checkpointCanonicalRange then maps each STORED
+  // checkpoint to the Mon-Sun week that covers the MOST of its 7
+  // days — using the checkpoint's own middle day (offset 3 of 0-6) to
+  // pick that week guarantees a majority overlap (at least 4 of 7
+  // days) for a checkpoint anchored to ANY weekday, not just Tuesday.
+  function canonicalWeekStart(dateKeyStr) {
+    const d = DayLib.parseDateKey(dateKeyStr);
+    const day = d.getDay(); // 0=Sun..6=Sat
+    const diff = (day === 0 ? -6 : 1) - day;
+    d.setDate(d.getDate() + diff);
+    return DayLib.plainDateKey(d);
+  }
+  function checkpointCanonicalRange(cp) {
+    const mid = DayLib.parseDateKey(cp.weekStartDate);
+    mid.setDate(mid.getDate() + 3);
+    const start = canonicalWeekStart(DayLib.plainDateKey(mid));
+    return { start, end: addDaysKey(start, 6) };
+  }
+  // The checkpoint whose canonical (Mon-Sun) week contains today — ONE
+  // canonical definition reused for both the "current week" nudge and
+  // the main checkpoint list's current/upcoming/hit/missed status, so
+  // neither can disagree with the other (or with gym.html/api/training.js's
+  // own Monday-week-start convention) about which week today is in.
+  function currentCheckpointFor(plan, todayK) {
+    return (plan.weeklyCheckpoints || []).find((cp) => {
+      const range = checkpointCanonicalRange(cp);
+      return todayK >= range.start && todayK <= range.end;
+    }) || null;
   }
 
   // =============================================================
@@ -479,24 +537,9 @@ document.addEventListener('DOMContentLoaded', function () {
       return strengthBestAsOf(dataSources.gymState, dataSources.matchedExercise, asOfKey);
     }
     if (plan.goalType === 'running_distance') {
-      const weekStart = mostRecentCheckpointWeekStart(plan, asOfKey);
-      if (!weekStart) return null;
-      return runningTotalForWeek(dataSources.activities, plan.goalActivityTypeId, weekStart, addDaysKey(weekStart, 6));
+      return runningCumulativeAsOf(dataSources.activities, plan.goalActivityTypeId, plan.startDate, asOfKey);
     }
     return null; // "other" — no auto-tracked series
-  }
-  // For running_distance, "as of" a date means "that date's own
-  // checkpoint week's total" (a weekly goal resets each week), not a
-  // carried-forward value — find whichever checkpoint's window
-  // contains asOfKey, or the most recent one that's already ended.
-  function mostRecentCheckpointWeekStart(plan, asOfKey) {
-    let best = null;
-    (plan.weeklyCheckpoints || []).forEach((cp) => {
-      if (cp.weekStartDate <= asOfKey) {
-        if (!best || cp.weekStartDate > best) best = cp.weekStartDate;
-      }
-    });
-    return best;
   }
 
   function isIncreasingGoal(goalType) {
@@ -513,11 +556,20 @@ document.addEventListener('DOMContentLoaded', function () {
     return Math.max(0, Math.min(1, frac));
   }
 
+  // current/upcoming are now decided against the CANONICAL (Mon-Sun)
+  // week, not the checkpoint's own raw stored window — see
+  // checkpointCanonicalRange's comment. `current` (the value to
+  // compare for hit/missed) must already be the CUMULATIVE actual as
+  // of this checkpoint's canonical week-end (see the render loop's
+  // own asOf computation below) — comparing a genuinely cumulative
+  // number against cp.targetValue (also cumulative) is what makes
+  // this comparison correct at all; the bug this fixes was comparing
+  // a single week's own total against a multi-week cumulative target.
   function checkpointStatus(plan, cp, current, todayK) {
-    const weekEnd = addDaysKey(cp.weekStartDate, 6);
-    const isCurrentWeek = todayK >= cp.weekStartDate && todayK <= weekEnd;
+    const range = checkpointCanonicalRange(cp);
+    const isCurrentWeek = todayK >= range.start && todayK <= range.end;
     if (isCurrentWeek) return 'current';
-    if (todayK < cp.weekStartDate) return 'upcoming';
+    if (todayK < range.start) return 'upcoming';
     // Week has fully elapsed — hit or missed based on direction.
     if (current == null) return 'missed'; // elapsed with nothing logged at all — a real miss, not unknown
     const hit = isIncreasingGoal(plan.goalType) ? current >= cp.targetValue : current <= cp.targetValue;
@@ -761,12 +813,16 @@ document.addEventListener('DOMContentLoaded', function () {
     const targetData = [plan.startValue].concat(plan.weeklyCheckpoints.map((cp) => cp.targetValue));
     const actualData = [actualAsOf(plan, dataSources, plan.startDate)].concat(
       plan.weeklyCheckpoints.map((cp) => {
-        const weekEnd = addDaysKey(cp.weekStartDate, 6);
+        const range = checkpointCanonicalRange(cp);
         // Only plot a week's actual once it has actually started —
         // otherwise a "0"/carried-forward value for a future week
         // would misleadingly look like already-measured progress.
-        if (cp.weekStartDate > todayK) return null;
-        const asOf = weekEnd < todayK ? weekEnd : todayK;
+        if (range.start > todayK) return null;
+        const asOf = range.end < todayK ? range.end : todayK;
+        // Cumulative since plan.startDate (see actualAsOf/
+        // runningCumulativeAsOf's own comment) — necessarily
+        // non-decreasing across these points by construction, since
+        // each later asOf only ever adds more non-negative days.
         return actualAsOf(plan, dataSources, asOf);
       })
     );
@@ -776,8 +832,8 @@ document.addEventListener('DOMContentLoaded', function () {
     // Checkpoint list.
     const listEl = $('planCheckpointList');
     listEl.innerHTML = plan.weeklyCheckpoints.map((cp) => {
-      const weekEnd = addDaysKey(cp.weekStartDate, 6);
-      const asOf = weekEnd < todayK ? weekEnd : todayK;
+      const range = checkpointCanonicalRange(cp);
+      const asOf = range.end < todayK ? range.end : todayK;
       const cpCurrent = plan.goalType === 'other' ? null : actualAsOf(plan, dataSources, asOf);
       const status = plan.goalType === 'other' ? 'upcoming' : checkpointStatus(plan, cp, cpCurrent, todayK);
       const statusLabel = { hit: 'Hit', missed: 'Missed', current: 'This week', upcoming: 'Upcoming' }[status];
@@ -791,7 +847,11 @@ document.addEventListener('DOMContentLoaded', function () {
       return (
         '<div class="plan-checkpoint-row status-' + status + (status === 'current' ? ' is-current' : '') + '">' +
           '<div class="plan-checkpoint-dot"></div>' +
-          '<div class="plan-checkpoint-label">Week ' + cp.weekNumber + '<div class="plan-checkpoint-week">' + shortLabel(cp.weekStartDate) + ' – ' + shortLabel(weekEnd) + ' · ' + statusLabel + '</div>' + disciplinesLine + '</div>' +
+          // Displayed dates are now the CANONICAL Mon-Sun week (bug fix
+          // — see checkpointCanonicalRange's comment), not the raw
+          // stored weekStartDate/+6 (which was off by one day from
+          // every other week-boundary in this app).
+          '<div class="plan-checkpoint-label">Week ' + cp.weekNumber + '<div class="plan-checkpoint-week">' + shortLabel(range.start) + ' – ' + shortLabel(range.end) + ' · ' + statusLabel + '</div>' + disciplinesLine + '</div>' +
           '<div class="plan-checkpoint-val">' + formatValue(cp.targetValue, unit) + '</div>' +
         '</div>'
       );
@@ -877,12 +937,8 @@ document.addEventListener('DOMContentLoaded', function () {
   // week transition and never again for that same week once handled.
   // =============================================================
   const PLAN_NUDGE_DISMISS_KEY_PREFIX = 'plan:dismissedWeek:';
-  function currentCheckpointFor(plan, todayK) {
-    return (plan.weeklyCheckpoints || []).find((cp) => {
-      const weekEnd = addDaysKey(cp.weekStartDate, 6);
-      return todayK >= cp.weekStartDate && todayK <= weekEnd;
-    }) || null;
-  }
+  // currentCheckpointFor is now defined once, earlier in this file
+  // (canonical-week-based — see its own comment), and reused here.
   function renderWeeklyNudge(plan) {
     const current = currentCheckpointFor(plan, todayKey());
     if (!current || current.weekNumber <= 1) { $('planNudge').style.display = 'none'; return; }
