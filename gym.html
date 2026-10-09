@@ -2741,9 +2741,14 @@ img, video, canvas, svg { max-width: 100%; }
       });
     });
   }
-  // Compute today's split from state.splitRotation + state.splitAnchor.
-  // Returns the rotation entry name (e.g. "Push" or "Rest") AND the index.
-  function todaySplit() {
+  // Compute the split for an ARBITRARY date key from state.splitRotation
+  // + state.splitAnchor — generalized (Phase 3.3) from this function's
+  // own previous today-only form so missedDayTypesThisWeek() below can
+  // ask "what did the rotation assign to EARLIER days this week" using
+  // the exact same rotation math as getTodaySplit(), not a second
+  // reimplementation. Returns the rotation entry name (e.g. "Push" or
+  // "Rest") AND the index.
+  function splitForDateKey(dateKeyStr) {
     try {
       const rot = state.splitRotation;
       if (!rot || !rot.length) return { name: '—', index: 0 };
@@ -2752,12 +2757,9 @@ img, video, canvas, svg { max-width: 100%; }
       // local calendar day anywhere west of UTC (e.g. Mexico City,
       // UTC-6) — silently shifting the whole rotation back a day.
       // wtParseKey() builds the Date from y/m/d components directly,
-      // which the spec always treats as local time. `t` is "today" via
-      // DayLib.effectiveDateKey(), not raw new Date() — with a
-      // configured day-end past midnight, a 1am tap still belongs to
-      // yesterday's rotation slot.
+      // which the spec always treats as local time.
       const a = wtParseKey(state.splitAnchor.date);
-      const t = DayLib.parseDateKey(DayLib.effectiveDateKey());
+      const t = wtParseKey(dateKeyStr);
       a.setHours(0,0,0,0); t.setHours(0,0,0,0);
       const diffDays = Math.round((t - a) / 86400000);
       const idx = ((state.splitAnchor.index + diffDays) % rot.length + rot.length) % rot.length;
@@ -2766,6 +2768,10 @@ img, video, canvas, svg { max-width: 100%; }
       return { name: (state.splitRotation && state.splitRotation[0]) || '—', index: 0 };
     }
   }
+  // "Today" via DayLib.effectiveDateKey(), not raw new Date() — with a
+  // configured day-end past midnight, a 1am tap still belongs to
+  // yesterday's rotation slot.
+  function todaySplit() { return splitForDateKey(DayLib.effectiveDateKey()); }
   function todayDateLabel() {
     const d = DayLib.parseDateKey(DayLib.effectiveDateKey());
     const dows = ['SUN','MON','TUE','WED','THU','FRI','SAT'];
@@ -4760,7 +4766,14 @@ img, video, canvas, svg { max-width: 100%; }
   // are closures over the live `state`/`doneDays` bindings, not
   // snapshots, so they always reflect the latest value even after a
   // remote sync reassigns them in pcRerender().
-  window.PoCoach = { getState: () => state, getDoneDays: () => doneDays, getTodaySplit: () => todaySplit() };
+  // getSplitForDate (Phase 3.3): lets the later "Today's session"
+  // script block (a different closure — see buildTodayStrengthContext's
+  // own comment on why it reads window.PoCoach.getState() rather than
+  // this file's outer `state` directly) ask what the rotation assigned
+  // to an ARBITRARY earlier date this week, using the exact same
+  // rotation math getTodaySplit() already uses — not a second
+  // reimplementation.
+  window.PoCoach = { getState: () => state, getDoneDays: () => doneDays, getTodaySplit: () => todaySplit(), getSplitForDate: (dateKeyStr) => splitForDateKey(dateKeyStr) };
 })();
 </script>
 
@@ -5846,6 +5859,57 @@ img, video, canvas, svg { max-width: 100%; }
     return Array.from(trained);
   }
 
+  // Phase 3.3 — day-types the rotation assigned to an EARLIER date
+  // this week (strictly before today, same week-start the weekly plan
+  // itself uses — thisWeekMondayKey(), DayLib Monday-week-start) that
+  // (a) weren't a Rest day in the rotation and (b) have no strength
+  // log recorded on that EXACT date for that exact day-type — not just
+  // "sometime this week" the way daysTrainedThisWeek() above already
+  // checks (that's a different, coarser question: "has this day-type
+  // been trained at all since Monday", used for the rest-day-override
+  // logic; this is "was THIS SPECIFIC day's own assigned session
+  // actually done on that day"). Oldest first, naturally, since the
+  // loop walks forward from Monday. Each entry carries the real
+  // weekday name so the prompt never has to (and never gets to) guess
+  // it — see buildTodaySystemPrompt's own "(missed Monday)" wording.
+  const WEEKDAY_LABELS_FULL = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  function missedDayTypesThisWeek(state, weekMondayKey, todayKeyStr) {
+    const days = Array.isArray(state.days) ? state.days : [];
+    const dayNameById = {};
+    days.forEach((d) => { dayNameById[d.id] = d.name; });
+    const exDayById = {};
+    (state.exercises || []).forEach((ex) => { exDayById[ex.id] = ex.day; });
+    const loggedDayNamesByDate = {}; // 'YYYY-MM-DD' -> Set(dayName)
+    const logs = state.logs || {};
+    Object.keys(logs).forEach((exId) => {
+      const dayId = exDayById[exId];
+      const dayName = dayId != null ? dayNameById[dayId] : null;
+      if (!dayName) return;
+      (logs[exId] || []).forEach((log) => {
+        const dk = String(log.date || '').slice(0, 10);
+        if (!dk) return;
+        if (!loggedDayNamesByDate[dk]) loggedDayNamesByDate[dk] = new Set();
+        loggedDayNamesByDate[dk].add(dayName);
+      });
+    });
+    const missed = [];
+    const cursor = DayLib.parseDateKey(weekMondayKey);
+    for (let i = 0; i < 7; i++) {
+      const dk = dateKey(cursor);
+      if (dk >= todayKeyStr) break; // only strictly-earlier days this week — today itself is handled by the normal rotation logic, not "missed"
+      const split = (window.PoCoach && window.PoCoach.getSplitForDate(dk)) || { name: null };
+      const dayType = split && split.name;
+      if (dayType && dayType !== '—' && !/^rest\b/i.test(dayType)) {
+        const loggedSet = loggedDayNamesByDate[dk];
+        if (!loggedSet || !loggedSet.has(dayType)) {
+          missed.push({ dayType, weekday: WEEKDAY_LABELS_FULL[cursor.getDay()] });
+        }
+      }
+      cursor.setDate(cursor.getDate() + 1);
+    }
+    return missed;
+  }
+
   function buildTodayStrengthContext() {
     const state = (window.PoCoach && window.PoCoach.getState()) || {};
     const split = (window.PoCoach && window.PoCoach.getTodaySplit()) || { name: null, index: 0 };
@@ -5876,6 +5940,12 @@ img, video, canvas, svg { max-width: 100%; }
       exercisesConfiguredForToday, // [] on a rest day or if nothing is configured for this split day
       rotationDayTypes: days.map((d) => d.name).filter(Boolean), // all real (non-Rest) day-types the user has configured, e.g. ["Push","Pull","Legs"]
       daysTrainedThisWeek: daysTrainedThisWeek(state, thisWeekMondayKey()), // ground truth from actual logs since Monday, e.g. ["Push"]
+      // Phase 3.3 — day-types assigned to an earlier day this week that
+      // were never actually trained ON that day, oldest first, e.g.
+      // [{dayType:"Push", weekday:"Monday"}] on a Wednesday where
+      // Monday's Push was skipped. [] when nothing was missed, or when
+      // no split/logs exist at all — see missedDayTypesThisWeek()'s own comment.
+      missedDayTypes: missedDayTypesThisWeek(state, thisWeekMondayKey(), DayLib.effectiveDateKey()),
     };
   }
 

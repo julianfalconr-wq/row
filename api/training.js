@@ -887,6 +887,20 @@ function buildTodaySystemPrompt(restrictions, feasibility) {
     'types is the only legitimate reason to repeat one within the same week). Keep the framing to a couple ' +
     'trailing words at most (e.g. "<day-type> anyway"). If strengthContext itself is missing or ' +
     'todaySplitDay is null, no split is configured — say that plainly rather than guessing.\n\n' +
+    'MISSED DAY-TYPES (Phase 3.3) — strengthContext.missedDayTypes lists day-types the rotation assigned ' +
+    'to an EARLIER day THIS week that the user never actually trained on that day (oldest first, each with ' +
+    'its real weekday name, e.g. [{"dayType":"Push","weekday":"Monday"}]) — this is ground truth from ' +
+    'actual logs, not a guess. If progress.strengthSessionsDone is less than progress.strengthSessionsTarget ' +
+    '(strength is still behind this week) AND missedDayTypes is non-empty, prefer the OLDEST entry\'s ' +
+    'dayType over today\'s own strengthContext.todaySplitDay, as long as WHOOP-ADJUSTMENT above and the ' +
+    'feasibility section below both still allow a strength session today — this takes priority over ' +
+    'today\'s normal rotation slot (even a non-Rest one, e.g. today says "Pull" but Monday\'s "Push" was ' +
+    'skipped: recommend Push, not Pull). When you do this, name it briefly using the EXACT weekday the ' +
+    'entry itself gives, e.g. "Push (missed Monday)" — never invent or guess a different weekday. Only ' +
+    'catch up on ONE missed day-type at a time, and NEVER combine it with today\'s own rotation day-type or ' +
+    'with the isRestDayInRotation catch-up logic above in the same recommendation — exactly one strength ' +
+    'day-type per day, period. If missedDayTypes is empty, or strength is already on track this week, use ' +
+    'todaySplitDay/the isRestDayInRotation logic above exactly as already described, unaffected by this.\n\n' +
     'CARDIO (Phase 3 of the multi-activity-type generalization — no longer always running) — ' +
     'weekPlan.cardio has three pieces, each already assigned its OWN activity by name when the weekly ' +
     'plan was generated: interval (activityTypeId/activityName + targetSessions/targetMinutes), ' +
