@@ -120,16 +120,18 @@
 //     // "padel"/"pádel". Treated as a high-intensity commitment, same
 //     // spirit as low Whoop recovery — see buildTodaySystemPrompt's PADEL
 //     // section.
-//     feasibility: {   // Phase 2 of the training-availability feature — TODAY ONLY (forTomorrow sends
-//     // nothing here; buildTomorrowSystemPrompt has no feasibility section at all, since a future day's
-//     // real calendar gaps/remaining time aren't knowable the same way). Computed entirely client-side
-//     // (gym.html's buildTodayFeasibility) from the user's configured training-availability template/
-//     // override (General Settings) and today's REAL remaining Google Calendar gaps before bedtime — see
-//     // that function's own comments for the exact arithmetic (free-gap subtraction, duration estimation,
-//     // the "after midnight" bedtime rule). Re-sanitized here (sanitizeFeasibility) and never trusted
-//     // blindly — see buildFeasibilityPromptSection and the applyFeasibilityBackstop code-level re-check
-//     // after the model responds, same "model picks among candidates code already proved feasible, code
-//     // re-validates the pick" discipline as dropBlocksOverlappingFixedEvents/isCardioTypeBlocked.
+//     feasibility: {   // Phase 2 (today) + Phase 3.2 (tomorrow, same shape): computed entirely
+//     // client-side — gym.html's buildTodayFeasibility for today, main.html's buildTomorrowFeasibility
+//     // (a generalization of the same arithmetic for an arbitrary target date) for forTomorrow — from the
+//     // user's configured training-availability template/override (General Settings) and that day's REAL
+//     // Google Calendar gaps before bedtime. Today's version additionally caps budgetMin by time actually
+//     // remaining before bedtime RIGHT NOW (the day has already started); tomorrow's version does not
+//     // (the whole day is still ahead) — see each function's own comments for the exact arithmetic
+//     // (free-gap subtraction, duration estimation, the "after midnight" bedtime rule). Re-sanitized here
+//     // (sanitizeFeasibility) and never trusted blindly — see buildFeasibilityPromptSection and the
+//     // applyFeasibilityBackstop code-level re-check after the model responds, same "model picks among
+//     // candidates code already proved feasible, code re-validates the pick" discipline as
+//     // dropBlocksOverlappingFixedEvents/isCardioTypeBlocked.
 //     configured: Boolean,   // false (the only other field) whenever no availability template exists or there's no
 //     // weekPlan to draw candidates from — the prompt gets ZERO new feasibility section in that case, so
 //     // an unconfigured user's output is byte-for-byte what this endpoint already produced before Phase 2.
@@ -440,28 +442,41 @@ function sanitizeFeasibility(raw) {
 // exclusively from them — or to say so briefly and recommend rest/a
 // short alternative when none fit. Returns '' when feasibility isn't
 // configured at all, so an unconfigured user's prompt is unchanged.
-function buildFeasibilityPromptSection(feasibility) {
+// dayLabel (Phase 3.2): defaults to 'today', so every pre-3.2 call
+// site (buildTodaySystemPrompt) keeps the exact same STRUCTURE and
+// MEANING — only "remaining"->"free" in two spots changed cosmetically
+// so the wording also reads correctly for 'tomorrow' (nothing is
+// "remaining" on a day that hasn't started). buildTomorrowSystemPrompt
+// passes 'tomorrow' so the same feasibility SHAPE (budgetMin/
+// longestFreeBlockMin/allowedDisciplines/candidates — computed
+// client-side by main.html's own buildTomorrowFeasibility, a
+// generalization of gym.html's Phase 2 buildTodayFeasibility for an
+// arbitrary target date) reads naturally for either day without a
+// second, nearly-identical prompt-section function.
+function buildFeasibilityPromptSection(feasibility, dayLabel) {
+  dayLabel = dayLabel || 'today';
+  const dayLabelCap = dayLabel.charAt(0).toUpperCase() + dayLabel.slice(1);
   if (!feasibility || !feasibility.configured) return '';
   const feasible = feasibility.candidates.filter((c) => c.feasible);
   const infeasible = feasibility.candidates.filter((c) => !c.feasible);
   return (
     'AVAILABILITY & TIME BUDGET — computed in code from the user\'s configured training-availability ' +
-    '(General Settings) and today\'s REAL remaining Google Calendar gaps before bedtime; do not second-guess ' +
-    'or recompute these numbers yourself. Today\'s time budget: ' +
+    '(General Settings) and ' + dayLabel + '\'s REAL free Google Calendar gaps before bedtime; do not ' +
+    'second-guess or recompute these numbers yourself. ' + dayLabelCap + '\'s time budget: ' +
     (feasibility.budgetMin != null ? feasibility.budgetMin + ' minutes' : 'not separately capped') +
     '. Longest single free block before bedtime: ' + feasibility.longestFreeBlockMin + ' minutes. Allowed ' +
-    'disciplines today: ' + JSON.stringify(feasibility.allowedDisciplines) + '.\n' +
-    'Of this week\'s plan pieces, only the following have ALREADY been confirmed to fit today\'s time and ' +
+    'disciplines ' + dayLabel + ': ' + JSON.stringify(feasibility.allowedDisciplines) + '.\n' +
+    'Of this week\'s plan pieces, only the following have ALREADY been confirmed to fit ' + dayLabel + '\'s time and ' +
     'discipline constraints — combine your strength/cardio reasoning above with this list, and recommend ' +
     'ONLY from it (never recommend a plan piece not listed here as feasible, even if the sections above ' +
     'would otherwise suggest it):\n' +
     (feasible.length
       ? JSON.stringify(feasible.map((c) => ({ key: c.key, label: c.label, estMinutes: c.estMinutes })), null, 2)
-      : '(none — nothing in this week\'s plan fits today\'s remaining time or allowed disciplines)') + '\n' +
-    (infeasible.length ? 'NOT feasible today (do not recommend these): ' + JSON.stringify(infeasible.map((c) => c.label)) + '.\n' : '') +
+      : '(none — nothing in this week\'s plan fits ' + dayLabel + '\'s free time or allowed disciplines)') + '\n' +
+    (infeasible.length ? 'NOT feasible ' + dayLabel + ' (do not recommend these): ' + JSON.stringify(infeasible.map((c) => c.label)) + '.\n' : '') +
     'If the feasible list is empty, say so briefly and recommend rest or a short, generic alternative that ' +
-    'genuinely fits the remaining time (e.g. "Rest — not enough free time today", "Short easy walk only — ' +
-    'limited time today") instead of recommending anything from this week\'s plan.\n\n'
+    'genuinely fits the free time (e.g. "Rest — not enough free time ' + dayLabel + '", "Short easy walk only — ' +
+    'limited time ' + dayLabel + '") instead of recommending anything from this week\'s plan.\n\n'
   );
 }
 
@@ -938,7 +953,7 @@ function buildTodaySystemPrompt(restrictions, feasibility) {
 // established for this exact distinction — reason from the week's
 // remaining objectives and general load-management principles
 // instead (e.g. not stacking two hard days back to back).
-function buildTomorrowSystemPrompt(restrictions) {
+function buildTomorrowSystemPrompt(restrictions, feasibility) {
   return (
     'You recommend training for a day OTHER than today on a personal dashboard — main.html\'s "Plan my day" ' +
     'is being generated ahead of time for tomorrow. This week\'s plan (weekPlan) always covers BOTH strength ' +
@@ -981,6 +996,7 @@ function buildTomorrowSystemPrompt(restrictions) {
     'piece(s) are still outstanding and worth recommending for that day.\n\n' +
     'Even if weekPlan.cardio shows a nonzero target for a piece, do NOT recommend it if that piece\'s ' +
     'activityTypeId or activityName matches an entry in activeRestrictions below.\n\n' +
+    buildFeasibilityPromptSection(feasibility, 'tomorrow') +
     buildRestrictionsPromptSection(restrictions) +
     'FORMAT — this is the most important rule: the recommendation is a SHORT LABEL, not a paragraph. One ' +
     'line, naming only the split day and/or the specific cardio activity/distance from this week\'s plan — ' +
@@ -1010,6 +1026,11 @@ async function handleToday(req, res, apiKey, body) {
     // input this variant needs: what was already decided for TODAY,
     // so the model can reason about not stacking two hard days.
     context.todayRecommendation = typeof body.todayRecommendation === 'string' ? body.todayRecommendation.slice(0, 300) : null;
+    // Phase 3.2 — same feasibility SHAPE as Phase 2's today-only field,
+    // just computed for tomorrow by main.html's own
+    // buildTomorrowFeasibility (tomorrow's weekday template/override +
+    // tomorrow's real calendar gaps) — see that function's own comment.
+    context.feasibility = sanitizeFeasibility(body.feasibility);
   } else {
     context.todayCalendar = body.todayCalendar && typeof body.todayCalendar === 'object'
       ? { padelToday: !!body.todayCalendar.padelToday, padelEventTitle: typeof body.todayCalendar.padelEventTitle === 'string' ? body.todayCalendar.padelEventTitle.slice(0, 200) : null }
@@ -1032,7 +1053,7 @@ async function handleToday(req, res, apiKey, body) {
   // this kind of simple, short-output, latency-sensitive task, and lets
   // the model skip thinking entirely on inputs this straightforward.
   const text = await callClaude(apiKey, {
-    system: forTomorrow ? buildTomorrowSystemPrompt(restrictions) : buildTodaySystemPrompt(restrictions, context.feasibility),
+    system: forTomorrow ? buildTomorrowSystemPrompt(restrictions, context.feasibility) : buildTodaySystemPrompt(restrictions, context.feasibility),
     userContent: 'Context:\n' + JSON.stringify(context, null, 2),
     maxTokens: 800,
     effort: 'low',
@@ -1040,7 +1061,9 @@ async function handleToday(req, res, apiKey, body) {
   const parsed = extractJson(text);
   let recommendation = parsed && typeof parsed.recommendation === 'string' ? parsed.recommendation.trim() : '';
   if (!recommendation) return res.status(502).json({ ok: false, error: 'Model did not return valid JSON.' });
-  if (!forTomorrow) recommendation = applyFeasibilityBackstop(recommendation, context.feasibility);
+  // Phase 3.2: the backstop is the same re-check regardless of which
+  // day this recommendation is for — applies to both now.
+  recommendation = applyFeasibilityBackstop(recommendation, context.feasibility);
 
   return res.status(200).json({ ok: true, recommendation });
 }

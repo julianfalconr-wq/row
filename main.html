@@ -3330,6 +3330,218 @@ document.addEventListener('DOMContentLoaded', function () {
       activitiesThisWeek: weekActivities.map((a) => ({ dateKey: a.dateKey, activityTypeId: a.activityTypeId, distanceKm: a.distanceKm, count: a.count, durationMin: a.durationMin, effort: a.effort })),
     };
   }
+  // ============================================================
+  // Phase 3.2 — tomorrow's availability/calendar feasibility. Same
+  // SHAPE api/training.js's mode=today already expects from gym.html's
+  // Phase 2 buildTodayFeasibility ({configured, budgetMin,
+  // longestFreeBlockMin, allowedDisciplines, candidates}), generalized
+  // here for an arbitrary target date (tomorrow) instead of "now" —
+  // duplicated into THIS closure rather than imported, matching this
+  // file's own established per-scope convention (see
+  // tomorrowStrengthContext's header comment above for the identical
+  // reasoning: gym.html's own versions live in a different <script>
+  // closure and aren't reachable from here).
+  // ============================================================
+
+  // window.gatherTodayContext is defined by topbar.js (loaded `defer`)
+  // — same bounded-poll wait gym.html's detectPadelToday() already
+  // uses, duplicated here for the same reason (this script block runs
+  // synchronously, parsed before any deferred script gets a chance).
+  function waitForGatherTodayContextMain(timeoutMs) {
+    return new Promise((resolve) => {
+      const deadline = Date.now() + (timeoutMs || 3000);
+      (function poll() {
+        if (typeof window.gatherTodayContext === 'function') return resolve(true);
+        if (Date.now() >= deadline) return resolve(false);
+        setTimeout(poll, 50);
+      })();
+    });
+  }
+  const AVAIL_WEEKDAY_NAMES_MAIN = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+  // Discipline classification — same NAME-based swim/bike/run matching
+  // as gym.html's Phase 2 disciplineForActivityType, just taking the
+  // `types` array as a parameter instead of reading a module-level
+  // cache (this closure has no persistent activityTypes variable).
+  const DISCIPLINE_NAME_PATTERNS_MAIN = { swim: /swim/i, bike: /\b(bike|cycl|ride|spin)/i, run: /\b(run|jog)/i };
+  function disciplineForActivityTypeMain(activityTypeId, types) {
+    const type = (types || []).find((t) => t.id === activityTypeId);
+    if (!type) return null;
+    for (const key of Object.keys(DISCIPLINE_NAME_PATTERNS_MAIN)) {
+      if (DISCIPLINE_NAME_PATTERNS_MAIN[key].test(type.name || '')) return key;
+    }
+    return null;
+  }
+  async function fetchActivityTypesForFeasibility(secret) {
+    try {
+      const r = await fetch('/api/sync-state?secret=' + encodeURIComponent(secret) + '&resource=activity-types');
+      const j = await r.json();
+      return (j && j.ok && Array.isArray(j.types)) ? j.types : [];
+    } catch (e) { return []; }
+  }
+  // The free window for an arbitrary date: [that weekday's configured
+  // wake time, that weekday's configured sleep time] — unlike today's
+  // version (gym.html's resolveTodayBedtimeMs, anchored on "now"
+  // through bedtime, since today has already started), a FUTURE day's
+  // whole day is still ahead, so wake time is the real start, not now.
+  // Same "after midnight" rollover rule as everywhere else in this
+  // project (see General Settings' own documented rule).
+  function resolveDayWindowMs(dateKeyStr, weekday) {
+    const profile = DayLib.loadProfile();
+    const entry = (profile.dayRingSchedule && profile.dayRingSchedule[weekday]) || {};
+    const wake = (typeof entry.wake === 'string' && entry.wake) || '08:00';
+    const sleep = (typeof entry.sleep === 'string' && entry.sleep) || '00:00';
+    const [wakeH, wakeM] = wake.split(':').map(Number);
+    const [sleepH, sleepM] = sleep.split(':').map(Number);
+    const wakeDate = DayLib.parseDateKey(dateKeyStr); wakeDate.setHours(wakeH, wakeM, 0, 0);
+    const bedtime = DayLib.parseDateKey(dateKeyStr); bedtime.setHours(sleepH, sleepM, 0, 0);
+    if (sleepH < wakeH || (sleepH === wakeH && sleepM <= wakeM)) bedtime.setDate(bedtime.getDate() + 1);
+    return { startMs: wakeDate.getTime(), endMs: bedtime.getTime() };
+  }
+  // Fully generic free-gap computation for ANY window — gym.html's
+  // Phase 2 computeTodayFreeGaps achieves the same thing for today by
+  // pre-filtering to "today's calendar window" before this same gap
+  // arithmetic; here the [windowStartMs, windowEndMs) bounds alone
+  // already restrict to the target day, so no separate per-day filter
+  // is needed.
+  function computeFreeGapsInWindow(upcomingEvents, windowStartMs, windowEndMs) {
+    const events = (upcomingEvents || [])
+      .filter((ev) => !ev.allDay && ev.start && ev.end)
+      .map((ev) => ({ start: new Date(ev.start).getTime(), end: new Date(ev.end).getTime() }))
+      .filter((ev) => !isNaN(ev.start) && !isNaN(ev.end) && ev.end > windowStartMs && ev.start < windowEndMs)
+      .map((ev) => ({ start: Math.max(ev.start, windowStartMs), end: Math.min(ev.end, windowEndMs) }))
+      .sort((a, b) => a.start - b.start);
+    const gaps = [];
+    let cursor = windowStartMs;
+    events.forEach((ev) => {
+      if (ev.start > cursor) gaps.push({ startMs: cursor, endMs: ev.start });
+      cursor = Math.max(cursor, ev.end);
+    });
+    if (cursor < windowEndMs) gaps.push({ startMs: cursor, endMs: windowEndMs });
+    return gaps;
+  }
+  function longestGapMinutesMain(gaps) {
+    return gaps.reduce((max, g) => Math.max(max, (g.endMs - g.startMs) / 60000), 0);
+  }
+  const GENERIC_FALLBACK_PACE_MIN_PER_KM_MAIN = 6; // same documented assumption as gym.html's Phase 2 constant
+  function recentAvgPaceMinPerKmFor(activityTypeId, activities) {
+    const matches = activities.filter((a) => a && a.activityTypeId === activityTypeId && a.distanceKm && a.durationMin).slice(0, 10);
+    if (!matches.length) return null;
+    const paces = matches.map((a) => a.durationMin / a.distanceKm);
+    return paces.reduce((s, p) => s + p, 0) / paces.length;
+  }
+  const BASIC_SWIMMER_PACE_MIN_PER_100M_MAIN = 2.5; // same documented assumption as gym.html's Phase 3.1 constant
+  function recentAvgSwimPaceMinPer100mFor(activityTypeId, activities) {
+    const matches = activities.filter((a) => a && a.activityTypeId === activityTypeId && a.distanceKm && a.durationMin).slice(0, 10);
+    if (!matches.length) return null;
+    const paces = matches.map((a) => a.durationMin / (a.distanceKm * 10));
+    return paces.reduce((s, p) => s + p, 0) / paces.length;
+  }
+  function estimateSwimMinutesFor(meters, activityTypeId, activities) {
+    if (!meters) return 0;
+    const pace = recentAvgSwimPaceMinPer100mFor(activityTypeId, activities) || BASIC_SWIMMER_PACE_MIN_PER_100M_MAIN;
+    return Math.round((meters / 100) * pace);
+  }
+  // "Remaining" here means through TODAY (tomorrow hasn't happened
+  // yet) — same asOf convention weekProgressAsOf above already uses.
+  function remainingKmAsOf(activities, types, weekMondayKey, throughDateKey, disc, targetKm) {
+    if (!targetKm) return 0;
+    const doneKm = activities
+      .filter((a) => a && a.dateKey >= weekMondayKey && a.dateKey <= throughDateKey && disciplineForActivityTypeMain(a.activityTypeId, types) === disc)
+      .reduce((sum, a) => sum + (Number(a.distanceKm) || 0), 0);
+    return Math.max(0, Math.round((targetKm - doneKm) * 10) / 10);
+  }
+  function remainingSwimSessionsAsOf(activities, types, weekMondayKey, throughDateKey, targetSessions) {
+    if (!targetSessions) return 0;
+    const doneSessions = activities.filter((a) => a && a.dateKey >= weekMondayKey && a.dateKey <= throughDateKey && disciplineForActivityTypeMain(a.activityTypeId, types) === 'swim').length;
+    return Math.max(0, targetSessions - doneSessions);
+  }
+  function estimateLegacySlotMinutesFor(kind, slot, types, activities) {
+    if (!slot) return null;
+    if (kind === 'interval') return Number(slot.targetMinutes) || 0;
+    if (!slot.activityTypeId) return null;
+    const type = (types || []).find((t) => t.id === slot.activityTypeId);
+    const unitKind = type ? type.unitKind : 'distance';
+    if (unitKind === 'duration') return Math.round(Number(slot.targetAmount) || 0);
+    if (unitKind === 'count') return 30; // DEFAULT_SESSION_MINUTES.genericCount, same documented flat default as gym.html's Phase 2
+    const pace = recentAvgPaceMinPerKmFor(slot.activityTypeId, activities) || GENERIC_FALLBACK_PACE_MIN_PER_KM_MAIN;
+    return Math.round((Number(slot.targetAmount) || 0) * pace);
+  }
+  // Builds the SAME feasibility shape gym.html's Phase 2 sends for
+  // today, computed for tomorrow instead: availability.thisWeek (NOT
+  // availability.today — topbar.js's gatherTodayContext() already
+  // merges template+override for every weekday of the current week,
+  // see that function's own comment) gives tomorrow's own
+  // minutes/disciplines directly, no second merge needed here.
+  // budgetMin is NOT capped by "time remaining right now" the way
+  // today's version is — tomorrow's whole day is still ahead.
+  function buildTomorrowFeasibility(ctx, plan, todayDateKey, tomorrowDateKey, types, activities) {
+    const availability = ctx && ctx.availability;
+    if (!availability || !availability.configured || !Array.isArray(availability.thisWeek) || !plan) return { configured: false };
+    const tomorrowWeekday = AVAIL_WEEKDAY_NAMES_MAIN[DayLib.parseDateKey(tomorrowDateKey).getDay()];
+    const dayAvail = availability.thisWeek.find((d) => d.weekday === tomorrowWeekday);
+    if (!dayAvail) return { configured: false };
+    const win = resolveDayWindowMs(tomorrowDateKey, tomorrowWeekday);
+    const upcoming = (ctx.calendar && Array.isArray(ctx.calendar.upcoming)) ? ctx.calendar.upcoming : [];
+    const gaps = computeFreeGapsInWindow(upcoming, win.startMs, win.endMs);
+    const longestFreeBlockMin = Math.round(longestGapMinutesMain(gaps));
+    const budgetMin = dayAvail.minutes != null ? Math.round(dayAvail.minutes) : null;
+    const allowedDisciplines = dayAvail.disciplines || { swim: false, bike: false, run: false, strength: false };
+    function fits(discipline, estMinutes) {
+      if (estMinutes == null) return false;
+      if (discipline && allowedDisciplines[discipline] === false) return false;
+      if (budgetMin != null && estMinutes > budgetMin) return false;
+      if (estMinutes > longestFreeBlockMin) return false;
+      return true;
+    }
+    const weekMondayKey = mondayOfKey(todayDateKey);
+    const candidates = [];
+    const strengthTargetSessions = (plan.targets && plan.targets.strength) ? plan.targets.strength.sessions : ((plan.strength && Number(plan.strength.targetSessions)) || 0);
+    if (strengthTargetSessions > 0) {
+      const est = 45; // DEFAULT_SESSION_MINUTES.strength, same documented flat default as gym.html's Phase 2
+      candidates.push({ key: 'strength', label: 'Strength', estMinutes: est, feasible: fits('strength', est) });
+    }
+    if (plan.targets) {
+      // Phase 3.1-aware: remaining volume per real discipline target,
+      // not the legacy longSession/easyVolume slots (which are just a
+      // derived mirror of targets.run/bike — see
+      // deriveLegacyCardioFromTargets in api/training.js).
+      const t = plan.targets;
+      ['run', 'bike'].forEach((disc) => {
+        const d = t[disc];
+        if (!d || !d.km || !d.activityTypeId) return;
+        const remainingKm = remainingKmAsOf(activities, types, weekMondayKey, todayDateKey, disc, d.km);
+        if (remainingKm <= 0) return;
+        const pace = recentAvgPaceMinPerKmFor(d.activityTypeId, activities) || GENERIC_FALLBACK_PACE_MIN_PER_KM_MAIN;
+        const est = Math.round(remainingKm * pace);
+        candidates.push({ key: disc, label: d.activityName || disc, estMinutes: est, feasible: fits(disc, est) });
+      });
+      if (t.swim && t.swim.sessions > 0 && t.swim.activityTypeId) {
+        const remainingSessions = remainingSwimSessionsAsOf(activities, types, weekMondayKey, todayDateKey, t.swim.sessions);
+        if (remainingSessions > 0) {
+          const metersPerSession = Math.round((Number(t.swim.meters) || 0) / t.swim.sessions);
+          const est = estimateSwimMinutesFor(metersPerSession, t.swim.activityTypeId, activities);
+          candidates.push({ key: 'swim', label: t.swim.activityName || 'Swim', estMinutes: est, feasible: fits('swim', est) });
+        }
+      }
+      const intervalSlot = plan.cardio && plan.cardio.interval;
+      if (intervalSlot && intervalSlot.activityTypeId) {
+        const est = Number(intervalSlot.targetMinutes) || 0;
+        const discipline = disciplineForActivityTypeMain(intervalSlot.activityTypeId, types);
+        candidates.push({ key: 'interval', label: intervalSlot.activityName || 'Interval', estMinutes: est, feasible: fits(discipline, est) });
+      }
+    } else {
+      ['interval', 'longSession', 'easyVolume'].forEach((kind) => {
+        const slot = plan.cardio && plan.cardio[kind];
+        if (!slot || !slot.activityTypeId) return;
+        const est = estimateLegacySlotMinutesFor(kind, slot, types, activities);
+        const discipline = disciplineForActivityTypeMain(slot.activityTypeId, types);
+        const type = (types || []).find((t) => t.id === slot.activityTypeId);
+        candidates.push({ key: kind, label: slot.activityName || (type && type.name) || 'Session', estMinutes: est, feasible: fits(discipline, est) });
+      });
+    }
+    return { configured: true, budgetMin, longestFreeBlockMin: Math.round(longestFreeBlockMin), allowedDisciplines, candidates };
+  }
+
   async function fetchTomorrowRecommendation(secret, todayDateKey, tomorrowDateKey, todayRecommendation, restrictions) {
     const plan = loadCurrentWeeklyPlan(mondayOfKey(todayDateKey));
     if (!plan) return null;
@@ -3339,6 +3551,25 @@ document.addEventListener('DOMContentLoaded', function () {
     // this week's remaining objectives.
     const progress = weekProgressAsOf(mondayOfKey(todayDateKey), todayDateKey, plan);
     const whoopToday = await fetchRecoveryForPlan();
+
+    // Phase 3.2: tomorrow's availability/calendar feasibility — see
+    // buildTomorrowFeasibility's own comment. Any failure anywhere in
+    // this chain (gatherTodayContext not ready yet, no secret, network
+    // error) collapses to {configured:false}, which keeps the prompt
+    // completely unchanged, so this can never make an existing
+    // Tomorrow recommendation worse.
+    let feasibility = { configured: false };
+    try {
+      const ready = await waitForGatherTodayContextMain(3000);
+      if (ready) {
+        const ctx = await window.gatherTodayContext();
+        const types = await fetchActivityTypesForFeasibility(secret);
+        let activities = [];
+        try { activities = JSON.parse(localStorage.getItem('po_coach_activities')) || []; } catch (e) {}
+        feasibility = buildTomorrowFeasibility(ctx, plan, todayDateKey, tomorrowDateKey, types, activities);
+      }
+    } catch (e) { feasibility = { configured: false }; }
+
     try {
       const res = await fetch('/api/training?mode=today&secret=' + encodeURIComponent(secret), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -3348,6 +3579,7 @@ document.addEventListener('DOMContentLoaded', function () {
           activeRestrictions: restrictions,
           forTomorrow: true,
           todayRecommendation,
+          feasibility,
         }),
       });
       const json = await res.json();
