@@ -583,7 +583,7 @@ function buildPlanSystemPrompt(restrictions, recommendableTypes, activeWeekDisci
     : null;
   return (
     (activeWeekDisciplines
-      ? 'THIS WEEK\'S VOLUME TARGETS ARE ALREADY FIXED — ' + describeActiveWeekDisciplinesForPrompt(activeWeekDisciplines, recommendableTypes) + '. These come from the user\'s own long-term training plan, not from you, and the server computes the real numbers in code from that plan — it will IGNORE whatever longSession.targetAmount/easyVolume.targetAmount/strength.targetSessions numbers you write for the disciplines listed above. Do NOT invent different volume numbers for them. Your job here is only: (1) still propose ONE concrete interval/VO2-max session (activityTypeId from the recommendable list below, matching whichever of run/bike makes sense, or null if neither does) with real structure — the fixed targets above have no interval/intensity piece of their own; (2) write a one-sentence, concrete description for cardio.longSession and cardio.easyVolume (effort/pacing guidance for the run/bike volume above) and for strength.focus; (3) mention the swim target explicitly in the rationale even though it has no legacy slot of its own to sit in. Never contradict these fixed numbers anywhere in your rationale or descriptions.\n\n'
+      ? 'THIS WEEK\'S VOLUME TARGETS ARE ALREADY FIXED — ' + describeActiveWeekDisciplinesForPrompt(activeWeekDisciplines, recommendableTypes) + '. These come from the user\'s own long-term training plan, not from you, and the server computes the real numbers in code from that plan — it will IGNORE whatever longSession.targetAmount/easyVolume.targetAmount/strength.targetSessions numbers you write for the disciplines listed above. Do NOT invent different volume numbers for them. Your job here is only: (1) still propose ONE concrete interval/VO2-max session (activityTypeId from the recommendable list below, matching whichever of run/bike makes sense, or null if neither does) with real structure — the fixed targets above have no interval/intensity piece of their own; (2) write a one-sentence, concrete description for cardio.longSession and cardio.easyVolume (effort/pacing guidance for the run/bike volume above) and for strength.focus; (3) mention the swim target explicitly in the rationale even though it has no legacy slot of its own to sit in. Never contradict these fixed numbers anywhere in your rationale or descriptions — in particular, your longSession/easyVolume descriptions must NEVER state a distance/amount of their own at all (e.g. never write "run 9km" or mention any km/m/min figure for these two specifically); describe effort/pacing/structure only (e.g. "steady, conversational effort" or "keep the last 20% faster"), since the actual numbers shown to the user come from targets above, not from this text, and restating a different one anywhere would look like a contradiction even though it would be silently ignored.\n\n'
       : '') +
     'You are a training coach generating ONE week of concrete objectives for a personal dashboard. ' +
     'The user does two kinds of training: strength (equipment-limited, see below) and cardio. Cardio needs ' +
@@ -778,17 +778,35 @@ function buildTargetsFromActiveWeek(activeWeekDisciplines, types, restrictedScop
 // representative distance progress instead of a sudden blank, exactly
 // as before this phase existed; `targets` is the new, actually-
 // accurate source for anything discipline-aware.
+// BUG FIX (reported) — code-level backstop for the prompt instruction
+// above: even though the model is told never to restate a km/m/min
+// figure in these two descriptions, nothing previously re-checked
+// that it actually complied (same "never trust the prompt alone"
+// discipline as every other validated field in this file). If a
+// description still contains a number immediately followed by the
+// slot's own unit that doesn't match targetAmount, it's a real
+// contradiction (the display's actual number comes from targetAmount,
+// not this text) — stripped rather than shown, since there's no safe
+// way to tell the user's intended meaning from a lone wrong number.
+function descriptionContradictsTarget(description, targetAmount, unit) {
+  if (!description || targetAmount == null) return false;
+  const match = description.match(new RegExp('(\\d+(?:\\.\\d+)?)\\s*' + unit, 'i'));
+  if (!match) return false;
+  return Math.abs(Number(match[1]) - Number(targetAmount)) > 0.05;
+}
 function deriveLegacyCardioFromTargets(targets, modelCardio) {
   const distanceDisciplines = ['run', 'bike'].filter((d) => targets[d] && targets[d].km > 0 && targets[d].activityTypeId);
   function volumeSlotFor(disc, modelSlot) {
     if (!disc) return { activityTypeId: null, activityName: '', targetAmount: 0, unit: '', description: '' };
     const t = targets[disc];
+    let description = (modelSlot && typeof modelSlot.description === 'string') ? modelSlot.description.slice(0, 300) : '';
+    if (descriptionContradictsTarget(description, t.km, 'km')) description = '';
     return {
       activityTypeId: t.activityTypeId,
       activityName: t.activityName,
       targetAmount: t.km,
       unit: 'km',
-      description: (modelSlot && typeof modelSlot.description === 'string') ? modelSlot.description.slice(0, 300) : '',
+      description,
     };
   }
   return {
@@ -1224,6 +1242,25 @@ async function handlePlan(req, res, apiKey, body) {
     // (up to ~7 sessions in a typical week) that 2000 gave the
     // smaller pre-3.4 output.
     maxTokens: 3200,
+    // BUG FIX (reported): this call never set `effort` at all before
+    // Phase 3.4, defaulting to claude-sonnet-5's adaptive HIGH effort
+    // — tolerable for the smaller pre-3.4 prompt, but Phase 3.4 added
+    // two substantial new sections (capacity + the full sessionsToPlace/
+    // feasibleDays layout instructions) on top of it, and high-effort
+    // thinking on a now-much-bigger prompt is a real, documented
+    // failure class already fixed this exact way for mode=today
+    // (see that handler's own comment: "high-effort adaptive thinking
+    // spending most/all of the budget on internal reasoning" — either
+    // truncating the JSON output or, worse here with a 10s-class
+    // Vercel function timeout, never returning in time at all, which
+    // surfaces client-side as a request failure indistinguishable from
+    // any other). 'medium' (not 'low', unlike mode=today's genuinely
+    // trivial one-line output) — this task is real judgment (balancing
+    // strength/cardio, an actual capacity trim narrative, placing
+    // sessions into specific days) and shouldn't skip reasoning
+    // entirely, just the runaway high-effort deliberation that risks
+    // not finishing in time.
+    effort: 'medium',
     debugLabel: 'plan', // TEMPORARY — see callClaude's own comment on this
   });
   const parsed = extractJson(text);
