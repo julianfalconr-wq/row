@@ -2423,11 +2423,26 @@ body {
     const RHYTHM_CARD_WEEKDAY_LABELS = { monday: 'Monday', tuesday: 'Tuesday', wednesday: 'Wednesday', thursday: 'Thursday', friday: 'Friday', saturday: 'Saturday', sunday: 'Sunday' };
     const RHYTHM_CARD_DISCIPLINE_LABELS = { swim: 'Swim', run: 'Run', strength: 'Strength', bike: 'Bike', rest: 'Rest' };
     // 'endurance' (renamed to 'pace') displays as 'long' here too, in
-    // case a stale cached proposal still uses the old name.
-    const RHYTHM_CARD_KIND_LABELS = { easy: 'easy', interval: 'interval', long: 'long', technique: 'technique', pace: 'pace', endurance: 'long', brick: 'brick', strength: 'strength' };
+    // case a stale cached proposal still uses the old name. Strength's
+    // kind is a DAY TYPE (push/pull/legs/explosive), not a cardio-
+    // style intensity — 'strength' (the old placeholder) displays as
+    // 'auto', same compat convention as everywhere else in this
+    // feature.
+    const RHYTHM_CARD_KIND_LABELS = { easy: 'easy', interval: 'interval', long: 'long', technique: 'technique', pace: 'pace', endurance: 'long', brick: 'brick', auto: 'auto', push: 'Push', pull: 'Pull', legs: 'Legs', explosive: 'Explosive', strength: 'auto' };
+    // BUG FIX (reported): a strength entry used to always show its
+    // literal kind string, including the old placeholder, producing
+    // "Strength strength". 'auto' means "let the rotation decide" and
+    // is never shown as a suffix — just "Strength" alone, matching
+    // "Strength · Push" (not "Strength · Auto") when a real day type
+    // IS set.
     function describeRhythmDayEntries(entries) {
       if (!entries || !entries.length) return '(cleared)';
-      return entries.map((e) => (RHYTHM_CARD_DISCIPLINE_LABELS[e.discipline] || e.discipline) + (e.kind && e.discipline !== 'rest' ? ' ' + (RHYTHM_CARD_KIND_LABELS[e.kind] || e.kind) : '') + (e.note ? ' (' + e.note + ')' : '')).join(' + ');
+      return entries.map((e) => {
+        const discLabel = RHYTHM_CARD_DISCIPLINE_LABELS[e.discipline] || e.discipline;
+        const kindLabel = RHYTHM_CARD_KIND_LABELS[e.kind] || e.kind;
+        const showKind = e.kind && e.discipline !== 'rest' && kindLabel !== 'auto';
+        return discLabel + (showKind ? ' · ' + kindLabel : '') + (e.note ? ' (' + e.note + ')' : '');
+      }).join(' + ');
     }
     function renderWeeklyRhythmProposalCard(container, proposal) {
       const card = document.createElement('div');

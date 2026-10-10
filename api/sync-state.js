@@ -292,13 +292,22 @@
 // chat proposal); nothing here ever invents or changes it on its own.
 //   {
 //     monday: [{ discipline: 'swim'|'run'|'strength'|'bike'|'rest',
-//                kind?: 'easy'|'interval'|'long'|'technique'|
-//                       'pace'|'brick'|'strength', note?: String }],
+//                kind?: for swim/run/bike: 'easy'|'interval'|'long'|
+//                       'technique'|'pace'|'brick';
+//                       for strength: 'auto'|'push'|'pull'|'legs'|
+//                       'explosive';
+//                note?: String }],
 //     // 'pace' = a continuous fast effort at goal/race pace (run,
 //     // bike, or swim) — renamed from 'endurance'; a stored
 //     // 'endurance' entry (from before this rename) is read back as
 //     // 'long' everywhere (see sanitizeWeeklyRhythmEntry's own
 //     // comment), never deleted or rejected.
+//     // For strength, 'auto' means "let the existing Push/Pull/Legs
+//     // rotation decide" (the default, and what a legacy entry whose
+//     // kind used to be the literal string 'strength' now reads as).
+//     // push/pull/legs/explosive are matched by NAME (case-
+//     // insensitively) against the user's own configured day types in
+//     // gym.html's state.days, never by a fixed id.
 //     tuesday: [...], ... sunday: [...],
 //     // any weekday key MAY be absent entirely (tolerated, not an
 //     // error) — absence means "nothing scheduled that day", same as
@@ -450,45 +459,67 @@ function sanitizeAvailabilityOverride(raw) {
 
 // ---------- weekly-rhythm validation ----------
 const RHYTHM_DISCIPLINES = ['swim', 'run', 'strength', 'bike', 'rest'];
-const RHYTHM_KINDS = ['easy', 'interval', 'long', 'technique', 'pace', 'brick', 'strength'];
-// BUG FIX (reported) / rename: 'endurance' was renamed to 'pace' — a
-// stored entry from before the rename (or a stale client that hasn't
-// picked up the new name yet) must keep working, never get rejected
-// or silently dropped. Mapped to 'long' (not deleted, never a 400) —
-// every reader of a rhythm entry's kind goes through this exact
-// mapping first, so 'endurance' is simply never seen again past this
-// point, in storage OR in any response.
-function normalizeRhythmKindForCompat(kind) {
-  return kind === 'endurance' ? 'long' : kind;
+// Two SEPARATE kind vocabularies, chosen by discipline — a cardio
+// kind string and a strength kind string never overlap, so there's no
+// ambiguity checking one against the other.
+const CARDIO_KINDS = ['easy', 'interval', 'long', 'technique', 'pace', 'brick'];
+// 'auto' = let the existing Push/Pull/Legs rotation decide, exactly as
+// before this feature existed — the default for a new strength entry
+// and what a legacy entry normalizes to (see normalizeRhythmKindForCompat).
+// push/pull/legs/explosive are REAL day-type names, matched by name
+// (case-insensitively) against the user's own configured state.days —
+// never assumed to equal a fixed id, since a day added via gym.html's
+// own "+ Add day" button gets a timestamp-based id, not a clean slug.
+const STRENGTH_KINDS = ['auto', 'push', 'pull', 'legs', 'explosive'];
+function validRhythmKindsFor(discipline) {
+  return discipline === 'strength' ? STRENGTH_KINDS : CARDIO_KINDS;
+}
+// Two renames, both backward-compatible — a stored entry or a stale
+// client using either old name must keep working, never get rejected
+// or silently dropped:
+//   - 'endurance' (a cardio kind) -> 'long'
+//   - 'strength' (the strength discipline's old placeholder kind,
+//     back when it carried no real day-type info) -> 'auto'
+// Neither is deleted from storage; every reader goes through this
+// exact mapping first, so the old values are simply never seen again
+// past this point, in storage OR in any response.
+function normalizeRhythmKindForCompat(discipline, kind) {
+  if (kind === 'endurance') return 'long';
+  if (discipline === 'strength' && kind === 'strength') return 'auto';
+  return kind;
 }
 function sanitizeWeeklyRhythmEntry(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   if (!RHYTHM_DISCIPLINES.includes(raw.discipline)) return null;
   const out = { discipline: raw.discipline };
   // kind is optional (a 'rest' entry typically has none), but if
-  // present must be one of the real enum values — never silently
-  // dropped/coerced in a way that could misrepresent what the user
-  // actually picked.
+  // present must be one of the real enum values for ITS discipline —
+  // never silently dropped/coerced in a way that could misrepresent
+  // what the user actually picked.
   if (raw.kind !== undefined && raw.kind !== null) {
-    const kind = normalizeRhythmKindForCompat(raw.kind);
-    if (!RHYTHM_KINDS.includes(kind)) return null;
+    const kind = normalizeRhythmKindForCompat(raw.discipline, raw.kind);
+    if (!validRhythmKindsFor(raw.discipline).includes(kind)) return null;
     out.kind = kind;
   }
   if (typeof raw.note === 'string' && raw.note.trim()) out.note = raw.note.trim().slice(0, 140);
   return out;
 }
 // Read-time counterpart to normalizeRhythmKindForCompat — a row saved
-// BEFORE the endurance->pace rename still has literal 'endurance'
-// sitting in storage (never rewritten there; see this resource's own
-// header comment: "never deleted or rejected"). Every GET response
-// passes through this first, so no reader anywhere ever sees
-// 'endurance' again, without touching the stored bytes themselves.
+// before either rename above still has the old value sitting in
+// storage (never rewritten there; see this resource's own header
+// comment: "never deleted or rejected"). Every GET response passes
+// through this first, so no reader anywhere ever sees an old value
+// again, without touching the stored bytes themselves.
 function normalizeStoredRhythmForRead(rhythm) {
   if (!rhythm || typeof rhythm !== 'object') return rhythm;
   const out = {};
   Object.keys(rhythm).forEach((wd) => {
     const list = rhythm[wd];
-    out[wd] = Array.isArray(list) ? list.map((e) => (e && e.kind === 'endurance' ? Object.assign({}, e, { kind: 'long' }) : e)) : list;
+    out[wd] = Array.isArray(list) ? list.map((e) => {
+      if (!e || !e.kind) return e;
+      const normalized = normalizeRhythmKindForCompat(e.discipline, e.kind);
+      return normalized !== e.kind ? Object.assign({}, e, { kind: normalized }) : e;
+    }) : list;
   });
   return out;
 }
@@ -502,7 +533,19 @@ function sanitizeWeeklyRhythm(raw) {
     if (!Array.isArray(list)) continue; // a missing weekday is tolerated, not an error — see this resource's own header comment
     // Capped at 3 sessions/day — defensive against a malformed/huge
     // payload; the UI itself only ever offers "add a second session".
-    const entries = list.map(sanitizeWeeklyRhythmEntry).filter(Boolean).slice(0, 3);
+    // At most ONE strength entry per day, always — the first one
+    // wins, any extra is dropped (the user's own grid never offers a
+    // way to create a second strength entry on the same day, but this
+    // is enforced here regardless of what actually sends the payload).
+    let sawStrength = false;
+    const entries = list.map(sanitizeWeeklyRhythmEntry).filter((e) => {
+      if (!e) return false;
+      if (e.discipline === 'strength') {
+        if (sawStrength) return false;
+        sawStrength = true;
+      }
+      return true;
+    }).slice(0, 3);
     if (entries.length) out[wd] = entries;
   }
   return out;

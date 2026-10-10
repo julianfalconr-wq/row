@@ -3352,15 +3352,33 @@ document.addEventListener('DOMContentLoaded', function () {
     });
     return Array.from(trained);
   }
-  function tomorrowStrengthContext(tomorrowDateKey, todayDateKey) {
+  // Resolves a rhythm strength entry's typed kind to the user's REAL
+  // configured day-type name, matched case-insensitively — same
+  // convention as gym.html's own resolveRhythmStrengthDayType
+  // (duplicated per this project's per-file convention). null for
+  // 'auto'/unset, or when nothing matches.
+  function resolveRhythmStrengthDayTypeMain(days, kind) {
+    if (!kind || kind === 'auto') return null;
+    const matched = days.find((d) => (d.name || '').toLowerCase() === kind.toLowerCase());
+    return matched ? matched.name : null;
+  }
+  // rhythm (optional) — the full weekly rhythm object. A TYPED
+  // strength entry for TOMORROW overrides the rotation's own pick,
+  // same as gym.html's own buildTodayStrengthContext does for today;
+  // 'auto' (or no rhythm entry) leaves it untouched.
+  function tomorrowStrengthContext(tomorrowDateKey, todayDateKey, rhythm) {
     let pc = null;
     try { pc = JSON.parse(localStorage.getItem('po_coach_v1')); } catch (e) {}
     if (!pc || !Array.isArray(pc.splitRotation) || !pc.splitRotation.length || !pc.splitAnchor || !pc.splitAnchor.date) return null;
     const split = todaySplitFor(pc, tomorrowDateKey);
     const days = Array.isArray(pc.days) ? pc.days : [];
+    const tomorrowWeekdayKey = AVAIL_WEEKDAY_NAMES_MAIN[DayLib.parseDateKey(tomorrowDateKey).getDay()];
+    const rhythmEntry = rhythm && rhythm[tomorrowWeekdayKey] && rhythm[tomorrowWeekdayKey].find((e) => e.discipline === 'strength');
+    const rhythmDayType = rhythmEntry ? resolveRhythmStrengthDayTypeMain(days, rhythmEntry.kind) : null;
+    const splitName = rhythmDayType || split.name || null;
     return {
-      todaySplitDay: split.name || null,
-      isRestDayInRotation: /^rest\b/i.test(split.name || ''),
+      todaySplitDay: splitName,
+      isRestDayInRotation: /^rest\b/i.test(splitName || ''),
       rotationDayTypes: days.map((d) => d.name).filter(Boolean),
       daysTrainedThisWeek: tomorrowDaysTrainedThisWeek(pc, mondayOfKey(tomorrowDateKey), todayDateKey),
     };
@@ -3637,7 +3655,13 @@ document.addEventListener('DOMContentLoaded', function () {
   async function fetchTomorrowRecommendation(secret, todayDateKey, tomorrowDateKey, todayRecommendation, restrictions) {
     const plan = loadCurrentWeeklyPlan(mondayOfKey(todayDateKey));
     if (!plan) return null;
-    const strengthContext = tomorrowStrengthContext(tomorrowDateKey, todayDateKey);
+    // Phase 3.5 — fetched BEFORE tomorrowStrengthContext (moved ahead
+    // of where it used to sit, below) since that function now needs
+    // the rhythm to resolve a typed strength day for tomorrow; reused
+    // further down for rhythmForDay too, instead of fetching twice.
+    let weeklyRhythm = {};
+    try { weeklyRhythm = await fetchWeeklyRhythmForTomorrow(secret); } catch (e) { weeklyRhythm = {}; }
+    const strengthContext = tomorrowStrengthContext(tomorrowDateKey, todayDateKey, weeklyRhythm);
     // Progress "as of tomorrow" includes TODAY's own logged sessions too
     // — by tomorrow morning, today's training already counts toward
     // this week's remaining objectives.
@@ -3662,15 +3686,12 @@ document.addEventListener('DOMContentLoaded', function () {
       }
     } catch (e) { feasibility = { configured: false }; }
 
-    // Phase 3.5 — tomorrow's own rhythm entries, resolved client-side
-    // the same way gym.html resolves today's (this file already has
-    // DayLib; the server never resolves a specific weekday itself).
-    let rhythmForDay = [];
-    try {
-      const weeklyRhythm = await fetchWeeklyRhythmForTomorrow(secret);
-      const tomorrowWeekday = AVAIL_WEEKDAY_NAMES_MAIN[DayLib.parseDateKey(tomorrowDateKey).getDay()];
-      rhythmForDay = weeklyRhythm[tomorrowWeekday] || [];
-    } catch (e) { rhythmForDay = []; }
+    // Tomorrow's own rhythm entries, resolved client-side the same
+    // way gym.html resolves today's (this file already has DayLib;
+    // the server never resolves a specific weekday itself) — from the
+    // SAME weeklyRhythm fetched above, not a second fetch.
+    const tomorrowWeekday = AVAIL_WEEKDAY_NAMES_MAIN[DayLib.parseDateKey(tomorrowDateKey).getDay()];
+    const rhythmForDay = weeklyRhythm[tomorrowWeekday] || [];
 
     try {
       const res = await fetch('/api/training?mode=today&secret=' + encodeURIComponent(secret), {
@@ -5241,23 +5262,38 @@ document.addEventListener('DOMContentLoaded', function () {
   // =============================================================
   const RHYTHM_DISCIPLINES = [['run', 'Run'], ['swim', 'Swim'], ['bike', 'Bike'], ['strength', 'Strength'], ['rest', 'Rest']];
   const RHYTHM_KINDS = [['easy', 'Easy'], ['interval', 'Interval'], ['long', 'Long'], ['technique', 'Technique'], ['pace', 'Pace'], ['brick', 'Brick']];
-  // Rename: 'endurance' -> 'pace'. A legacy-stored or stale-fetched
-  // entry still saying 'endurance' is displayed and treated as 'long'
-  // (never crashes, never silently dropped) — applied once, right
-  // where rhythm data enters this section, via normalizeRhythmKind
-  // ForCompatMain below.
-  function normalizeRhythmKindForCompatMain(kind) {
-    return kind === 'endurance' ? 'long' : kind;
+  // Strength's kind is the DAY TYPE, not a cardio-style intensity —
+  // 'auto' (the default: let the existing Push/Pull/Legs rotation
+  // decide) plus whichever real day types the user has configured.
+  // push/pull/legs/explosive are the FIXED set this feature
+  // recognizes; a day the user named something else entirely (e.g. a
+  // custom 5th day type) simply isn't offered here, same as before —
+  // this picker was never meant to be a complete editor for every
+  // possible day-type name, just these four plus "let the rotation decide".
+  const RHYTHM_STRENGTH_KINDS = [['auto', 'Auto'], ['push', 'Push'], ['pull', 'Pull'], ['legs', 'Legs'], ['explosive', 'Explosive']];
+  // Two renames, both backward-compatible: a cardio 'endurance' ->
+  // 'long', and a strength entry's old placeholder kind 'strength' ->
+  // 'auto'. Neither crashes or gets silently dropped — applied once,
+  // right where rhythm data enters this section.
+  function normalizeRhythmKindForCompatMain(discipline, kind) {
+    if (kind === 'endurance') return 'long';
+    if (discipline === 'strength' && kind === 'strength') return 'auto';
+    return kind;
   }
   // Rough, fixed per-kind duration estimate used ONLY for this
   // settings grid's own "exceeds today's minutes budget" flag — a
   // light sanity check while editing, not the real pace-based
   // estimate Today's session/the weekly layout compute from actual
   // logged history. Intentionally simple and documented as such.
+  // Every strength kind (auto/push/pull/legs/explosive) uses the same
+  // flat 45min estimate below, via the discipline==='strength'
+  // fallback — not listed individually here.
   const RHYTHM_KIND_EST_MINUTES = { easy: 35, interval: 50, long: 70, technique: 30, pace: 65, brick: 90, strength: 45 };
-  // 'pace' counts as hard, same as 'interval'/'long' (see
-  // api/training.js's own RHYTHM_HARD_KINDS comment).
-  const RHYTHM_HARD_KINDS = new Set(['interval', 'long', 'pace']);
+  // 'pace'/'interval'/'long' (hard cardio) and 'legs'/'explosive' (the
+  // strength-side equivalent — real leg load) all count as hard for
+  // the back-to-back-hard-days flag and the low-recovery downgrade
+  // rule (see api/training.js's own RHYTHM_HARD_KINDS comment).
+  const RHYTHM_HARD_KINDS = new Set(['interval', 'long', 'pace', 'legs', 'explosive']);
 
   async function fetchWeeklyRhythm() {
     const secret = getSecret();
@@ -5385,6 +5421,29 @@ document.addEventListener('DOMContentLoaded', function () {
         dayFlags[prevDay] = (dayFlags[prevDay] || []).concat(['Hard session (interval/long) back-to-back with ' + AVAIL_WEEKDAY_LABELS[day]]);
       }
     });
+    // Leg-load conflict: legs/explosive strength loads the same
+    // muscles a hard (interval/long/pace) run session needs fresh —
+    // flagged when that run falls on the SAME day as the leg work, or
+    // the day right after it (never the day before — this is
+    // specifically about leg fatigue carrying INTO a run, not the
+    // reverse).
+    const RUN_LEG_LOAD_KINDS = new Set(['interval', 'long', 'pace']);
+    GS_WEEKDAY_KEYS.forEach((day, i) => {
+      const entries = rhythm[day] || [];
+      const hasLegStrength = entries.some((e) => e.discipline === 'strength' && (e.kind === 'legs' || e.kind === 'explosive'));
+      if (!hasLegStrength) return;
+      if (entries.some((e) => e.discipline === 'run' && RUN_LEG_LOAD_KINDS.has(e.kind))) {
+        dayFlags[day] = (dayFlags[day] || []).concat(['Leg-load conflict: a hard run session the same day as legs/explosive strength']);
+      }
+      if (i < 6) {
+        const nextDay = GS_WEEKDAY_KEYS[i + 1];
+        const nextEntries = rhythm[nextDay] || [];
+        if (nextEntries.some((e) => e.discipline === 'run' && RUN_LEG_LOAD_KINDS.has(e.kind))) {
+          dayFlags[day] = (dayFlags[day] || []).concat(['Leg-load conflict: ' + AVAIL_WEEKDAY_LABELS[nextDay] + '\'s hard run is right after legs/explosive strength']);
+          dayFlags[nextDay] = (dayFlags[nextDay] || []).concat(['Leg-load conflict: a hard run the day after legs/explosive strength on ' + AVAIL_WEEKDAY_LABELS[day]]);
+        }
+      }
+    });
     return { dayFlags, entryFlags };
   }
   // "Swim 2 of 2, Strength 3 of 3, Run 3 sessions" — session-count
@@ -5439,7 +5498,14 @@ document.addEventListener('DOMContentLoaded', function () {
       if (!entries.length && !target) return; // nothing real to report for this one
       const label = disc === 'swim' ? 'Swim' : 'Strength';
       const countPhrase = entries.length + (target ? ' of ' + target + (disc === 'swim' ? ' sessions' : '') : ' session' + (entries.length === 1 ? '' : 's'));
-      parts.push(label + ' ' + countPhrase);
+      // "Strength 3 of 3 (Push, Pull, Legs)" — the real typed day
+      // breakdown, in weekday order, 'auto' entries included as
+      // "Auto" (accurately showing what's actually configured, not
+      // just omitting the ones without a specific type).
+      const breakdown = disc === 'strength' && entries.length
+        ? ' (' + entries.map((e) => (e.kind || 'auto').charAt(0).toUpperCase() + (e.kind || 'auto').slice(1)).join(', ') + ')'
+        : '';
+      parts.push(label + ' ' + countPhrase + breakdown);
     });
 
     return parts.length ? parts.join(', ') : 'No sessions set yet.';
@@ -5458,13 +5524,27 @@ document.addEventListener('DOMContentLoaded', function () {
     grid.innerHTML = GS_WEEKDAY_KEYS.map((day) => {
       const entries = rhythmDraft[day] || [];
       const isOpen = rhythmOpenDay === day;
+      // BUG FIX (reported): a strength entry's chip used to read
+      // "Strength · strength" — kind's label was looked up in the
+      // CARDIO kind list (RHYTHM_KINDS), which has no 'strength' entry
+      // at all, so it fell back to printing the raw kind string
+      // itself. Now looks up the right list for the entry's own
+      // discipline, and skips the kind suffix entirely for 'auto'
+      // (shows just "Strength", matching "let the rotation decide").
       const chips = entries.length
-        ? entries.map((e) => '<span class="gs-rhythm-day-chip">' + escapeHtml((RHYTHM_DISCIPLINES.find((d) => d[0] === e.discipline) || [, e.discipline])[1] + (e.kind && e.discipline !== 'rest' ? ' · ' + (RHYTHM_KINDS.find((k) => k[0] === e.kind) || [, e.kind])[1] : '')) + '</span>').join('')
+        ? entries.map((e) => {
+            const discLabel = (RHYTHM_DISCIPLINES.find((d) => d[0] === e.discipline) || [, e.discipline])[1];
+            const kindList = e.discipline === 'strength' ? RHYTHM_STRENGTH_KINDS : RHYTHM_KINDS;
+            const showKind = e.kind && e.discipline !== 'rest' && e.kind !== 'auto';
+            const kindLabel = showKind ? (kindList.find((k) => k[0] === e.kind) || [, e.kind])[1] : '';
+            return '<span class="gs-rhythm-day-chip">' + escapeHtml(discLabel + (kindLabel ? ' · ' + kindLabel : '')) + '</span>';
+          }).join('')
         : '<span class="gs-rhythm-day-chip gs-rhythm-day-chip-empty">Not set</span>';
       const flagged = (dayFlags[day] && dayFlags[day].length) || (entryFlags[day] || []).some((f) => f.length);
       const entriesHtml = entries.map((e, idx) => {
-        const showKindRow = e.discipline !== 'rest' && e.discipline !== 'strength';
-        const kindChips = RHYTHM_KINDS.map(([key, label]) => (
+        const showKindRow = e.discipline !== 'rest';
+        const kindList = e.discipline === 'strength' ? RHYTHM_STRENGTH_KINDS : RHYTHM_KINDS;
+        const kindChips = kindList.map(([key, label]) => (
           '<button type="button" class="gs-rhythm-chip' + (e.kind === key ? ' is-active' : '') + '" data-field="kind" data-value="' + key + '">' + label + '</button>'
         )).join('');
         const discChips = RHYTHM_DISCIPLINES.filter(([key]) => key === 'rest' || key === 'strength' || enabled[key] !== false).map(([key, label]) => (
@@ -5519,9 +5599,14 @@ document.addEventListener('DOMContentLoaded', function () {
           if (!entry) return;
           if (field === 'discipline') {
             entry.discipline = value;
+            // BUG FIX (reported): this used to set kind to the literal
+            // placeholder string 'strength' when switching to the
+            // strength discipline — the exact root cause of the
+            // "Strength · strength" chip. 'auto' is strength's real
+            // default (let the rotation decide), not a placeholder.
             if (value === 'rest') { delete entry.kind; }
-            else if (value === 'strength') { entry.kind = 'strength'; }
-            else if (!entry.kind || entry.kind === 'strength') { entry.kind = 'easy'; }
+            else if (value === 'strength') { entry.kind = 'auto'; }
+            else if (!entry.kind || !RHYTHM_KINDS.some((k) => k[0] === entry.kind)) { entry.kind = 'easy'; }
           } else if (field === 'kind') {
             entry.kind = value;
           }
@@ -5583,7 +5668,7 @@ document.addEventListener('DOMContentLoaded', function () {
     const rawRhythm = rhythm || {};
     rhythmDraft = {};
     Object.keys(rawRhythm).forEach((wd) => {
-      rhythmDraft[wd] = (rawRhythm[wd] || []).map((e) => (e && e.kind ? Object.assign({}, e, { kind: normalizeRhythmKindForCompatMain(e.kind) }) : e));
+      rhythmDraft[wd] = (rawRhythm[wd] || []).map((e) => (e && e.kind ? Object.assign({}, e, { kind: normalizeRhythmKindForCompatMain(e.discipline, e.kind) }) : e));
     });
     rhythmActivityTypes = types || [];
     rhythmPlanDisciplines = planDisciplines;

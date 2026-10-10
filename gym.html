@@ -2462,6 +2462,24 @@ img, video, canvas, svg { max-width: 100%; }
     s.units = s.units || CONFIG.units || 'kg';
     s.gyms  = (Array.isArray(s.gyms)  && s.gyms.length)  ? s.gyms  : CONFIG.gyms.slice();
     s.days  = (Array.isArray(s.days)  && s.days.length)  ? s.days  : CONFIG.days.slice();
+    // Phase 3.5 (strength kinds) — the weekly rhythm's strength kind
+    // can name "explosive" as a day type (alongside push/pull/legs),
+    // but nothing seeded it as a REAL day type before this. A ONE-TIME
+    // migration (guarded by its own flag, not just "does a day named
+    // Explosive exist" — otherwise deleting it via Settings would
+    // just bring it right back on the next load): adds it exactly
+    // once if it wasn't already there. Deliberately empty — no
+    // exercises, no routine, never added to splitRotation (the user's
+    // actual rotation cadence is untouched) — the user builds it out
+    // themselves via the existing routine/exercise builder, exactly
+    // like any other day type, and can rename or delete it via
+    // Settings afterward without it reappearing.
+    if (!s._explosiveDaySeeded) {
+      s._explosiveDaySeeded = true;
+      if (!s.days.some((d) => (d.name || '').toLowerCase() === 'explosive')) {
+        s.days.push({ id: 'd_explosive_seed', name: 'Explosive' });
+      }
+    }
     s.exercises = Array.isArray(s.exercises) ? s.exercises : buildDefaultExercises();
     s.logs = (s.logs && typeof s.logs === 'object') ? s.logs : {};
     // Routines: named, reusable workout templates (WHOOP Strength
@@ -6701,7 +6719,29 @@ img, video, canvas, svg { max-width: 100%; }
   // weekday name so the prompt never has to (and never gets to) guess
   // it — see buildTodaySystemPrompt's own "(missed Monday)" wording.
   const WEEKDAY_LABELS_FULL = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-  function missedDayTypesThisWeek(state, weekMondayKey, todayKeyStr) {
+  // Same Sunday-first order as Date.getDay(), lowercase full names —
+  // the rhythm's own storage key convention (api/sync-state.js's
+  // WEEKDAY_KEYS), used to look up a given calendar date's rhythm entry.
+  const RHYTHM_WEEKDAY_NAMES_LOWER = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+  // Resolves a rhythm strength entry's typed kind (push/pull/legs/
+  // explosive) to the user's REAL configured day-type name, matched
+  // by NAME case-insensitively — never assumed to equal a day's
+  // internal id, since a day added via Settings' "+ Add day" gets a
+  // timestamp-based one, not a clean slug. null for 'auto'/unset, or
+  // when no real day type matches (nothing to check against — the
+  // caller falls back to the rotation in that case).
+  function resolveRhythmStrengthDayType(days, kind) {
+    if (!kind || kind === 'auto') return null;
+    const matched = days.find((d) => (d.name || '').toLowerCase() === kind.toLowerCase());
+    return matched ? matched.name : null;
+  }
+  // rhythm (optional) — the full weekly rhythm object. For each
+  // earlier day this week, a TYPED strength rhythm entry (kind other
+  // than 'auto') overrides what day-type was "expected" that day,
+  // instead of asking the rotation; an 'auto' entry, or no rhythm
+  // entry at all, falls back to the rotation exactly as before this
+  // feature existed.
+  function missedDayTypesThisWeek(state, weekMondayKey, todayKeyStr, rhythm) {
     const days = Array.isArray(state.days) ? state.days : [];
     const dayNameById = {};
     days.forEach((d) => { dayNameById[d.id] = d.name; });
@@ -6725,8 +6765,15 @@ img, video, canvas, svg { max-width: 100%; }
     for (let i = 0; i < 7; i++) {
       const dk = dateKey(cursor);
       if (dk >= todayKeyStr) break; // only strictly-earlier days this week — today itself is handled by the normal rotation logic, not "missed"
-      const split = (window.PoCoach && window.PoCoach.getSplitForDate(dk)) || { name: null };
-      const dayType = split && split.name;
+      let dayType = null;
+      const weekdayKey = RHYTHM_WEEKDAY_NAMES_LOWER[cursor.getDay()];
+      const rhythmEntry = rhythm && rhythm[weekdayKey] && rhythm[weekdayKey].find((e) => e.discipline === 'strength');
+      if (rhythmEntry && rhythmEntry.kind && rhythmEntry.kind !== 'auto') {
+        dayType = resolveRhythmStrengthDayType(days, rhythmEntry.kind);
+      } else {
+        const split = (window.PoCoach && window.PoCoach.getSplitForDate(dk)) || { name: null };
+        dayType = split && split.name;
+      }
       if (dayType && dayType !== '—' && !/^rest\b/i.test(dayType)) {
         const loggedSet = loggedDayNamesByDate[dk];
         if (!loggedSet || !loggedSet.has(dayType)) {
@@ -6738,11 +6785,29 @@ img, video, canvas, svg { max-width: 100%; }
     return missed;
   }
 
-  function buildTodayStrengthContext() {
+  // rhythm (optional) — the full weekly rhythm object, used to resolve
+  // TODAY's strength day-type when the rhythm types it, and passed
+  // through to missedDayTypesThisWeek for the same reason on earlier
+  // days. With no rhythm (or an 'auto' entry for today), every field
+  // here is byte-identical to before this feature existed.
+  function buildTodayStrengthContext(rhythm) {
     const state = (window.PoCoach && window.PoCoach.getState()) || {};
-    const split = (window.PoCoach && window.PoCoach.getTodaySplit()) || { name: null, index: 0 };
     const days = Array.isArray(state.days) ? state.days : [];
-    const splitName = split && split.name ? String(split.name) : null;
+    const rotationSplit = (window.PoCoach && window.PoCoach.getTodaySplit()) || { name: null, index: 0 };
+    const rotationSplitName = rotationSplit && rotationSplit.name ? String(rotationSplit.name) : null;
+
+    // Phase 3.5 — a TYPED rhythm strength entry for TODAY overrides
+    // the rotation's own pick entirely. The EXISTING prompt text
+    // already treats todaySplitDay as authoritative ("NEVER name a
+    // different day"), so resolving it to the rhythm's own day type
+    // here is all that's needed to make "the model may not pick
+    // another" true for a typed rhythm day too — no new enforcement
+    // code required. 'auto' (or no rhythm entry for today) leaves the
+    // rotation's own pick completely untouched.
+    const todayWeekdayKey = RHYTHM_WEEKDAY_NAMES_LOWER[DayLib.parseDateKey(DayLib.effectiveDateKey()).getDay()];
+    const todayRhythmEntry = rhythm && rhythm[todayWeekdayKey] && rhythm[todayWeekdayKey].find((e) => e.discipline === 'strength');
+    const rhythmDayType = todayRhythmEntry ? resolveRhythmStrengthDayType(days, todayRhythmEntry.kind) : null;
+    const splitName = rhythmDayType || rotationSplitName;
     const isRestDay = /^rest\b/i.test(splitName || '');
 
     let exercisesConfiguredForToday = [];
@@ -6773,7 +6838,7 @@ img, video, canvas, svg { max-width: 100%; }
       // [{dayType:"Push", weekday:"Monday"}] on a Wednesday where
       // Monday's Push was skipped. [] when nothing was missed, or when
       // no split/logs exist at all — see missedDayTypesThisWeek()'s own comment.
-      missedDayTypes: missedDayTypesThisWeek(state, thisWeekMondayKey(), DayLib.effectiveDateKey()),
+      missedDayTypes: missedDayTypesThisWeek(state, thisWeekMondayKey(), DayLib.effectiveDateKey(), rhythm),
     };
   }
 
@@ -7190,7 +7255,12 @@ img, video, canvas, svg { max-width: 100%; }
 
       const whoopTrend = await fetchWhoopTrend(7);
       const whoopToday = whoopTrend.connected ? whoopTrend.today : null;
-      const strengthContext = buildTodayStrengthContext();
+      // Phase 3.5 — fetched BEFORE buildTodayStrengthContext (moved
+      // ahead of where it used to sit, below) since that function now
+      // needs the rhythm to resolve a typed strength day; also used
+      // just below to build rhythmForDay, same as before.
+      const weeklyRhythm = await fetchWeeklyRhythm();
+      const strengthContext = buildTodayStrengthContext(weeklyRhythm);
       // Fetched once here and reused for both padel detection and Phase 2's
       // availability/calendar feasibility (see detectPadelToday's and
       // buildTodayFeasibility's own comments) — one gatherTodayContext()
@@ -7201,11 +7271,9 @@ img, video, canvas, svg { max-width: 100%; }
       const todayCalendar = await detectPadelToday(ctx);
       const restrictions = await fetchActiveRestrictions();
       const feasibility = buildTodayFeasibility(ctx, plan);
-      // Phase 3.5 — resolve TODAY's own rhythm entries client-side
-      // (this file already has DayLib; the server never resolves
-      // "today" itself — see api/training.js's own comment) and send
-      // only that day's entries, never the whole weekly rhythm.
-      const weeklyRhythm = await fetchWeeklyRhythm();
+      // Resolve TODAY's own rhythm entries to send separately from the
+      // whole weekly rhythm (this file already has DayLib; the server
+      // never resolves "today" itself — see api/training.js's own comment).
       const todayWeekdayForRhythm = AVAIL_WEEKDAY_NAMES[DayLib.parseDateKey(DayLib.effectiveDateKey()).getDay()];
       const rhythmForDay = weeklyRhythm[todayWeekdayForRhythm] || [];
 

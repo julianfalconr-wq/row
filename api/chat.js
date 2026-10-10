@@ -523,13 +523,28 @@ const PROPOSE_PLAN_STATUS_CHANGE_TOOL = {
 // none existed, include it with its full entries array.
 const RHYTHM_WEEKDAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 const RHYTHM_DISCIPLINES_CHAT = ['swim', 'run', 'strength', 'bike', 'rest'];
-const RHYTHM_KINDS_CHAT = ['easy', 'interval', 'long', 'technique', 'pace', 'brick', 'strength'];
-// Rename: 'endurance' -> 'pace'. Never rejects an older cached tool
-// call / stored entry still using the old name — mapped to 'long',
-// same compat convention as api/sync-state.js/api/training.js's own
-// copies of this mapping.
-function normalizeRhythmKindForCompatChat(kind) {
-  return kind === 'endurance' ? 'long' : kind;
+const RHYTHM_CARDIO_KINDS_CHAT = ['easy', 'interval', 'long', 'technique', 'pace', 'brick'];
+// 'auto' = let the existing Push/Pull/Legs rotation decide (the
+// default). push/pull/legs/explosive are real day-type names, matched
+// by name against the user's own configured state.days — see
+// api/sync-state.js's own STRENGTH_KINDS comment.
+const RHYTHM_STRENGTH_KINDS_CHAT = ['auto', 'push', 'pull', 'legs', 'explosive'];
+// The tool's input_schema enum has no way to make `kind` conditional
+// on the sibling `discipline` field, so it lists every valid value
+// from BOTH vocabularies — normalizeProposedWeeklyRhythm below is what
+// actually cross-checks a given kind against its own entry's
+// discipline.
+const RHYTHM_KINDS_CHAT = RHYTHM_CARDIO_KINDS_CHAT.concat(RHYTHM_STRENGTH_KINDS_CHAT);
+// Two renames, both backward-compatible (see api/sync-state.js's own
+// normalizeRhythmKindForCompat — same mapping, duplicated per this
+// project's per-file convention): a cardio 'endurance' -> 'long', and
+// a strength entry's old placeholder kind 'strength' -> 'auto'. Never
+// rejects an older cached tool call / stored entry still using either
+// old name.
+function normalizeRhythmKindForCompatChat(discipline, kind) {
+  if (kind === 'endurance') return 'long';
+  if (discipline === 'strength' && kind === 'strength') return 'auto';
+  return kind;
 }
 const PROPOSE_WEEKLY_RHYTHM_TOOL = {
   name: 'propose_weekly_rhythm',
@@ -560,7 +575,7 @@ const PROPOSE_WEEKLY_RHYTHM_TOOL = {
                 type: 'object',
                 properties: {
                   discipline: { type: 'string', enum: RHYTHM_DISCIPLINES_CHAT },
-                  kind: { type: 'string', enum: RHYTHM_KINDS_CHAT, description: 'Omit for a "rest" entry.' },
+                  kind: { type: 'string', enum: RHYTHM_KINDS_CHAT, description: 'For swim/run/bike: an intensity (easy/interval/long/technique/pace/brick). For strength: a DAY TYPE — "auto" (let the rotation decide, the default) or push/pull/legs/explosive, matched against the user\'s own configured day types. Omit for a "rest" entry.' },
                   note: { type: 'string', description: 'Optional short note, e.g. "300-400m continuous blocks".' },
                 },
                 required: ['discipline'],
@@ -762,14 +777,25 @@ function normalizeProposedWeeklyRhythm(raw) {
       if (!e || typeof e !== 'object' || !RHYTHM_DISCIPLINES_CHAT.includes(e.discipline)) return null;
       const out = { discipline: e.discipline };
       if (e.kind !== undefined && e.kind !== null) {
-        const kind = normalizeRhythmKindForCompatChat(e.kind);
-        if (!RHYTHM_KINDS_CHAT.includes(kind)) return null;
+        const kind = normalizeRhythmKindForCompatChat(e.discipline, e.kind);
+        const validKinds = e.discipline === 'strength' ? RHYTHM_STRENGTH_KINDS_CHAT : RHYTHM_CARDIO_KINDS_CHAT;
+        if (!validKinds.includes(kind)) return null;
         out.kind = kind;
       }
       if (typeof e.note === 'string' && e.note.trim()) out.note = e.note.trim().slice(0, 140);
       return out;
     }).filter(Boolean);
-    return { weekday: d.weekday, entries };
+    // At most one strength entry per day — the model should never
+    // have proposed two, but this is enforced here regardless (same
+    // guarantee api/sync-state.js's own save-path validation gives).
+    let sawStrength = false;
+    const dedupedEntries = entries.filter((e) => {
+      if (e.discipline !== 'strength') return true;
+      if (sawStrength) return false;
+      sawStrength = true;
+      return true;
+    });
+    return { weekday: d.weekday, entries: dedupedEntries };
   }).filter(Boolean);
   return {
     days,
@@ -1234,8 +1260,11 @@ function buildStaticSystemPrompt() {
     'change which kind of session happens on a day, or set up a rhythm from scratch ("make Tuesdays interval ' +
     'days", "I want a fixed weekly pattern"), call propose_weekly_rhythm with ONLY the day(s) actually ' +
     'changing (include a day with its full new entries list to set/replace it, omit any day that stays the ' +
-    'same) and a short reason. Never propose a discipline the user has no recommendable activity type for — ' +
-    'check TODAY\'S DATA\'s activity types first (e.g. never propose Bike while the user has no bicycle). ' +
+    'same) and a short reason. For a strength entry, kind is a DAY TYPE — "auto" (let the existing split ' +
+    'rotation decide, the default), or one of "push"/"pull"/"legs"/"explosive" matched against the user\'s ' +
+    'own configured day types (never invent a day type they haven\'t actually set up). Never propose a ' +
+    'discipline the user has no recommendable activity type for — check TODAY\'S DATA\'s activity types ' +
+    'first (e.g. never propose Bike while the user has no bicycle). ' +
     'When you do call it, also say a short summary sentence in your normal reply text (the proposal is shown ' +
     'as its own card with a Save button).\n\n' +
     'TODAY\'S SESSION OVERRIDE: the user can also directly override what Training\'s "Today\'s session" ' +

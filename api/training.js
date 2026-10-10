@@ -525,7 +525,7 @@ const BACKSTOP_DISCIPLINE_PATTERNS = {
   swim: /swim/i,
   bike: /\b(bike|cycl|ride|spin)/i,
   run: /\b(run|jog)/i,
-  strength: /\b(push|pull|legs|strength|upper[- ]?body|lower[- ]?body|full[- ]?body)\b/i,
+  strength: /\b(push|pull|legs|explosive|strength|upper[- ]?body|lower[- ]?body|full[- ]?body)\b/i,
 };
 function applyFeasibilityBackstop(recommendation, feasibility) {
   if (!feasibility || !feasibility.configured) return recommendation;
@@ -538,8 +538,16 @@ function applyFeasibilityBackstop(recommendation, feasibility) {
 }
 function describeRhythmEntryForToday(entry) {
   if (entry.discipline === 'rest') return 'Rest';
+  if (entry.discipline === 'strength') {
+    // A typed day shows its real name directly ("Push", "Explosive"),
+    // matching the exact convention strengthContext.todaySplitDay
+    // already uses elsewhere — never "Strength Push". 'auto' (or
+    // unset) shows the generic "Strength", same as before this day-
+    // type feature existed.
+    return (entry.kind && entry.kind !== 'auto') ? (entry.kind.charAt(0).toUpperCase() + entry.kind.slice(1)) : 'Strength';
+  }
   const disc = entry.discipline.charAt(0).toUpperCase() + entry.discipline.slice(1);
-  return disc + (entry.kind && entry.kind !== 'strength' ? ' ' + entry.kind : '');
+  return disc + (entry.kind ? ' ' + entry.kind : '');
 }
 // Phase 3.5 — the LAST-resort code check: the prompt already tells
 // the model today's rhythm entry is the default and to only deviate
@@ -557,7 +565,7 @@ function applyRhythmBackstop(recommendation, rhythmForDay, feasibility, restrict
   if (entry.discipline === 'rest') return recommendation; // nothing to default to or compare against
   const disciplinePattern = BACKSTOP_DISCIPLINE_PATTERNS[entry.discipline];
   const mentionsDiscipline = disciplinePattern ? disciplinePattern.test(recommendation) : false;
-  const mentionsKind = !entry.kind || entry.kind === 'strength' || new RegExp('\\b' + entry.kind + '\\b', 'i').test(recommendation);
+  const mentionsKind = !entry.kind || entry.kind === 'auto' || new RegExp('\\b' + entry.kind + '\\b', 'i').test(recommendation);
   if (mentionsDiscipline && mentionsKind) return recommendation; // already matches the rhythm -- nothing to backstop
 
   // Restriction scope values are "running"/"strength"/"padel" (see
@@ -1092,15 +1100,30 @@ const RHYTHM_WEEKDAY_ORDER = ['monday', 'tuesday', 'wednesday', 'thursday', 'fri
 // duplicated per this project's established per-file small-
 // duplication convention (the two files never share a module).
 const RHYTHM_DISCIPLINE_VALUES = ['swim', 'run', 'strength', 'bike', 'rest'];
-const RHYTHM_KIND_VALUES = ['easy', 'interval', 'long', 'technique', 'pace', 'brick', 'strength'];
-// Rename: 'endurance' -> 'pace'. A stale client or an already-stored
-// entry from before the rename must keep working, never get rejected
-// — mapped to 'long' (same compat mapping as api/sync-state.js's own
-// normalizeRhythmKindForCompat; duplicated per this project's per-file
-// convention). Every reader of an entry's kind in this file goes
-// through this first.
-function normalizeRhythmKindForCompat(kind) {
-  return kind === 'endurance' ? 'long' : kind;
+// Two SEPARATE kind vocabularies, same split as api/sync-state.js's
+// own CARDIO_KINDS/STRENGTH_KINDS (duplicated per this project's per-
+// file convention — the two files never share a module).
+const RHYTHM_CARDIO_KIND_VALUES = ['easy', 'interval', 'long', 'technique', 'pace', 'brick'];
+// 'auto' = let the existing Push/Pull/Legs rotation decide (the
+// default, and what a legacy entry's old placeholder kind 'strength'
+// now reads as). push/pull/legs/explosive are matched by NAME
+// (case-insensitively) against gym.html's own state.days — never a
+// fixed id, since a day added via "+ Add day" gets a timestamp-based
+// one.
+const RHYTHM_STRENGTH_KIND_VALUES = ['auto', 'push', 'pull', 'legs', 'explosive'];
+function rhythmKindValuesFor(discipline) {
+  return discipline === 'strength' ? RHYTHM_STRENGTH_KIND_VALUES : RHYTHM_CARDIO_KIND_VALUES;
+}
+// Two renames, both backward-compatible (same mapping as api/sync-
+// state.js's own normalizeRhythmKindForCompat): a cardio 'endurance'
+// -> 'long', and a strength entry's old placeholder kind 'strength'
+// -> 'auto'. A stale client or an already-stored entry using either
+// old name must keep working, never get rejected. Every reader of an
+// entry's kind in this file goes through this first.
+function normalizeRhythmKindForCompat(discipline, kind) {
+  if (kind === 'endurance') return 'long';
+  if (discipline === 'strength' && kind === 'strength') return 'auto';
+  return kind;
 }
 function sanitizeRhythmEntries(raw) {
   if (!Array.isArray(raw)) return [];
@@ -1108,8 +1131,8 @@ function sanitizeRhythmEntries(raw) {
     if (!e || typeof e !== 'object' || !RHYTHM_DISCIPLINE_VALUES.includes(e.discipline)) return null;
     const out = { discipline: e.discipline };
     if (e.kind !== undefined && e.kind !== null) {
-      const kind = normalizeRhythmKindForCompat(e.kind);
-      if (RHYTHM_KIND_VALUES.includes(kind)) out.kind = kind;
+      const kind = normalizeRhythmKindForCompat(e.discipline, e.kind);
+      if (rhythmKindValuesFor(e.discipline).includes(kind)) out.kind = kind;
     }
     return out;
   }).filter(Boolean);
@@ -1124,11 +1147,12 @@ function sanitizeRhythmEntries(raw) {
 // already per-session (see applyCapacityBackstop's own comment) and
 // strength has no distance to split at all.
 const RHYTHM_KIND_WEIGHT = { long: 1.5, pace: 0.85, brick: 1.0, easy: 1.0, interval: 0.8, technique: 0.6 };
-// 'pace' counts as hard, same as 'interval'/'long' — a continuous
-// race-pace effort is exactly the kind of demanding session the
-// back-to-back-hard-days flag and the low-recovery downgrade rule
-// exist to catch.
-const RHYTHM_HARD_KINDS = new Set(['interval', 'long', 'pace']);
+// 'pace'/'interval'/'long' are hard cardio efforts; 'legs'/'explosive'
+// are the strength-side equivalent (real leg load) — all five count
+// as hard for the back-to-back-hard-days flag and the low-recovery
+// downgrade rule. 'push'/'pull'/'auto' do not (upper-body work, or
+// whatever the rotation already decided, isn't assumed demanding).
+const RHYTHM_HARD_KINDS = new Set(['interval', 'long', 'pace', 'legs', 'explosive']);
 function rhythmHasAnyEntries(rhythm) {
   return !!(rhythm && typeof rhythm === 'object' && RHYTHM_WEEKDAY_ORDER.some((wd) => Array.isArray(rhythm[wd]) && rhythm[wd].length));
 }
@@ -1140,8 +1164,8 @@ function rhythmHasAnyEntries(rhythm) {
 // rhythm entries arrive straight from the client's own weeklyRhythm
 // object (mode=plan has no per-entry sanitizer of its own the way
 // sanitizeRhythmEntries is for mode=today's rhythmForDay), so the
-// endurance->pace compat mapping is applied here too, right at the
-// one place every discipline's entries are actually read.
+// compat mapping is applied here too, right at the one place every
+// discipline's entries are actually read.
 function rhythmEntriesForDiscipline(rhythm, weekDates, discipline) {
   const out = [];
   RHYTHM_WEEKDAY_ORDER.forEach((wd) => {
@@ -1149,7 +1173,7 @@ function rhythmEntriesForDiscipline(rhythm, weekDates, discipline) {
     if (!dateKey) return;
     (rhythm[wd] || []).forEach((entry) => {
       if (entry.discipline !== discipline) return;
-      out.push({ dateKey, entry: entry.kind ? Object.assign({}, entry, { kind: normalizeRhythmKindForCompat(entry.kind) }) : entry });
+      out.push({ dateKey, entry: entry.kind ? Object.assign({}, entry, { kind: normalizeRhythmKindForCompat(entry.discipline, entry.kind) }) : entry });
     });
   });
   return out;
@@ -1196,9 +1220,16 @@ function buildRhythmSessionsForDiscipline(discipline, targets, capacity, rhythm,
     if (entries.length !== t.sessions) {
       mismatchNotes.push('Rhythm has ' + entries.length + ' strength session' + (entries.length === 1 ? '' : 's') + ' this week, but the plan targets ' + t.sessions + '.');
     }
+    // BUG FIX (reported): kind used to be hardcoded to the literal
+    // placeholder string 'strength' regardless of what the entry
+    // actually said, and hard was hardcoded false — a typed legs/
+    // explosive entry never showed its real day type and was never
+    // flagged hard. kind now carries the real day type ('auto' if
+    // unset), and hard follows RHYTHM_HARD_KINDS like every other
+    // discipline.
     return entries.map((e, i) => ({
-      id: 'strength-rhythm-' + i, discipline: 'strength', kind: 'strength', activityTypeId: null, activityName: 'Strength',
-      targetAmount: null, unit: '', estMinutes: 45, hard: false, dateKey: e.dateKey,
+      id: 'strength-rhythm-' + i, discipline: 'strength', kind: e.entry.kind || 'auto', activityTypeId: null, activityName: 'Strength',
+      targetAmount: null, unit: '', estMinutes: 45, hard: RHYTHM_HARD_KINDS.has(e.entry.kind), dateKey: e.dateKey,
     }));
   }
   return null;
@@ -1551,11 +1582,16 @@ function buildRhythmPromptSection(dayLabel, allowRecoveryDeviation) {
     'these specific, checkable things says otherwise: an active restriction blocks that discipline; ' +
     recoveryReason +
     dayLabel + '\'s feasibility/calendar (an event, padel) rules that discipline out entirely; or a ' +
-    'Phase-3.3 missed strength day-type legitimately takes priority over a rhythm strength day. Never ' +
-    'invent a session that is neither in rhythmForDay nor already part of weekPlan\'s own targets — no ' +
-    'extra interval "just because". If you deviate from the rhythm for any of these reasons, say so in ONE ' +
-    'short clause naming the real reason (e.g. "Easy run instead of interval — recovery 31%"). If ' +
-    'rhythmForDay is empty/absent, ignore this paragraph and decide as you would otherwise.\n\n'
+    'Phase-3.3 missed strength day-type legitimately takes priority over a rhythm strength day. For a ' +
+    'strength entry specifically, kind IS the day type (e.g. "push", "legs", "explosive") — treat it exactly ' +
+    'as authoritative as strengthContext.todaySplitDay (you may not pick a different day type) UNLESS kind ' +
+    'is "auto", which means the rhythm has no opinion on WHICH day type and you follow ' +
+    'strengthContext.todaySplitDay/the rotation exactly as you would with no rhythm at all. Never invent a ' +
+    'session that is neither in rhythmForDay nor already part of weekPlan\'s own targets — no extra interval ' +
+    '"just because". If you deviate from the rhythm for any of these reasons, say so in ONE short clause ' +
+    'naming the real reason (e.g. "Easy run instead of interval — recovery 31%", "Pull instead of Legs — ' +
+    'Monday\'s Push was missed"). If rhythmForDay is empty/absent, ignore this paragraph and decide as you ' +
+    'would otherwise.\n\n'
   );
 }
 function buildTodaySystemPrompt(restrictions, feasibility) {
