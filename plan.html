@@ -788,50 +788,123 @@ document.addEventListener('DOMContentLoaded', function () {
     $('planGoalMeta').textContent = startLabel + ' → ' + endLabel + extra;
 
     const raceDateInput = $('planRaceDateInput');
-    // BUG FIX (reported): a native <input type="date">'s `change` event
-    // can fire more than once while editing an ALREADY-FILLED value —
-    // e.g. retyping just the year digit-by-digit momentarily re-commits
-    // a complete (if nonsensical) date on each digit, still paired with
-    // the OLD month/day ("0003-02-01" while typing a new year over an
-    // existing "2027-02-01"). The handler used to disable the input
-    // synchronously on EVERY one of those fires before anything was
-    // validated, which froze/stole focus after the very first spurious
-    // digit and made it impossible to finish typing — and nothing ever
-    // checked plausibility before saving, so that momentary "0003"
-    // could reach the server (which only checks the YYYY-MM-DD *shape*,
-    // not whether the year makes sense — see api/sync-state.js's
-    // DATE_RE). isPlausibleRaceDate() rejects anything outside a
-    // generous real-world window; an implausible fire is reverted
-    // WITHOUT disabling the field or touching the server, so typing is
-    // never interrupted — only a genuinely complete, plausible date
-    // ever reaches saveRaceDate().
+    // BUG FIX (reported, round 2 — the round-1 fix still reproduced
+    // live): a native <input type="date">'s `change`/`input` events
+    // fire MORE THAN ONCE while the field is still being typed into —
+    // e.g. typing "15/06/" then the first year digit "2" can itself
+    // report a complete-but-wrong date ("0002-06-15" or similar) before
+    // the rest of the year is even typed. Round 1 reacted to that
+    // intermediate event by reverting raceDateInput.value to the last
+    // SAVED value — which, for a date being entered into a previously
+    // EMPTY field, is '' — wiping the day/month the user had just
+    // typed. The fix now: an intermediate event is NEVER acted on while
+    // the field has focus — no value writes, no disabling, no re-
+    // render, no message. The field is left completely alone until the
+    // user signals they're done (blur, or Enter). Only then is the
+    // CURRENT value read, validated, and either saved or (if
+    // implausible) reverted with a brief message — a revert at THAT
+    // point is safe because the user has already indicated they're
+    // finished, so there's nothing left to wipe out from under them.
+    let raceDateSavedValue = plan.raceDate || '';
+    let raceDateMessageTimer = null;
+    function showRaceDateLabel(val) {
+      const label = raceCountdownLabel(val, todayKey());
+      $('planRaceSub').textContent = label ? label.text : '';
+    }
+    function showRaceDateMessage(msg) {
+      if (raceDateMessageTimer) clearTimeout(raceDateMessageTimer);
+      $('planRaceSub').textContent = msg;
+      raceDateMessageTimer = setTimeout(() => showRaceDateLabel(raceDateSavedValue), 4000);
+    }
+    // BUG FIX (reported, round 2) — the round-1 window (last year
+    // through +20 years) only existed to catch obviously-broken stored
+    // years (0003, 9999) during self-heal; it never guarded ENTRY at
+    // all. A race date being typed/picked RIGHT NOW is realistically
+    // between today and a few years out — anything else (including a
+    // plausible-looking but wrong year from the mid-typing quirk above)
+    // is rejected on blur/Enter, not silently accepted.
+    function isPlausibleNewRaceDate(dateStr) {
+      if (!dateStr) return true; // clearing the field is always allowed
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return false;
+      const d = DayLib.parseDateKey(dateStr);
+      const today = DayLib.parseDateKey(todayKey());
+      const maxOut = new Date(today); maxOut.setFullYear(maxOut.getFullYear() + 3);
+      return d >= today && d <= maxOut;
+    }
+    // Self-heal: an already-stored value with an outright nonsensical
+    // year (not the narrower "today to ~3 years" entry window above —
+    // a race date that's already PAST is a legitimate, intentionally
+    // kept value, e.g. "Race day was May 15") only gets cleared for a
+    // truly broken year like the reported "0003".
     let displayedRaceDate = plan.raceDate || '';
     if (displayedRaceDate && !isPlausibleRaceDate(displayedRaceDate)) {
       console.warn('[plan] stored raceDate "' + displayedRaceDate + '" has an implausible year — clearing it.');
       displayedRaceDate = '';
+      raceDateSavedValue = '';
       plan.raceDate = null;
       saveRaceDate(plan.id, null); // best-effort self-heal; a failure just leaves it to be retried on the next render
     }
     raceDateInput.value = displayedRaceDate;
-    const raceLabel = raceCountdownLabel(displayedRaceDate, todayK);
-    $('planRaceSub').textContent = raceLabel ? raceLabel.text : '';
-    raceDateInput.onchange = async () => {
-      const val = raceDateInput.value || null; // clearing the input removes the race date
-      if (!isPlausibleRaceDate(val)) {
-        raceDateInput.value = plan.raceDate || ''; // revert to the last known-good value, field stays enabled/editable
-        return;
-      }
-      raceDateInput.disabled = true;
+    showRaceDateLabel(displayedRaceDate);
+
+    // BUG FIX (live-tested): committing is reachable from BOTH `change`
+    // (fires the instant typing completes a plausible date, or on a
+    // picker selection) AND `blur`/Enter — typing the final digit then
+    // immediately tabbing away fires change and blur in such quick
+    // succession that the SECOND call could start before the FIRST
+    // call's await had updated raceDateSavedValue yet, causing the
+    // exact same value to be saved twice. raceDatePendingValue tracks
+    // a save that's already in flight so the second call is a no-op
+    // instead of racing it. Also, deliberately NEVER disables the
+    // input here — disabling a focused element makes the browser drop
+    // focus from it immediately, which is exactly the "loses focus"
+    // symptom this whole fix exists to avoid (a save normally takes
+    // well under a second; nothing here needs the input blocked while
+    // it's in flight now that double-saves are already guarded above).
+    let raceDatePendingValue = null;
+    async function commitRaceDate(val) {
+      if (val === raceDateSavedValue || val === raceDatePendingValue) return;
+      raceDatePendingValue = val;
       const ok = await saveRaceDate(plan.id, val);
-      raceDateInput.disabled = false;
+      raceDatePendingValue = null;
       if (ok) {
+        raceDateSavedValue = val;
         plan.raceDate = val;
-        const updated = raceCountdownLabel(val, todayKey());
-        $('planRaceSub').textContent = updated ? updated.text : '';
+        showRaceDateLabel(val);
       } else {
-        raceDateInput.value = plan.raceDate || ''; // revert on failure
+        raceDateInput.value = raceDateSavedValue;
         alert("Couldn't save race date — try again.");
       }
+    }
+    // `change` fires once the browser considers the current value
+    // "committed" — this includes a genuine picker selection (always a
+    // complete, plausible date) AND the tail end of digit-by-digit
+    // typing once every digit is in. Only acts when the value is
+    // ALREADY plausible — the exact mid-typing quirk this round fixes
+    // produces an IMPLAUSIBLE intermediate value, which this silently
+    // ignores (no revert, no message, no save): blur/Enter are the only
+    // ones that ever treat an implausible value as "the user is done,
+    // revert and explain."
+    // Plain .onX assignment (not addEventListener) — renderActivePlan()
+    // can run again later (after a backfill, a status change, etc.),
+    // and addEventListener would stack a NEW listener on top of the
+    // previous one each time instead of replacing it, firing the save
+    // multiple times per interaction.
+    raceDateInput.onchange = () => {
+      const val = raceDateInput.value || null;
+      if (isPlausibleNewRaceDate(val)) commitRaceDate(val);
+    };
+    raceDateInput.onblur = () => {
+      const val = raceDateInput.value || null;
+      if (isPlausibleNewRaceDate(val)) {
+        commitRaceDate(val);
+      } else {
+        showRaceDateMessage('Enter a date between today and ~3 years out.');
+        raceDateInput.value = raceDateSavedValue;
+      }
+    };
+    raceDateInput.onkeydown = (e) => {
+      if (e.key === 'Enter') raceDateInput.blur(); // same commit/revert path as leaving the field
     };
 
     // Progress number + bar — the most recent actual value available
