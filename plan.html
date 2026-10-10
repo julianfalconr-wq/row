@@ -640,6 +640,23 @@ document.addEventListener('DOMContentLoaded', function () {
   // never touches any field not present in the patch), so this needed
   // zero server-side schema changes beyond the raceDate format check
   // added there.
+  // BUG FIX (reported) — the server's own DATE_RE only checks the
+  // YYYY-MM-DD *shape*, not whether the year is remotely sane, so a
+  // momentary "0003-02-01" from a mid-edit date-input quirk (see the
+  // onchange handler's own comment below) would otherwise be accepted
+  // and persisted as-is. A generous real-world window: last year
+  // through 20 years out comfortably covers any real race date without
+  // hardcoding a brittle exact range. null/empty (clearing the field)
+  // is always considered plausible — that's a deliberate "no race
+  // date", not a bad value.
+  function isPlausibleRaceDate(dateStr) {
+    if (!dateStr) return true;
+    const m = /^(\d{4})-\d{2}-\d{2}$/.exec(dateStr);
+    if (!m) return false;
+    const year = Number(m[1]);
+    const thisYear = new Date().getFullYear();
+    return year >= thisYear - 1 && year <= thisYear + 20;
+  }
   async function saveRaceDate(id, raceDate) {
     const secret = getSecret();
     if (!secret) return false;
@@ -771,11 +788,39 @@ document.addEventListener('DOMContentLoaded', function () {
     $('planGoalMeta').textContent = startLabel + ' → ' + endLabel + extra;
 
     const raceDateInput = $('planRaceDateInput');
-    raceDateInput.value = plan.raceDate || '';
-    const raceLabel = raceCountdownLabel(plan.raceDate, todayK);
+    // BUG FIX (reported): a native <input type="date">'s `change` event
+    // can fire more than once while editing an ALREADY-FILLED value —
+    // e.g. retyping just the year digit-by-digit momentarily re-commits
+    // a complete (if nonsensical) date on each digit, still paired with
+    // the OLD month/day ("0003-02-01" while typing a new year over an
+    // existing "2027-02-01"). The handler used to disable the input
+    // synchronously on EVERY one of those fires before anything was
+    // validated, which froze/stole focus after the very first spurious
+    // digit and made it impossible to finish typing — and nothing ever
+    // checked plausibility before saving, so that momentary "0003"
+    // could reach the server (which only checks the YYYY-MM-DD *shape*,
+    // not whether the year makes sense — see api/sync-state.js's
+    // DATE_RE). isPlausibleRaceDate() rejects anything outside a
+    // generous real-world window; an implausible fire is reverted
+    // WITHOUT disabling the field or touching the server, so typing is
+    // never interrupted — only a genuinely complete, plausible date
+    // ever reaches saveRaceDate().
+    let displayedRaceDate = plan.raceDate || '';
+    if (displayedRaceDate && !isPlausibleRaceDate(displayedRaceDate)) {
+      console.warn('[plan] stored raceDate "' + displayedRaceDate + '" has an implausible year — clearing it.');
+      displayedRaceDate = '';
+      plan.raceDate = null;
+      saveRaceDate(plan.id, null); // best-effort self-heal; a failure just leaves it to be retried on the next render
+    }
+    raceDateInput.value = displayedRaceDate;
+    const raceLabel = raceCountdownLabel(displayedRaceDate, todayK);
     $('planRaceSub').textContent = raceLabel ? raceLabel.text : '';
     raceDateInput.onchange = async () => {
       const val = raceDateInput.value || null; // clearing the input removes the race date
+      if (!isPlausibleRaceDate(val)) {
+        raceDateInput.value = plan.raceDate || ''; // revert to the last known-good value, field stays enabled/editable
+        return;
+      }
       raceDateInput.disabled = true;
       const ok = await saveRaceDate(plan.id, val);
       raceDateInput.disabled = false;
