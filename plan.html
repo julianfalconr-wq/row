@@ -310,6 +310,30 @@ body {
     <button type="button" class="plan-start-btn" id="planStartBtn"><i data-lucide="message-circle" style="width:15px;height:15px"></i>Start a plan via chat</button>
   </div>
 
+  <!-- BUG FIX (reported): a failed/timed-out plans fetch used to be
+       indistinguishable from "genuinely zero active plans" (see
+       fetchPlans()'s own comment) and rendered #planEmpty above,
+       complete with its "Start a plan via chat" call to action — on a
+       real active plan. This state is shown ONLY when the fetch itself
+       failed AND there's no cached plan to fall back to (see
+       #planStaleBanner below for when one exists). -->
+  <div id="planError" class="plan-card" style="display:none">
+    <div class="plan-empty-icon"><i data-lucide="wifi-off"></i></div>
+    <div class="plan-empty-title">Couldn't load your plan</div>
+    <div class="plan-empty-sub">Check your connection and try again.</div>
+    <button type="button" class="plan-start-btn" id="planRetryBtn">Retry</button>
+  </div>
+
+  <!-- Shown ABOVE the active plan (not instead of it) when a refresh
+       fails but a previously-loaded plan is still available from the
+       local cache — see loadCachedPlan()'s own comment. -->
+  <div id="planStaleBanner" class="plan-nudge" style="display:none">
+    <div class="plan-nudge-text">Couldn't refresh — showing your last loaded plan.</div>
+    <div class="plan-nudge-actions">
+      <button type="button" class="plan-nudge-review-btn" id="planStaleRetryBtn">Retry</button>
+    </div>
+  </div>
+
   <div id="planActive" class="plan-card" style="display:none">
     <div class="plan-goal-desc" id="planGoalDesc"></div>
     <div class="plan-goal-meta" id="planGoalMeta"></div>
@@ -609,14 +633,46 @@ document.addEventListener('DOMContentLoaded', function () {
   // =============================================================
   // API
   // =============================================================
+  // BUG FIX (reported): this used to collapse EVERY failure — a
+  // network error, a timeout, a non-2xx response, a malformed JSON
+  // body — to the exact same `[]` a genuinely-empty "you have no
+  // plans" response returns. boot() couldn't tell those apart, so any
+  // transient read failure (a flaky connection on a hard reload, a
+  // brief server hiccup) rendered the real empty state — "No active
+  // plan yet", complete with its "Start a plan via chat" button — on
+  // top of an active plan that was never actually gone. Now returns
+  // {ok, plans}: ok is true ONLY for a genuine successful response
+  // (2xx, valid JSON, {ok:true, plans:[...]} shape); every failure
+  // mode returns {ok:false, plans:[]}, so the caller can show a retry
+  // state instead of silently treating "I don't know" as "there is
+  // nothing."
   async function fetchPlans() {
     const secret = getSecret();
-    if (!secret) return [];
+    if (!secret) return { ok: false, plans: [] };
     try {
       const r = await fetch('/api/sync-state?resource=plans&secret=' + encodeURIComponent(secret));
+      if (!r.ok) return { ok: false, plans: [] };
       const j = await r.json();
-      return (j && j.ok && Array.isArray(j.plans)) ? j.plans : [];
-    } catch (e) { return []; }
+      if (!j || j.ok !== true || !Array.isArray(j.plans)) return { ok: false, plans: [] };
+      return { ok: true, plans: j.plans };
+    } catch (e) { return { ok: false, plans: [] }; }
+  }
+  // Local fallback cache (NOT the source of truth — the server always
+  // is) of the last successfully-loaded ACTIVE plan, so a later failed
+  // refresh can keep showing something real instead of an empty state.
+  // Updated to match the server on every SUCCESSFUL load (including to
+  // null when the server confirms there genuinely is no active plan
+  // anymore — a completed/abandoned plan must not keep "coming back"
+  // from a stale cache the next time a real failure happens).
+  const PLAN_CACHE_KEY = 'po_coach_plan_cache_v1';
+  function loadCachedPlan() {
+    try { return JSON.parse(localStorage.getItem(PLAN_CACHE_KEY)); } catch (e) { return null; }
+  }
+  function saveCachedPlan(plan) {
+    try {
+      if (plan) localStorage.setItem(PLAN_CACHE_KEY, JSON.stringify(plan));
+      else localStorage.removeItem(PLAN_CACHE_KEY);
+    } catch (e) {}
   }
   async function updatePlanStatus(id, status) {
     const secret = getSecret();
@@ -741,17 +797,36 @@ document.addEventListener('DOMContentLoaded', function () {
     });
     return map;
   }
+  // The plan's own top-level targetValue (what the header's "of X km
+  // goal" and the progress bar read — see progressFraction's own
+  // comment) is a SEPARATE field from any checkpoint's targetValue;
+  // nothing kept it in sync with the recomputed cumulative chain
+  // above, so after a backfill the header could still show an old
+  // number (e.g. "735") while the last checkpoint's real cumulative
+  // target was something else (e.g. 753). Resolved as the checkpoint
+  // with the highest weekNumber in the GIVEN checkpoints array (not
+  // assumed to be week 34 specifically, in case the table or the
+  // plan's own length ever changes) — read AFTER cumulativeByWeek has
+  // been applied to that checkpoint, so this always reflects the
+  // final, backfilled number, not a stale cp.targetValue.
+  function lastCheckpointTargetValue(checkpoints) {
+    if (!Array.isArray(checkpoints) || !checkpoints.length) return null;
+    const last = checkpoints.reduce((a, b) => (b.weekNumber > a.weekNumber ? b : a));
+    return Number(last.targetValue);
+  }
   // Eligible only for the one plan this data actually describes
   // (running_distance) AND only while something would actually
   // change: a week still missing `disciplines`, an `overwrite` week
-  // whose stored disciplines/note differ from the table, or a
+  // whose stored disciplines/note differ from the table, a
   // checkpoint's cumulative targetValue not yet matching the
-  // recomputed one. Once every week matches, this returns false and
-  // the button stays hidden — re-running changes nothing.
+  // recomputed one, or the plan's own top-level targetValue not yet
+  // matching the last checkpoint's. Once everything matches, this
+  // returns false and the button stays hidden — re-running changes
+  // nothing.
   function planBackfillEligible(plan) {
     if (!plan || plan.goalType !== 'running_distance' || !Array.isArray(plan.weeklyCheckpoints)) return false;
     const cumulativeByWeek = computeRunCumulativeTargets(plan);
-    return plan.weeklyCheckpoints.some((cp) => {
+    const disciplineOrCheckpointStale = plan.weeklyCheckpoints.some((cp) => {
       const fill = PLAN_BACKFILL_DISCIPLINES[cp.weekNumber];
       if (!fill) return false;
       if (!cp.disciplines) return true;
@@ -759,6 +834,19 @@ document.addEventListener('DOMContentLoaded', function () {
       if (cp.weekNumber >= 4 && cumulativeByWeek[cp.weekNumber] != null && Number(cp.targetValue) !== cumulativeByWeek[cp.weekNumber]) return true;
       return false;
     });
+    if (disciplineOrCheckpointStale) return true;
+    // Checkpoints already match — separately check the top-level
+    // header target against what the (already-correct) last
+    // checkpoint says, so a plan whose checkpoints were backfilled
+    // before this fix existed still shows the button once to correct
+    // just the header.
+    const projected = plan.weeklyCheckpoints.map((cp) => (
+      cp.weekNumber >= 4 && cumulativeByWeek[cp.weekNumber] != null
+        ? Object.assign({}, cp, { targetValue: cumulativeByWeek[cp.weekNumber] })
+        : cp
+    ));
+    const lastTarget = lastCheckpointTargetValue(projected);
+    return lastTarget != null && Number(plan.targetValue) !== lastTarget;
   }
   async function backfillPlanDisciplines(plan) {
     const cumulativeByWeek = computeRunCumulativeTargets(plan);
@@ -791,18 +879,31 @@ document.addEventListener('DOMContentLoaded', function () {
       }
       return changed ? next : cp;
     });
+    // BUG FIX (reported) — keep the plan's own top-level targetValue
+    // (the header's "of X km goal" / progress bar) in sync with the
+    // just-recomputed cumulative chain. Read from newCheckpoints (the
+    // POST-backfill array), never the original plan.weeklyCheckpoints,
+    // so this reflects the final numbers even on the very first run.
+    // Does NOT touch startValue, weeks 1-3, or any per-discipline
+    // target — purely the one top-level cumulative field.
+    const newPlanTargetValue = lastCheckpointTargetValue(newCheckpoints);
+    const planTargetValueChanged = newPlanTargetValue != null && Number(plan.targetValue) !== newPlanTargetValue;
+    if (planTargetValueChanged) diffLines.push('Plan goal (header): ' + plan.targetValue + ' -> ' + newPlanTargetValue + ' km');
     if (!diffLines.length) return false; // nothing eligible — shouldn't happen given planBackfillEligible's own check, but never send a no-op patch
     if (!confirm('Backfill these weekly discipline targets?\n\n' + diffLines.join('\n'))) return false;
     const secret = getSecret();
     if (!secret) { alert('Set your dashboard secret first.'); return false; }
+    const patch = { weeklyCheckpoints: newCheckpoints };
+    if (planTargetValueChanged) patch.targetValue = newPlanTargetValue;
     try {
       const r = await fetch('/api/sync-state?resource=plans&secret=' + encodeURIComponent(secret), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'update', id: plan.id, patch: { weeklyCheckpoints: newCheckpoints } }),
+        body: JSON.stringify({ action: 'update', id: plan.id, patch }),
       });
       const j = await r.json();
       if (!(j && j.ok)) { alert('Could not save — try again.'); return false; }
       plan.weeklyCheckpoints = newCheckpoints;
+      if (planTargetValueChanged) plan.targetValue = newPlanTargetValue;
       return true;
     } catch (e) { alert('Could not save: ' + (e.message || String(e))); return false; }
   }
@@ -1179,24 +1280,65 @@ document.addEventListener('DOMContentLoaded', function () {
     $('planNudgeDismissBtn').onclick = dismiss;
   }
 
+  // currentActivePlan is read by the Complete/Abandon button handlers
+  // (wired ONCE, below) so a retry that loads a DIFFERENT active plan
+  // (or clears it) is always reflected — those handlers no longer
+  // close over a single boot-time snapshot.
+  let currentActivePlan = null;
+  // BUG FIX (reported) — the actual fetch-and-render logic, now its
+  // own function so it can be re-run from a Retry button without
+  // re-running boot()'s one-time secret check/listener wiring.
+  // Loading/error/stale states are all handled here; #planEmpty is
+  // reached ONLY via the one `else` branch after result.ok is
+  // confirmed true, never from a failure.
+  async function loadAndRenderPlans() {
+    $('planLoading').style.display = 'block';
+    $('planLoading').textContent = 'Loading…';
+    $('planError').style.display = 'none';
+    $('planEmpty').style.display = 'none';
+    $('planStaleBanner').style.display = 'none';
+
+    const result = await fetchPlans();
+    $('planLoading').style.display = 'none';
+
+    if (!result.ok) {
+      const cached = loadCachedPlan();
+      if (cached) {
+        // A real plan IS available (just possibly stale) — show it,
+        // with a small banner explaining the refresh failed, instead
+        // of the empty state or a full-page error.
+        $('planStaleBanner').style.display = 'flex';
+        currentActivePlan = cached;
+        await renderActivePlan(cached);
+        renderWeeklyNudge(cached);
+      } else {
+        $('planError').style.display = 'block';
+        currentActivePlan = null;
+      }
+      return; // never touch planEmpty/planMultiWarning/planPastSection on a failed read — there's nothing authoritative to show for them
+    }
+
+    const activePlans = result.plans.filter((p) => p.status === 'active');
+    const active = activePlans[0] || null;
+    saveCachedPlan(active); // matches the server exactly, including clearing the cache when the server confirms there's genuinely no active plan
+    currentActivePlan = active;
+    if (active) {
+      await renderActivePlan(active);
+      renderWeeklyNudge(active);
+    } else {
+      $('planEmpty').style.display = 'block'; // the ONLY path that can show this — a confirmed-successful response with zero active plans
+    }
+    renderMultiActiveWarning(activePlans.slice(1));
+    renderPastPlans(result.plans);
+  }
+
   async function boot() {
     const secret = getSecret();
     if (!secret) {
       $('planLoading').textContent = 'Set your dashboard secret first (on the Cronometer page) to use Plan.';
       return;
     }
-    const plans = await fetchPlans();
-    $('planLoading').style.display = 'none';
-    const activePlans = plans.filter((p) => p.status === 'active');
-    const active = activePlans[0] || null;
-    if (active) {
-      await renderActivePlan(active);
-      renderWeeklyNudge(active);
-    } else {
-      $('planEmpty').style.display = 'block';
-    }
-    renderMultiActiveWarning(activePlans.slice(1));
-    renderPastPlans(plans);
+    await loadAndRenderPlans();
 
     $('planStartBtn').addEventListener('click', () => {
       openChatWithPrompt('I want to start a plan: ');
@@ -1205,15 +1347,17 @@ document.addEventListener('DOMContentLoaded', function () {
       openChatWithPrompt('Can we review how my plan is going so far?');
     });
     $('planCompleteBtn').addEventListener('click', async () => {
-      if (!active) return;
+      if (!currentActivePlan) return;
       if (!confirm('Mark this plan as completed?')) return;
-      if (await updatePlanStatus(active.id, 'completed')) location.reload();
+      if (await updatePlanStatus(currentActivePlan.id, 'completed')) location.reload();
     });
     $('planAbandonBtn').addEventListener('click', async () => {
-      if (!active) return;
+      if (!currentActivePlan) return;
       if (!confirm('Abandon this plan? You can always start a new one.')) return;
-      if (await updatePlanStatus(active.id, 'abandoned')) location.reload();
+      if (await updatePlanStatus(currentActivePlan.id, 'abandoned')) location.reload();
     });
+    $('planRetryBtn').addEventListener('click', loadAndRenderPlans);
+    $('planStaleRetryBtn').addEventListener('click', loadAndRenderPlans);
 
     if (window.lucide) window.lucide.createIcons();
   }
