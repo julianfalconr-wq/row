@@ -3539,7 +3539,7 @@ document.addEventListener('DOMContentLoaded', function () {
       if (t.swim && t.swim.sessions > 0 && t.swim.activityTypeId) {
         const remainingSessions = remainingSwimSessionsAsOf(activities, types, weekMondayKey, todayDateKey, t.swim.sessions);
         if (remainingSessions > 0) {
-          const metersPerSession = Math.round((Number(t.swim.meters) || 0) / t.swim.sessions);
+          const metersPerSession = Number(t.swim.meters) || 0; // already per-session (see applyCapacityBackstop's own comment in api/training.js)
           const est = estimateSwimMinutesFor(metersPerSession, t.swim.activityTypeId, activities);
           candidates.push({ key: 'swim', label: t.swim.activityName || 'Swim', estMinutes: est, feasible: fits('swim', est) });
         }

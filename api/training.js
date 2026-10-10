@@ -847,7 +847,7 @@ function describeActiveWeekDisciplinesForPrompt(activeWeekDisciplines, types) {
   const swim = activeWeekDisciplines.swim;
   if (swim) {
     const type = resolveCardioType(swim.activityTypeId, types);
-    parts.push('swim: ' + swim.sessions + ' sessions' + (swim.meters ? ' (~' + swim.meters + 'm total)' : '') + (type ? ' (' + type.name + ')' : ' — no matching recommendable activity type, will be zeroed'));
+    parts.push('swim: ' + swim.sessions + ' sessions' + (swim.meters ? ' × ~' + swim.meters + 'm (~' + (swim.sessions * swim.meters) + 'm total)' : '') + (type ? ' (' + type.name + ')' : ' — no matching recommendable activity type, will be zeroed'));
   }
   if (activeWeekDisciplines.strength) parts.push('strength: ' + activeWeekDisciplines.strength.sessions + ' sessions');
   return parts.join('; ');
@@ -887,7 +887,16 @@ function sanitizeCapacityPerDiscipline(raw) {
     };
   }
   if (raw && raw.strength && typeof raw.strength === 'object') {
-    out.strength = { neededMin: Math.max(0, num(raw.strength.neededMin, 0)), availableMin: Math.max(0, num(raw.strength.availableMin, 0)) };
+    out.strength = {
+      neededMin: Math.max(0, num(raw.strength.neededMin, 0)),
+      availableMin: Math.max(0, num(raw.strength.availableMin, 0)),
+      // BUG FIX (reported) — strength sessions can't stack on one day,
+      // so total available MINUTES alone can look generous across just
+      // 1-2 remaining days even when 3 targeted sessions physically
+      // can't fit. Same day-count pattern swimAllowedDaysCount already
+      // established for swim's own floor logic, used here as a ceiling.
+      strengthAllowedDaysCount: Math.max(0, Math.round(num(raw.strength.strengthAllowedDaysCount, 0))),
+    };
   }
   return out;
 }
@@ -950,7 +959,15 @@ function applyCapacityBackstop(targets, capacity) {
   });
   const swimCap = capacity.perDiscipline.swim;
   if (swimCap && out.swim && out.swim.sessions && swimCap.paceMinPer100m) {
-    const metersPerSession = out.swim.sessions ? out.swim.meters / out.swim.sessions : 0;
+    // BUG FIX (reported) — swim.meters is now standardized as PER
+    // SESSION (matches the plan text, e.g. "2x~1400m" = 1400m each),
+    // not a weekly total divided across sessions. This used to divide
+    // by sessions AGAIN here, understating the real per-session volume
+    // by a factor of sessions. Trimming the session COUNT never changes
+    // the per-session distance itself, so meters is left untouched
+    // below (previously overwritten as sessions * metersPerSession,
+    // which silently shrank the per-session distance too).
+    const metersPerSession = Number(out.swim.meters) || 0;
     const floor = swimCap.swimAllowedDaysCount >= 2 ? 2 : 0;
     const originalSessions = out.swim.sessions;
     let estMin = out.swim.sessions * (metersPerSession / 100) * swimCap.paceMinPer100m;
@@ -959,7 +976,6 @@ function applyCapacityBackstop(targets, capacity) {
       estMin = out.swim.sessions * (metersPerSession / 100) * swimCap.paceMinPer100m;
     }
     if (out.swim.sessions < originalSessions) {
-      out.swim.meters = Math.round(out.swim.sessions * metersPerSession);
       notes.push('swim ' + originalSessions + ' -> ' + out.swim.sessions + ' sessions');
     }
   }
@@ -967,10 +983,20 @@ function applyCapacityBackstop(targets, capacity) {
   if (strengthCap && out.strength && out.strength.sessions) {
     const perSessionMin = 45;
     const originalSessions = out.strength.sessions;
+    // BUG FIX (reported) — a strength session can't stack with another
+    // one on the same day, so total available MINUTES alone could show
+    // plenty of free time spread across just 1-2 remaining days and
+    // wrongly report "no trim needed" for 3 targeted sessions. Capped
+    // at the number of remaining days strength is actually allowed on
+    // FIRST, regardless of how much total time those days hold, then
+    // the existing minutes-based trim still applies on top of that.
+    if (strengthCap.strengthAllowedDaysCount != null) {
+      out.strength.sessions = Math.min(out.strength.sessions, strengthCap.strengthAllowedDaysCount);
+    }
     while (strengthCap.availableMin != null && out.strength.sessions * perSessionMin > strengthCap.availableMin && out.strength.sessions > 0) {
       out.strength.sessions -= 1;
     }
-    if (out.strength.sessions < originalSessions) notes.push('strength ' + originalSessions + ' -> ' + out.strength.sessions + ' sessions');
+    if (out.strength.sessions < originalSessions) notes.push('strength: ' + out.strength.sessions + ' of ' + originalSessions + ' can still fit this week');
   }
   return {
     targets: out,
@@ -1018,7 +1044,7 @@ function buildSessionsToPlace(targets, capacity) {
   });
   if (targets.swim && targets.swim.sessions > 0 && targets.swim.activityTypeId) {
     const pace = (perDiscipline.swim && perDiscipline.swim.paceMinPer100m) || 2.5;
-    const metersPerSession = Math.round((Number(targets.swim.meters) || 0) / targets.swim.sessions);
+    const metersPerSession = Number(targets.swim.meters) || 0; // already per-session (see applyCapacityBackstop's own comment)
     const est = Math.round((metersPerSession / 100) * pace);
     for (let i = 0; i < targets.swim.sessions; i++) {
       sessions.push({ id: 'swim-' + i, discipline: 'swim', kind: 'session', activityTypeId: targets.swim.activityTypeId, activityName: targets.swim.activityName, targetAmount: metersPerSession, unit: 'm', estMinutes: est, hard: false });

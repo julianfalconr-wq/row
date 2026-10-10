@@ -5817,7 +5817,13 @@ img, video, canvas, svg { max-width: 100%; }
       swim: {
         doneSessions: swimDone.sessions, doneMeters: swimDone.meters,
         targetSessions: (targets.swim && Number(targets.swim.sessions)) || 0,
-        targetMeters: (targets.swim && Number(targets.swim.meters)) || 0,
+        // BUG FIX (reported): targets.swim.meters is standardized as
+        // PER SESSION (matches the plan text, e.g. "2x~1400m"), not a
+        // weekly total — the bar's "X of Y m" must show the WEEKLY
+        // total (sessions x meters), not the raw per-session figure,
+        // or a real 2000m logged this week showed as "2000 of 1400 m"
+        // instead of "2000 of 2800 m".
+        targetMeters: (targets.swim && Number(targets.swim.sessions) && Number(targets.swim.meters)) ? Number(targets.swim.sessions) * Number(targets.swim.meters) : 0,
       },
       strength: { doneSessions: legacy.strengthDone, targetSessions: legacy.strengthTarget },
     };
@@ -5895,7 +5901,12 @@ img, video, canvas, svg { max-width: 100%; }
         // plan, never invented, and takes priority over the fallback hint.
         planItems.push({
           label: swimT.activityName || 'Swim',
-          value: swimT.sessions + ' session' + (swimT.sessions === 1 ? '' : 's') + (swimT.meters ? ' · ~' + swimT.meters + ' m' : ''),
+          // BUG FIX (reported): swimT.meters is PER SESSION — the card
+          // used to show only that raw per-session figure with no
+          // weekly total at all ("2 sessions · ~1400 m" silently meant
+          // 1400m per session, but read like the weekly amount). Now
+          // states both explicitly: "2 sessions × ~1400 m (~2800 m)".
+          value: swimT.sessions + ' session' + (swimT.sessions === 1 ? '' : 's') + (swimT.meters ? ' × ~' + swimT.meters + ' m (~' + (swimT.sessions * swimT.meters) + ' m)' : ''),
           desc: plan.swimNote || fallbackHint,
         });
       }
@@ -6323,6 +6334,12 @@ img, video, canvas, svg { max-width: 100%; }
       return perDay.filter((d) => d.allowedDisciplines[disc] !== false).reduce((sum, d) => sum + d.availableMin, 0);
     }
     const swimAllowedDaysCount = perDay.filter((d) => d.allowedDisciplines.swim !== false).length;
+    // BUG FIX (reported): a strength session can't stack with another
+    // one on the same day — total available MINUTES alone can look
+    // generous across just 1-2 remaining days even when 3 targeted
+    // sessions physically can't fit. Mirrors swimAllowedDaysCount's
+    // own day-counting, used server-side as a ceiling (not a floor).
+    const strengthAllowedDaysCount = perDay.filter((d) => d.allowedDisciplines.strength !== false).length;
 
     const perDiscipline = {};
     if (rawDisciplines && rawDisciplines.run && rawDisciplines.run.km) {
@@ -6335,11 +6352,17 @@ img, video, canvas, svg { max-width: 100%; }
     }
     if (rawDisciplines && rawDisciplines.swim && rawDisciplines.swim.sessions) {
       const pace = recentAvgSwimPaceMinPer100m(rawDisciplines.swim.activityTypeId) || BASIC_SWIMMER_PACE_MIN_PER_100M;
-      const neededMin = Math.round(((Number(rawDisciplines.swim.meters) || 0) / 100) * pace);
+      // BUG FIX (reported): rawDisciplines.swim.meters is PER SESSION
+      // (matches the plan text, e.g. "2x~1400m") — needed minutes for
+      // the WEEK must multiply by sessions, not use the per-session
+      // figure alone, or this understated real needed time by a factor
+      // of sessions (2x here) and the capacity check could wrongly
+      // report "no trim needed".
+      const neededMin = Math.round(((Number(rawDisciplines.swim.sessions) || 0) * (Number(rawDisciplines.swim.meters) || 0) / 100) * pace);
       perDiscipline.swim = { neededMin, availableMin: Math.round(capacityForDiscipline('swim')), paceMinPer100m: pace, swimAllowedDaysCount };
     }
     if (rawDisciplines && rawDisciplines.strength && rawDisciplines.strength.sessions) {
-      perDiscipline.strength = { neededMin: rawDisciplines.strength.sessions * DEFAULT_SESSION_MINUTES.strength, availableMin: Math.round(capacityForDiscipline('strength')) };
+      perDiscipline.strength = { neededMin: rawDisciplines.strength.sessions * DEFAULT_SESSION_MINUTES.strength, availableMin: Math.round(capacityForDiscipline('strength')), strengthAllowedDaysCount };
     }
 
     const totalFreeMin = perDay.reduce((sum, d) => sum + d.availableMin, 0);
@@ -7046,7 +7069,7 @@ img, video, canvas, svg { max-width: 100%; }
       if (t.swim && t.swim.sessions > 0 && t.swim.activityTypeId) {
         const remainingSessions = remainingWeekSwimSessions(t.swim.sessions);
         if (remainingSessions > 0) {
-          const metersPerSession = Math.round((Number(t.swim.meters) || 0) / t.swim.sessions);
+          const metersPerSession = Number(t.swim.meters) || 0; // already per-session (see applyCapacityBackstop's own comment in api/training.js)
           const est = estimateSwimMinutesForMeters(metersPerSession, t.swim.activityTypeId);
           candidates.push({ key: 'swim', label: t.swim.activityName || 'Swim', estMinutes: est, feasible: fitsToday('swim', est) });
         }
