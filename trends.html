@@ -236,6 +236,24 @@ body {
     <div class="trend-chart-wrap"><canvas id="activitiesPaceChart"></canvas></div>
   </div>
 
+  <!-- BUG FIX (reported) — swim entries used to be mixed into the
+       two charts above on a km-based scale, even though a swim
+       activity's own raw distance is in meters, not km: a single
+       swim session (e.g. 2000) would tower over every run/bike
+       distance, and its "pace" (computed as if it were km-based)
+       would show as a near-zero outlier next to normal run/bike
+       paces — neither chart was readable once any swim data existed.
+       Swim now gets its own chart, on its own natural min/100m scale,
+       entirely separate from run/bike's min/km one — see
+       loadActivitiesTrend's own comment for the classification. -->
+  <div class="trend-card" id="activitiesSwimPaceCard" style="display:none">
+    <div class="trend-card-head">
+      <h3>Swim — Pace per Session</h3>
+      <span class="trend-card-sub" id="activitiesSwimPaceSub">Loading…</span>
+    </div>
+    <div class="trend-chart-wrap"><canvas id="activitiesSwimPaceChart"></canvas></div>
+  </div>
+
   <div class="trend-card">
     <div class="trend-card-head">
       <h3>WHOOP — Recovery &amp; Sleep</h3>
@@ -736,22 +754,58 @@ document.addEventListener('DOMContentLoaded', function () {
   // faceted, per this task's own explicit allowance to keep this
   // simple. Zero network calls.
   // =============================================================
-  function loadActivitiesTrend(fromKey, toKey) {
+  // A distance-type activity's raw a.distanceKm field (kept under
+  // this name for backward compatibility) holds the number exactly as
+  // entered, in that TYPE's own configured unit — km for Running/
+  // Cycling, but METERS for a type configured with unit "m" (e.g.
+  // Swimming). It was never literally always kilometers despite the
+  // field's name. isMeterUnit is the same check gym.html/main.html's
+  // own fixes for this bug use.
+  function isMeterUnitTrends(unit) {
+    return /^met(er|re)s?$|^m$/i.test(String(unit || '').trim());
+  }
+  async function fetchActivityTypesForTrends() {
+    const secret = getSecret();
+    if (!secret) return [];
+    try {
+      const r = await fetch('/api/sync-state?secret=' + encodeURIComponent(secret) + '&resource=activity-types');
+      const j = await r.json();
+      return (j && j.ok && Array.isArray(j.types)) ? j.types : [];
+    } catch (e) { return []; }
+  }
+  // BUG FIX (reported): swim entries used to be mixed directly into
+  // the run/bike-oriented distance (km) and pace (min/km) charts below
+  // — a single swim session's raw meters value (e.g. 2000) dwarfs any
+  // real run/bike distance, and dividing duration by that same raw
+  // number produced a near-zero "pace" next to normal run/bike paces,
+  // making both charts unreadable whenever any swim data existed.
+  // Now classified by each entry's own activity type unit first:
+  // meters-native entries (swim) are excluded from the km-based charts
+  // entirely and get their own separate chart instead, on their own
+  // natural min/100m scale — see activitiesSwimPaceCard above.
+  async function loadActivitiesTrend(fromKey, toKey) {
     let activities = [];
     try { activities = JSON.parse(localStorage.getItem('po_coach_activities')) || []; } catch (e) {}
     const inRange = (Array.isArray(activities) ? activities : [])
       .filter((a) => a && a.dateKey && a.dateKey >= fromKey && a.dateKey <= toKey)
       .sort((a, b) => (a.dateKey < b.dateKey ? -1 : a.dateKey > b.dateKey ? 1 : 0));
 
-    const distanceEntries = inRange.filter((a) => a.distanceKm != null);
-    const distanceLabels = distanceEntries.map((a) => shortLabel(a.dateKey));
-    const distanceData = distanceEntries.map((a) => Math.round(a.distanceKm * 100) / 100);
+    const types = await fetchActivityTypesForTrends();
+    function unitFor(activityTypeId) {
+      const t = types.find((x) => x.id === activityTypeId);
+      return t ? t.unit : 'km'; // unknown/unconfigured type falls back to the historical km assumption, same default every other file here uses
+    }
+    const kmEntries = inRange.filter((a) => a.distanceKm != null && !isMeterUnitTrends(unitFor(a.activityTypeId)));
+    const swimEntries = inRange.filter((a) => a.distanceKm != null && isMeterUnitTrends(unitFor(a.activityTypeId)));
+
+    const distanceLabels = kmEntries.map((a) => shortLabel(a.dateKey));
+    const distanceData = kmEntries.map((a) => Math.round(a.distanceKm * 100) / 100);
     renderChart('activitiesDistanceChart', distanceLabels, [{ label: 'Distance (km)', data: distanceData }]);
-    $('activitiesDistanceSub').textContent = distanceEntries.length
-      ? (distanceEntries.length + ' session' + (distanceEntries.length === 1 ? '' : 's') + ' with distance logged')
+    $('activitiesDistanceSub').textContent = kmEntries.length
+      ? (kmEntries.length + ' session' + (kmEntries.length === 1 ? '' : 's') + ' with distance logged')
       : 'No distance-based activities logged in this range';
 
-    const paceEntries = inRange.filter((a) => a.distanceKm != null && a.distanceKm > 0 && a.durationMin != null);
+    const paceEntries = kmEntries.filter((a) => a.distanceKm > 0 && a.durationMin != null);
     const paceLabels = paceEntries.map((a) => shortLabel(a.dateKey));
     const paceData = paceEntries.map((a) => Math.round((a.durationMin / a.distanceKm) * 100) / 100); // minutes per km
     renderChart('activitiesPaceChart', paceLabels, [{ label: 'Pace (min/km)', data: paceData, color: '#FFC93C' }]);
@@ -759,10 +813,23 @@ document.addEventListener('DOMContentLoaded', function () {
       ? (paceEntries.length + ' session' + (paceEntries.length === 1 ? '' : 's') + ' with pace data')
       : 'No sessions with both distance and duration in this range';
 
+    const swimPaceEntries = swimEntries.filter((a) => a.distanceKm > 0 && a.durationMin != null);
+    const swimPaceData = swimPaceEntries.map((a) => Math.round((a.durationMin / (a.distanceKm / 100)) * 100) / 100); // minutes per 100m
+    const swimPaceCard = $('activitiesSwimPaceCard');
+    if (swimPaceEntries.length) {
+      swimPaceCard.style.display = 'block';
+      const swimPaceLabels = swimPaceEntries.map((a) => shortLabel(a.dateKey));
+      renderChart('activitiesSwimPaceChart', swimPaceLabels, [{ label: 'Pace (min/100m)', data: swimPaceData, color: '#7DD3FC' }]);
+      $('activitiesSwimPaceSub').textContent = swimPaceEntries.length + ' session' + (swimPaceEntries.length === 1 ? '' : 's') + ' with pace data';
+    } else {
+      swimPaceCard.style.display = 'none';
+    }
+
     // See loadScoreTrend's own comment on why this is returned.
     return {
-      distance: distanceEntries.map((a, i) => ({ date: a.dateKey, km: distanceData[i] })),
+      distance: kmEntries.map((a, i) => ({ date: a.dateKey, km: distanceData[i] })),
       pace: paceEntries.map((a, i) => ({ date: a.dateKey, minPerKm: paceData[i] })),
+      swimPace: swimPaceEntries.map((a, i) => ({ date: a.dateKey, minPer100m: swimPaceData[i] })),
     };
   }
 

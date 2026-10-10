@@ -4941,6 +4941,40 @@ img, video, canvas, svg { max-width: 100%; }
   function activityTypeById(id) {
     return activityTypes.find((t) => t.id === id) || activityTypes[0] || activityTypes.find((t) => t.id === 'running');
   }
+  // BUG FIX (reported) — a distance-type activity's own raw a.distanceKm
+  // field (kept under this NAME for backward compatibility with every
+  // existing stored entry and every other file that reads it) always
+  // holds the number exactly as entered, in that type's OWN configured
+  // unit (type.unit) — km for Running/Cycling, but METERS for a type
+  // configured with unit "m"/"meters" (e.g. Swimming). It was NEVER
+  // literally always kilometers despite the field's name; every
+  // consumer that assumed otherwise (runFmtPace's hardcoded "/km"
+  // label+formula, computeWeekProgressByDiscipline's old km*1000,
+  // recentAvgSwimPaceMinPer100m's old distanceKm*10) is what actually
+  // produced the "0:02 /km" pace and the swim-meters mismatches — the
+  // STORED raw number itself was never corrupted (confirmed: the log
+  // form's save handler is a direct, unconverted pass-through of
+  // whatever the user typed). isMeterUnit() is the ONE check every
+  // such consumer now goes through instead of assuming km.
+  function isMeterUnit(unit) {
+    return /^met(er|re)s?$|^m$/i.test(String(unit || '').trim());
+  }
+  // Unit-aware pace string — the single shared formatter replacing the
+  // old runFmtPace (which always divided by the raw number and always
+  // labeled the result "/km", even for a meters-native type). km-based
+  // types keep the exact same "M:SS /km" format as before; a
+  // meters-native type (swim) gets "M:SS /100m" instead, computed from
+  // the SAME raw distanceKm number divided into 100m blocks rather
+  // than whole-km ones.
+  function formatActivityPace(distanceValue, durationMin, unit) {
+    if (!distanceValue || !durationMin) return '—';
+    const blocks = isMeterUnit(unit) ? distanceValue / 100 : distanceValue;
+    if (!blocks) return '—';
+    const paceMin = durationMin / blocks;
+    const m = Math.floor(paceMin);
+    const s = Math.round((paceMin - m) * 60);
+    return m + ':' + String(s).padStart(2, '0') + (isMeterUnit(unit) ? ' /100m' : ' /km');
+  }
 
   function deriveRunEntries(activities) {
     return activities.filter((a) => a && a.activityTypeId === 'running')
@@ -5059,37 +5093,57 @@ img, video, canvas, svg { max-width: 100%; }
       return { connected: true, workouts: [] };
     }
   }
+  // BUG FIX (reported — found during the swim-units investigation,
+  // not itself reproduced by the user, but the exact same mechanism):
+  // this used to ALWAYS convert WHOOP's raw distance_meter to real km
+  // (/1000), regardless of which activity type the workout's sport
+  // name actually matched. If an EXISTING type (e.g. the user's own
+  // "Swimming", configured with unit "m") matched by name, the
+  // imported entry's distanceKm would hold a real km value (e.g. 2.0
+  // for a 2000m swim) while every manually-logged entry of that SAME
+  // type holds the raw meters number directly (2000) — a genuine
+  // stored-data unit mismatch between import paths for entries of the
+  // identical type, not just a display bug. Fixed by deferring the
+  // conversion until AFTER the real type (existing or newly created)
+  // is known, so it can use that type's own actual unit.
   function whoopWorkoutToDraft(w) {
     const startMs = Date.parse(w.start);
     const endMs = Date.parse(w.end);
     const durationMin = (isFinite(startMs) && isFinite(endMs)) ? Math.round(((endMs - startMs) / 60000) * 10) / 10 : null;
-    const distanceKm = (w.score && w.score.distance_meter != null) ? Math.round((w.score.distance_meter / 1000) * 100) / 100 : null;
+    const distanceMeters = (w.score && w.score.distance_meter != null) ? w.score.distance_meter : null;
     const dateKey = isFinite(startMs) ? DayLib.effectiveDateKey(new Date(startMs)) : DayLib.effectiveDateKey();
-    return { whoopId: w.id, sportName: w.sport_name || 'Workout', dateKey, durationMin, distanceKm };
+    return { whoopId: w.id, sportName: w.sport_name || 'Workout', dateKey, durationMin, distanceMeters };
   }
-  function matchOrCreateType(sportName, distanceKm) {
+  function matchOrCreateType(sportName, distanceMeters) {
     const norm = String(sportName || '').trim().toLowerCase();
     const existing = activityTypes.find((t) => t.name.trim().toLowerCase() === norm);
     if (existing) return { type: existing, isNew: false };
     const slug = norm.replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
-    const hasDistance = distanceKm != null && distanceKm > 0;
+    const hasDistance = distanceMeters != null && distanceMeters > 0;
     return {
       type: {
         id: 'whoop_' + (slug || Date.now().toString(36)),
         name: sportName || 'Workout',
-        unit: hasDistance ? 'km' : '',
+        unit: hasDistance ? 'km' : '', // a BRAND NEW type still defaults to km (WHOOP's own distance is reported in meters for every sport, and km is the sane default for an unknown/new sport — only an EXISTING type's own real unit, e.g. Swimming's "m", ever overrides this)
         unitKind: hasDistance ? 'distance' : 'duration',
         recommendable: false,
       },
       isNew: true,
     };
   }
+  // Converts WHOOP's raw meters into whichever unit the RESOLVED type
+  // (existing or new) actually uses — never assumed in advance.
+  function distanceValueForWhoopType(distanceMeters, type) {
+    if (distanceMeters == null || !type || type.unitKind !== 'distance') return null;
+    const raw = isMeterUnit(type.unit) ? distanceMeters : distanceMeters / 1000;
+    return Math.round(raw * 100) / 100;
+  }
   let whoopImportDrafts = [];
   function renderWhoopImportList() {
     if (!whoopImportDrafts.length) { $$('whoopImportList').innerHTML = '<div class="whoop-import-empty">Nothing new to import.</div>'; return; }
     $$('whoopImportList').innerHTML = whoopImportDrafts.map((d, i) => {
       const stats = d.type.unitKind === 'distance' && d.distanceKm != null
-        ? d.distanceKm + ' km' + (d.durationMin != null ? ' · ' + d.durationMin + ' min' : '')
+        ? d.distanceKm + ' ' + (d.type.unit || 'km') + (d.durationMin != null ? ' · ' + d.durationMin + ' min' : '')
         : (d.durationMin != null ? d.durationMin + ' min' : '—');
       return '<label class="whoop-import-row">' +
         '<input type="checkbox" class="whoop-import-check" data-idx="' + i + '"' + (d.include ? ' checked' : '') + '>' +
@@ -5120,8 +5174,9 @@ img, video, canvas, svg { max-width: 100%; }
     }
     whoopImportDrafts = fresh.map((w) => {
       const draft = whoopWorkoutToDraft(w);
-      const { type, isNew } = matchOrCreateType(draft.sportName, draft.distanceKm);
-      return { ...draft, type, isNew, include: true };
+      const { type, isNew } = matchOrCreateType(draft.sportName, draft.distanceMeters);
+      const distanceKm = distanceValueForWhoopType(draft.distanceMeters, type);
+      return { ...draft, distanceKm, type, isNew, include: true };
     });
     statusEl.textContent = '';
     renderWhoopImportList();
@@ -5173,16 +5228,12 @@ img, video, canvas, svg { max-width: 100%; }
     }
   });
 
-  function runFmtPace(distanceKm, durationMin) {
-    if (!distanceKm || !durationMin) return '—';
-    const paceMin = durationMin / distanceKm;
-    const m = Math.floor(paceMin);
-    const s = Math.round((paceMin - m) * 60);
-    return m + ':' + String(s).padStart(2, '0') + ' /km';
-  }
   // One-line stats summary for a logged activity, shaped by its type's
   // unitKind — the same three metrics the log form itself offers,
   // formatted for the History list and the day-nav view below.
+  // BUG FIX: pace now goes through formatActivityPace (unit-aware),
+  // replacing the old runFmtPace which always labeled/computed as
+  // "/km" even for a meters-native type like Swimming.
   function activityStatsLine(a) {
     const type = activityTypeById(a.activityTypeId);
     const parts = [];
@@ -5194,7 +5245,7 @@ img, video, canvas, svg { max-width: 100%; }
     } else {
       parts.push((a.distanceKm != null ? a.distanceKm : 0) + ' ' + (type.unit || 'km'));
       if (a.durationMin != null) parts.push(a.durationMin + ' min');
-      if (a.distanceKm && a.durationMin) parts.push(runFmtPace(a.distanceKm, a.durationMin));
+      if (a.distanceKm && a.durationMin) parts.push(formatActivityPace(a.distanceKm, a.durationMin, type.unit));
     }
     return parts.join(' · ');
   }
@@ -5380,7 +5431,7 @@ img, video, canvas, svg { max-width: 100%; }
     if (type.unitKind !== 'distance') { runPaceDisplay.value = ''; return; }
     const dist = parseFloat(runDistanceInput.value);
     const dur = parseFloat(runDurationInput.value);
-    runPaceDisplay.value = (dist > 0 && dur > 0) ? runFmtPace(dist, dur) : '';
+    runPaceDisplay.value = (dist > 0 && dur > 0) ? formatActivityPace(dist, dur, type.unit) : '';
   }
   runDistanceInput.addEventListener('input', updatePacePreview);
   runDurationInput.addEventListener('input', updatePacePreview);
@@ -5690,11 +5741,22 @@ img, video, canvas, svg { max-width: 100%; }
   function computeWeekProgressByDiscipline(plan) {
     const monday = thisWeekMondayKey();
     const weekActivities = activityEntries.filter((a) => a.dateKey >= monday);
+    // BUG FIX (reported) — this used to always compute `meters = km *
+    // 1000`, treating the raw a.distanceKm number as real kilometers
+    // for EVERY discipline including swim. For a meters-native type
+    // (Swimming), a.distanceKm already IS the raw meters value (see
+    // isMeterUnit's own comment) — multiplying it by 1000 again
+    // produced a wildly inflated number, not the real one. Now
+    // discipline-aware: swim sums the raw number directly as meters
+    // (no conversion at all); run/bike keep the unchanged km sum.
     function doneFor(disc) {
       const matching = weekActivities.filter((a) => disciplineForActivityType(a.activityTypeId) === disc);
+      if (disc === 'swim') {
+        const meters = Math.round(matching.reduce((sum, a) => sum + (Number(a.distanceKm) || 0), 0));
+        return { km: 0, meters, sessions: matching.length };
+      }
       const km = Math.round(matching.reduce((sum, a) => sum + (Number(a.distanceKm) || 0), 0) * 10) / 10;
-      const meters = Math.round(km * 1000);
-      return { km, meters, sessions: matching.length };
+      return { km, meters: 0, sessions: matching.length };
     }
     const targets = (plan && plan.targets) || deriveLegacyDisciplineTargets(plan);
     const legacy = computeWeekProgress(plan); // read-only reuse — strengthDone/strengthTarget are the exact same numbers, not recomputed differently here
@@ -5775,10 +5837,18 @@ img, video, canvas, svg { max-width: 100%; }
       });
       const swimT = plan.targets.swim;
       if (swimT && swimT.sessions) {
+        // BUG FIX (reported): swim has no model-generated description
+        // slot of its own at all (unlike run/bike, which can inherit
+        // one from the legacy longSession/easyVolume mirror) — it
+        // used to always show either the fallback hint or nothing.
+        // plan.swimNote (the active plan's own checkpoint note, e.g.
+        // "Swim: 300-400m continuous blocks" from plan.html's
+        // backfill) is real text taken directly from the user's own
+        // plan, never invented, and takes priority over the fallback hint.
         planItems.push({
           label: swimT.activityName || 'Swim',
           value: swimT.sessions + ' session' + (swimT.sessions === 1 ? '' : 's') + (swimT.meters ? ' · ~' + swimT.meters + ' m' : ''),
-          desc: fallbackHint,
+          desc: plan.swimNote || fallbackHint,
         });
       }
       if (plan.strength.targetSessions) {
@@ -5876,6 +5946,12 @@ img, video, canvas, svg { max-width: 100%; }
   // no `disciplines` at all — every one of those collapses to the
   // exact pre-3.1 behavior (handlePlan invents cardio slots itself,
   // same as always) rather than throwing.
+  // Returns {disciplines, note} | null — note is the checkpoint's own
+  // optional free-text note (e.g. "Swim: 300-400m continuous blocks",
+  // from plan.html's backfill), threaded through so the Swimming card
+  // can show something real from the user's own plan when the model's
+  // own description is missing (see buildFallbackPlanFromDisciplines'
+  // own comment) — never invented, only ever this exact stored text.
   async function fetchActiveWeekDisciplines() {
     const secret = getSecret();
     if (!secret) return null;
@@ -5893,7 +5969,7 @@ img, video, canvas, svg { max-width: 100%; }
           const range = checkpointCanonicalRange(c);
           return todayK >= range.start && todayK <= range.end;
         });
-        if (cp && cp.disciplines) return cp.disciplines;
+        if (cp && cp.disciplines) return { disciplines: cp.disciplines, note: typeof cp.note === 'string' ? cp.note : null };
       }
       return null;
     } catch (e) { return null; }
@@ -5917,18 +5993,23 @@ img, video, canvas, svg { max-width: 100%; }
   // must be pre-fetched/filtered by the caller (same as before —
   // generateWeeklyPlan() already needs it for other fields in the
   // same request, so this doesn't trigger a second fetch there).
+  // Returns {disciplines, note} | null — see fetchActiveWeekDisciplines's
+  // own comment on `note`. Callers that only need the disciplines
+  // object (the fingerprint, the server payload) read .disciplines;
+  // generateWeeklyPlan/the fallback builder also thread .note through
+  // to the Swimming card's description.
   async function resolveActiveWeekDisciplines(recommendableActivityTypes) {
-    const rawDisciplines = await fetchActiveWeekDisciplines();
-    if (!rawDisciplines) return null;
+    const raw = await fetchActiveWeekDisciplines();
+    if (!raw) return null;
     const activeWeekDisciplines = {};
     ['run', 'bike', 'swim'].forEach((disc) => {
-      const d = rawDisciplines[disc];
+      const d = raw.disciplines[disc];
       if (!d) return;
       const type = resolveActivityTypeForDiscipline(disc, recommendableActivityTypes);
       activeWeekDisciplines[disc] = Object.assign({}, d, { activityTypeId: type ? type.id : null });
     });
-    if (rawDisciplines.strength) activeWeekDisciplines.strength = rawDisciplines.strength;
-    return activeWeekDisciplines;
+    if (raw.disciplines.strength) activeWeekDisciplines.strength = raw.disciplines.strength;
+    return { disciplines: activeWeekDisciplines, note: raw.note };
   }
   // BUG FIX, round 2 (confirmed via the debug box the user ran live):
   // the round-1 comparison (targetsMatchDisciplines, now removed)
@@ -6242,6 +6323,7 @@ img, video, canvas, svg { max-width: 100%; }
     // LATER step (the AI call itself) is what actually fails.
     let recommendableActivityTypes = [];
     let activeWeekDisciplines = null;
+    let swimNote = null;
     try {
       // String-compare local "YYYY-MM-DD" keys (cutoffKey, dk, r.dateKey)
       // rather than reconstructing Date objects from them — new Date(dk)
@@ -6274,7 +6356,7 @@ img, video, canvas, svg { max-width: 100%; }
       // actually being asked to choose between.
       const activitySessions = activityEntries
         .filter((a) => a.dateKey >= cutoffKey)
-        .map((a) => ({ activityTypeId: a.activityTypeId, date: a.dateKey, distanceKm: a.distanceKm, count: a.count, durationMin: a.durationMin, pace: (a.distanceKm && a.durationMin) ? runFmtPace(a.distanceKm, a.durationMin) : null, effort: a.effort, notes: a.notes }));
+        .map((a) => ({ activityTypeId: a.activityTypeId, date: a.dateKey, distanceKm: a.distanceKm, count: a.count, durationMin: a.durationMin, pace: (a.distanceKm && a.durationMin) ? formatActivityPace(a.distanceKm, a.durationMin, (activityTypeById(a.activityTypeId) || {}).unit) : null, effort: a.effort, notes: a.notes }));
       // Fetched fresh, not the cached module-level `activityTypes`, same
       // reasoning as fetchActiveRestrictions() below: recommendable
       // status can change at any time via General Settings and a stale
@@ -6295,7 +6377,9 @@ img, video, canvas, svg { max-width: 100%; }
       // session to match real logged activities against them) and so
       // it can zero out a discipline whose only matching type turns
       // out to be restricted/non-recommendable.
-      activeWeekDisciplines = await resolveActiveWeekDisciplines(recommendableActivityTypes);
+      const resolved = await resolveActiveWeekDisciplines(recommendableActivityTypes);
+      activeWeekDisciplines = resolved && resolved.disciplines;
+      swimNote = resolved && resolved.note;
 
       // Phase 3.4 — capacity summary (needed vs available per
       // discipline, per-day budgets) for the SAME week the targets
@@ -6327,6 +6411,7 @@ img, video, canvas, svg { max-width: 100%; }
       // the next load's fingerprint won't change unless the active
       // plan's real disciplines do, so it won't call the AI again.
       json.plan.disciplinesFingerprint = buildDisciplinesFingerprint(activeWeekDisciplines);
+      json.plan.swimNote = swimNote || undefined;
       saveStoredPlan({ weekStart: thisWeekMondayKey(), plan: json.plan, generatedAt: new Date().toISOString() });
       renderWeeklyProgress();
     } catch (e) {
@@ -6348,6 +6433,7 @@ img, video, canvas, svg { max-width: 100%; }
         const fallbackPlan = buildFallbackPlanFromDisciplines(activeWeekDisciplines, recommendableActivityTypes);
         fallbackPlan.disciplinesFingerprint = buildDisciplinesFingerprint(activeWeekDisciplines);
         fallbackPlan.isFallback = true; // BUG FIX — lets the card show an honest "tap refresh to generate session details" hint instead of fabricated-looking legacy slot text
+        fallbackPlan.swimNote = swimNote || undefined;
         saveStoredPlan({ weekStart: thisWeekMondayKey(), plan: fallbackPlan, generatedAt: new Date().toISOString() });
         renderWeeklyProgress();
         if (!silent) alert('Built directly from your active plan — the AI description step failed: ' + (e.message || String(e)));
@@ -6396,9 +6482,9 @@ img, video, canvas, svg { max-width: 100%; }
       if (!isCurrentWeek) return; // nothing cached for this week yet — the empty state handles this
       if (!getSecret()) return;
       const recommendableActivityTypes = (await fetchActivityTypes()).filter((t) => t.recommendable).map((t) => ({ id: t.id, name: t.name, unit: t.unit, unitKind: t.unitKind }));
-      const rawDisciplines = await fetchActiveWeekDisciplines();
-      if (!rawDisciplines) return; // genuinely no active-plan disciplines for this week — the legacy fallback IS the correct display
-      const activeWeekDisciplines = await resolveActiveWeekDisciplines(recommendableActivityTypes);
+      const resolved = await resolveActiveWeekDisciplines(recommendableActivityTypes);
+      if (!resolved) return; // genuinely no active-plan disciplines for this week — the legacy fallback IS the correct display
+      const activeWeekDisciplines = resolved.disciplines;
       const currentFingerprint = buildDisciplinesFingerprint(activeWeekDisciplines);
       if (currentFingerprint === stored.plan.disciplinesFingerprint) return; // already fresh — no AI call needed
       const throttle = loadAutorebuildThrottle();
@@ -6409,6 +6495,7 @@ img, video, canvas, svg { max-width: 100%; }
         const fallbackPlan = buildFallbackPlanFromDisciplines(activeWeekDisciplines, recommendableActivityTypes);
         fallbackPlan.disciplinesFingerprint = currentFingerprint;
         fallbackPlan.isFallback = true;
+        fallbackPlan.swimNote = resolved.note || undefined;
         saveStoredPlan({ weekStart: thisWeekMondayKey(), plan: fallbackPlan, generatedAt: new Date().toISOString() });
         renderWeeklyProgress();
         return;
@@ -6739,6 +6826,15 @@ img, video, canvas, svg { max-width: 100%; }
     const unitKind = type ? type.unitKind : 'distance';
     if (unitKind === 'duration') return Math.round(Number(slot.targetAmount) || 0);
     if (unitKind === 'count') return DEFAULT_SESSION_MINUTES.genericCount;
+    // BUG FIX (reported): a swim-assigned legacy slot (unitKind
+    // 'distance', unit 'm') used to go through the generic km pace
+    // estimator below, treating its raw meters targetAmount as if it
+    // were km — wildly wrong. Route a meters-native type through the
+    // swim-specific /100m estimator instead.
+    if (type && isMeterUnit(type.unit)) {
+      const swimPace = recentAvgSwimPaceMinPer100m(slot.activityTypeId) || BASIC_SWIMMER_PACE_MIN_PER_100M;
+      return Math.round(((Number(slot.targetAmount) || 0) / 100) * swimPace);
+    }
     const pace = recentAvgPaceMinPerKm(slot.activityTypeId) || GENERIC_FALLBACK_PACE_MIN_PER_KM;
     return Math.round((Number(slot.targetAmount) || 0) * pace);
   }
@@ -6772,12 +6868,31 @@ img, video, canvas, svg { max-width: 100%; }
   // than a runner's/cyclist's (the generic fallback above would wildly
   // overestimate swim duration if reused here).
   const BASIC_SWIMMER_PACE_MIN_PER_100M = 2.5; // ~40m/min — a conservative recreational-swimmer default; purely a starting assumption for a user with zero logged swim history
+  // BUG FIX (reported): the old formula (distanceKm*10 = "100m
+  // units") was only correct if a.distanceKm genuinely held a REAL km
+  // value (e.g. 2.0 for a 2000m swim) — but it never did; the log
+  // form stores the raw entered number directly (2000, not 2.0 — see
+  // isMeterUnit's own comment), so the old formula was computing
+  // against a number 1000x too large, producing an absurdly fast
+  // "pace" that then silently poisoned any duration estimate built
+  // from it. Fixed: divide the raw meters value by 100 directly.
+  // Implausible paces (faster than 1:00/100m — an elite-level sprint
+  // pace no recreational session sustains, or slower than 5:00/100m —
+  // almost certainly a malformed/partial entry, e.g. duration logged
+  // without realizing distance was still in a stale unit) are dropped
+  // before averaging, so one bad historical entry can't poison the
+  // estimate used for every future recommendation; falls back to the
+  // documented basic-swimmer default if nothing plausible remains.
+  const SWIM_PACE_MIN_PLAUSIBLE = 1, SWIM_PACE_MAX_PLAUSIBLE = 5;
   function recentAvgSwimPaceMinPer100m(activityTypeId) {
     const matches = activityLoad()
       .filter((a) => a && a.activityTypeId === activityTypeId && a.distanceKm && a.durationMin)
       .slice(0, 10);
     if (!matches.length) return null;
-    const paces = matches.map((a) => a.durationMin / (a.distanceKm * 10)); // distanceKm*10 = distance in 100m units
+    const paces = matches
+      .map((a) => a.durationMin / (a.distanceKm / 100))
+      .filter((p) => p >= SWIM_PACE_MIN_PLAUSIBLE && p <= SWIM_PACE_MAX_PLAUSIBLE);
+    if (!paces.length) return null;
     return paces.reduce((sum, p) => sum + p, 0) / paces.length;
   }
   function estimateSwimMinutesForMeters(meters, activityTypeId) {

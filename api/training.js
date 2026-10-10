@@ -635,6 +635,24 @@ function num(v, fallback) {
   return isNaN(n) ? fallback : n;
 }
 
+// BUG FIX (reported): normalizePlan's rationale used to be a bare
+// `.slice(0, 600)` — a hard character cut with no regard for word
+// boundaries, which is exactly what produced a rationale visibly cut
+// off mid-word ("rather th"). NOT a max_tokens issue (that governs the
+// model's own generation budget — already 3200, comfortably enough
+// for a short rationale) — confirmed by reading this exact line.
+// Raised to 900 (real margin above "1-3 sentences" now that Phase
+// 3.4 also asks the model to mention a capacity trim here when one
+// happened) AND switched to cut at the last whitespace before the
+// limit, so a truncation (now rare) is at least a clean word break
+// with a visible ellipsis, never a chopped word.
+function truncateAtWordBoundary(s, maxLen) {
+  if (!s || s.length <= maxLen) return s;
+  const cut = s.slice(0, maxLen);
+  const lastSpace = cut.lastIndexOf(' ');
+  return (lastSpace > maxLen * 0.6 ? cut.slice(0, lastSpace) : cut).trim() + '…';
+}
+
 // A cardio slot's chosen type is blocked if either: (a) it isn't one of
 // the types the model was actually offered (defense against
 // noncompliance — same "verify, don't just trust the prompt"
@@ -1180,7 +1198,7 @@ function normalizePlan(raw, restrictions, recommendableTypes, activeWeekDiscipli
     availableSummary: (capacity && capacity.configured) ? { totalFreeMin: capacity.perDay.reduce((s, d) => s + d.availableMin, 0), daysWithTimeCount: capacity.perDay.filter((d) => d.availableMin > 0).length } : undefined,
     layout,
     unplaced,
-    rationale: typeof r.rationale === 'string' ? r.rationale.slice(0, 600) : '',
+    rationale: typeof r.rationale === 'string' ? truncateAtWordBoundary(r.rationale.trim(), 900) : '',
   };
 }
 

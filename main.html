@@ -3430,10 +3430,21 @@ document.addEventListener('DOMContentLoaded', function () {
     return paces.reduce((s, p) => s + p, 0) / paces.length;
   }
   const BASIC_SWIMMER_PACE_MIN_PER_100M_MAIN = 2.5; // same documented assumption as gym.html's Phase 3.1 constant
+  // BUG FIX (reported) — same root cause as gym.html's own fix:
+  // a.distanceKm for a meters-native type (Swimming) holds the raw
+  // entered number directly (e.g. 2000 for a 2000m swim), never a
+  // real km value — the old *10 formula assumed otherwise and was off
+  // by 1000x. Divide by 100 directly, and drop implausible paces
+  // (faster than 1:00/100m, slower than 5:00/100m) before averaging,
+  // same clamp as gym.html's version.
+  const SWIM_PACE_MIN_PLAUSIBLE_MAIN = 1, SWIM_PACE_MAX_PLAUSIBLE_MAIN = 5;
   function recentAvgSwimPaceMinPer100mFor(activityTypeId, activities) {
     const matches = activities.filter((a) => a && a.activityTypeId === activityTypeId && a.distanceKm && a.durationMin).slice(0, 10);
     if (!matches.length) return null;
-    const paces = matches.map((a) => a.durationMin / (a.distanceKm * 10));
+    const paces = matches
+      .map((a) => a.durationMin / (a.distanceKm / 100))
+      .filter((p) => p >= SWIM_PACE_MIN_PLAUSIBLE_MAIN && p <= SWIM_PACE_MAX_PLAUSIBLE_MAIN);
+    if (!paces.length) return null;
     return paces.reduce((s, p) => s + p, 0) / paces.length;
   }
   function estimateSwimMinutesFor(meters, activityTypeId, activities) {
@@ -3455,6 +3466,9 @@ document.addEventListener('DOMContentLoaded', function () {
     const doneSessions = activities.filter((a) => a && a.dateKey >= weekMondayKey && a.dateKey <= throughDateKey && disciplineForActivityTypeMain(a.activityTypeId, types) === 'swim').length;
     return Math.max(0, targetSessions - doneSessions);
   }
+  function isMeterUnitMain(unit) {
+    return /^met(er|re)s?$|^m$/i.test(String(unit || '').trim());
+  }
   function estimateLegacySlotMinutesFor(kind, slot, types, activities) {
     if (!slot) return null;
     if (kind === 'interval') return Number(slot.targetMinutes) || 0;
@@ -3463,6 +3477,13 @@ document.addEventListener('DOMContentLoaded', function () {
     const unitKind = type ? type.unitKind : 'distance';
     if (unitKind === 'duration') return Math.round(Number(slot.targetAmount) || 0);
     if (unitKind === 'count') return 30; // DEFAULT_SESSION_MINUTES.genericCount, same documented flat default as gym.html's Phase 2
+    // BUG FIX (reported) — a swim-assigned legacy slot used to go
+    // through the km pace estimator below, treating its raw meters
+    // targetAmount as km. Same fix as gym.html's estimateSlotMinutes.
+    if (type && isMeterUnitMain(type.unit)) {
+      const swimPace = recentAvgSwimPaceMinPer100mFor(slot.activityTypeId, activities) || BASIC_SWIMMER_PACE_MIN_PER_100M_MAIN;
+      return Math.round(((Number(slot.targetAmount) || 0) / 100) * swimPace);
+    }
     const pace = recentAvgPaceMinPerKmFor(slot.activityTypeId, activities) || GENERIC_FALLBACK_PACE_MIN_PER_KM_MAIN;
     return Math.round((Number(slot.targetAmount) || 0) * pace);
   }
