@@ -670,39 +670,126 @@ document.addEventListener('DOMContentLoaded', function () {
     } catch (e) { return false; }
   }
 
-  // Phase 3.1 one-time backfill — the user's OWN real targets (given
-  // directly, not re-derived from anything stored), keyed by
-  // weekNumber so they attach to whichever real weekStartDate/
-  // targetValue each checkpoint already has, completely untouched.
-  // Source of truth is this literal data, not the existing plan text —
-  // see planBackfillEligible()'s own comment for why this can only
-  // ever apply to weeks 1-6 and only once per plan.
+  // Backfill — the user's OWN real targets (given directly, not re-
+  // derived from anything stored), keyed by weekNumber so they attach
+  // to whichever real weekStartDate/targetValue each checkpoint
+  // already has. Source of truth is this literal data, not the
+  // existing plan text. Weeks 1-3 are the ORIGINAL Phase 3.1 values —
+  // left completely alone (no `overwrite` flag; see below). Weeks 4-34
+  // are the Olympic-distance extension (AsTri Ixtapa-Zihuatanejo,
+  // mid-May 2027) — weeks 4-6 carry `overwrite: true` because they
+  // previously held the OLD, now-stale 6-week-plan values from the
+  // first backfill (run22/18/10, bike40/45/20, different swim/notes)
+  // and must be REPLACED outright, not left alone just because
+  // `disciplines` already exists. Weeks 7-34 are brand new checkpoints
+  // from the chat's own plan extension (which only ever writes
+  // cumulative run km, never disciplines) and get the normal
+  // fill-only-if-missing treatment. swim.meters is PER SESSION
+  // (weekly total = sessions * meters — see a06ef2f); bike is 0
+  // through week 11 (no bicycle yet) and real, nonzero numbers from
+  // week 12 on for when one's available — see isBikeEnabled()'s own
+  // comment on why that doesn't mean the Bike line shows up yet.
   const PLAN_BACKFILL_DISCIPLINES = {
     1: { disciplines: { run: { km: 18 }, swim: { sessions: 2, meters: 1000 }, bike: { km: 30 }, strength: { sessions: 3 } } },
     2: { disciplines: { run: { km: 20 }, swim: { sessions: 2, meters: 1200 }, bike: { km: 35 }, strength: { sessions: 3 } } },
     3: { disciplines: { run: { km: 20 }, swim: { sessions: 2, meters: 1400 }, bike: { km: 40 }, strength: { sessions: 3 } }, note: 'Swim: 300-400m continuous blocks' },
-    4: { disciplines: { run: { km: 22 }, swim: { sessions: 2, meters: 1600 }, bike: { km: 40 }, strength: { sessions: 3 } }, note: 'Swim: one 500m continuous attempt · Bike: one interval ride' },
-    5: { disciplines: { run: { km: 18 }, swim: { sessions: 2, meters: 1800 }, bike: { km: 45 }, strength: { sessions: 3 } }, note: 'Swim: one 750m race-pace simulation · Bike: one brick' },
-    6: { disciplines: { run: { km: 10 }, swim: { sessions: 2, meters: 1000 }, bike: { km: 20 }, strength: { sessions: 3 } }, note: 'Lighter weights — easy week' },
+    4: { overwrite: true, disciplines: { run: { km: 20 }, swim: { sessions: 2, meters: 1500 }, bike: { km: 0 }, strength: { sessions: 3 } } },
+    5: { overwrite: true, disciplines: { run: { km: 22 }, swim: { sessions: 2, meters: 1600 }, bike: { km: 0 }, strength: { sessions: 3 } } },
+    6: { overwrite: true, disciplines: { run: { km: 24 }, swim: { sessions: 2, meters: 1700 }, bike: { km: 0 }, strength: { sessions: 3 } } },
+    7: { disciplines: { run: { km: 18 }, swim: { sessions: 2, meters: 1300 }, bike: { km: 0 }, strength: { sessions: 3 } }, note: 'Deload — lighter' },
+    8: { disciplines: { run: { km: 22 }, swim: { sessions: 2, meters: 1700 }, bike: { km: 0 }, strength: { sessions: 3 } } },
+    9: { disciplines: { run: { km: 24 }, swim: { sessions: 2, meters: 1800 }, bike: { km: 0 }, strength: { sessions: 3 } }, note: 'One 750m continuous swim' },
+    10: { disciplines: { run: { km: 24 }, swim: { sessions: 2, meters: 1800 }, bike: { km: 0 }, strength: { sessions: 3 } } },
+    11: { disciplines: { run: { km: 18 }, swim: { sessions: 2, meters: 1400 }, bike: { km: 0 }, strength: { sessions: 3 } }, note: 'Deload — lighter' },
+    12: { disciplines: { run: { km: 22 }, swim: { sessions: 2, meters: 1800 }, bike: { km: 15 }, strength: { sessions: 3 } }, note: 'First bike (stationary ok)' },
+    13: { disciplines: { run: { km: 24 }, swim: { sessions: 2, meters: 1900 }, bike: { km: 18 }, strength: { sessions: 3 } } },
+    14: { disciplines: { run: { km: 26 }, swim: { sessions: 2, meters: 2000 }, bike: { km: 20 }, strength: { sessions: 3 } } },
+    15: { disciplines: { run: { km: 20 }, swim: { sessions: 2, meters: 1500 }, bike: { km: 15 }, strength: { sessions: 3 } }, note: 'Deload — lighter' },
+    16: { disciplines: { run: { km: 24 }, swim: { sessions: 2, meters: 2000 }, bike: { km: 22 }, strength: { sessions: 3 } }, note: 'One 1000m continuous swim' },
+    17: { disciplines: { run: { km: 26 }, swim: { sessions: 2, meters: 2000 }, bike: { km: 25 }, strength: { sessions: 3 } } },
+    18: { disciplines: { run: { km: 26 }, swim: { sessions: 2, meters: 2000 }, bike: { km: 25 }, strength: { sessions: 3 } } },
+    19: { disciplines: { run: { km: 20 }, swim: { sessions: 2, meters: 1500 }, bike: { km: 18 }, strength: { sessions: 3 } }, note: 'Deload — lighter' },
+    20: { disciplines: { run: { km: 24 }, swim: { sessions: 2, meters: 2000 }, bike: { km: 25 }, strength: { sessions: 3 } } },
+    21: { disciplines: { run: { km: 26 }, swim: { sessions: 2, meters: 2000 }, bike: { km: 30 }, strength: { sessions: 3 } } },
+    22: { disciplines: { run: { km: 28 }, swim: { sessions: 2, meters: 2000 }, bike: { km: 35 }, strength: { sessions: 3 } }, note: 'Decision point: if a 1000m continuous swim and a 25km bike are done, keep Olympic; else switch to Sprint' },
+    23: { disciplines: { run: { km: 21 }, swim: { sessions: 2, meters: 1600 }, bike: { km: 25 }, strength: { sessions: 2 } }, note: 'Deload — lighter' },
+    24: { disciplines: { run: { km: 26 }, swim: { sessions: 3, meters: 1800 }, bike: { km: 40 }, strength: { sessions: 2 } }, note: 'One 1500m continuous swim, first brick' },
+    25: { disciplines: { run: { km: 28 }, swim: { sessions: 3, meters: 1800 }, bike: { km: 45 }, strength: { sessions: 2 } }, note: 'Long run 8-10km' },
+    26: { disciplines: { run: { km: 28 }, swim: { sessions: 3, meters: 1800 }, bike: { km: 45 }, strength: { sessions: 2 } } },
+    27: { disciplines: { run: { km: 21 }, swim: { sessions: 2, meters: 1600 }, bike: { km: 30 }, strength: { sessions: 2 } }, note: 'Deload — lighter' },
+    28: { disciplines: { run: { km: 26 }, swim: { sessions: 3, meters: 1800 }, bike: { km: 45 }, strength: { sessions: 2 } }, note: 'One open-water swim, brick' },
+    29: { disciplines: { run: { km: 26 }, swim: { sessions: 3, meters: 1800 }, bike: { km: 50 }, strength: { sessions: 2 } }, note: 'Brick' },
+    30: { disciplines: { run: { km: 26 }, swim: { sessions: 3, meters: 1800 }, bike: { km: 55 }, strength: { sessions: 2 } }, note: 'Brick' },
+    31: { disciplines: { run: { km: 20 }, swim: { sessions: 2, meters: 1500 }, bike: { km: 35 }, strength: { sessions: 2 } }, note: 'Deload — lighter' },
+    32: { disciplines: { run: { km: 18 }, swim: { sessions: 2, meters: 1500 }, bike: { km: 30 }, strength: { sessions: 2 } }, note: 'Taper (-30%), light strength' },
+    33: { disciplines: { run: { km: 12 }, swim: { sessions: 2, meters: 1000 }, bike: { km: 20 }, strength: { sessions: 2 } }, note: 'Taper (-50%), light strength' },
+    34: { disciplines: { run: { km: 5 }, swim: { sessions: 1, meters: 800 }, bike: { km: 15 }, strength: { sessions: 0 } }, note: 'Race week — easy sessions only' },
   };
+  // Cumulative run targetValue for weeks 4-34, continuing from week
+  // 3's OWN stored targetValue (read live, never assumed/hardcoded —
+  // weeks 1-3 are never touched by this backfill) plus each week's
+  // table run.km in order. Deterministic given the table + week 3's
+  // current value, so re-running always produces the identical map —
+  // the one thing that makes the targetValue side of this idempotent.
+  function computeRunCumulativeTargets(plan) {
+    const week3 = (plan.weeklyCheckpoints || []).find((cp) => cp.weekNumber === 3);
+    let cumulative = week3 ? Number(week3.targetValue) || 0 : 0;
+    const map = {};
+    Object.keys(PLAN_BACKFILL_DISCIPLINES).map(Number).filter((wn) => wn >= 4).sort((a, b) => a - b).forEach((wn) => {
+      cumulative += Number(PLAN_BACKFILL_DISCIPLINES[wn].disciplines.run.km) || 0;
+      map[wn] = Math.round(cumulative * 10) / 10;
+    });
+    return map;
+  }
   // Eligible only for the one plan this data actually describes
-  // (running_distance, since that's the only goalType that ever had a
-  // real numeric weekly target before this phase — see 3.1's own
-  // verification notes) AND only while at least one of weeks 1-6 is
-  // still missing `disciplines` — once applied, every week 1-6
-  // checkpoint carries it, so this naturally returns false forever
-  // after and the button stays hidden on every future render.
+  // (running_distance) AND only while something would actually
+  // change: a week still missing `disciplines`, an `overwrite` week
+  // whose stored disciplines/note differ from the table, or a
+  // checkpoint's cumulative targetValue not yet matching the
+  // recomputed one. Once every week matches, this returns false and
+  // the button stays hidden — re-running changes nothing.
   function planBackfillEligible(plan) {
     if (!plan || plan.goalType !== 'running_distance' || !Array.isArray(plan.weeklyCheckpoints)) return false;
-    return plan.weeklyCheckpoints.some((cp) => PLAN_BACKFILL_DISCIPLINES[cp.weekNumber] && !cp.disciplines);
+    const cumulativeByWeek = computeRunCumulativeTargets(plan);
+    return plan.weeklyCheckpoints.some((cp) => {
+      const fill = PLAN_BACKFILL_DISCIPLINES[cp.weekNumber];
+      if (!fill) return false;
+      if (!cp.disciplines) return true;
+      if (fill.overwrite && (JSON.stringify(cp.disciplines) !== JSON.stringify(fill.disciplines) || (cp.note || '') !== (fill.note || ''))) return true;
+      if (cp.weekNumber >= 4 && cumulativeByWeek[cp.weekNumber] != null && Number(cp.targetValue) !== cumulativeByWeek[cp.weekNumber]) return true;
+      return false;
+    });
   }
   async function backfillPlanDisciplines(plan) {
+    const cumulativeByWeek = computeRunCumulativeTargets(plan);
     const diffLines = [];
     const newCheckpoints = plan.weeklyCheckpoints.map((cp) => {
       const fill = PLAN_BACKFILL_DISCIPLINES[cp.weekNumber];
-      if (!fill || cp.disciplines) return cp; // no data for this week, or already backfilled — leave byte-for-byte as-is
-      diffLines.push('Week ' + cp.weekNumber + ': + ' + describeDisciplines(fill.disciplines) + (fill.note ? ' (' + fill.note + ')' : ''));
-      return Object.assign({}, cp, { disciplines: fill.disciplines, note: fill.note || cp.note });
+      if (!fill) return cp; // no table data for this week — leave byte-for-byte as-is
+      const next = Object.assign({}, cp);
+      let changed = false;
+      const canWriteDisciplines = fill.overwrite || !cp.disciplines;
+      if (canWriteDisciplines) {
+        const sameAlready = cp.disciplines && JSON.stringify(cp.disciplines) === JSON.stringify(fill.disciplines) && (cp.note || '') === (fill.note || '');
+        if (!sameAlready) {
+          diffLines.push('Week ' + cp.weekNumber + ': ' + (cp.disciplines ? '~ ' : '+ ') + describeDisciplines(fill.disciplines) + (fill.note ? ' (' + fill.note + ')' : ''));
+          next.disciplines = fill.disciplines;
+          // Overwrite weeks replace the note outright (per the task);
+          // a fill-only week keeps any pre-existing freeform note if
+          // the table itself doesn't specify one.
+          next.note = fill.overwrite ? fill.note : (fill.note || cp.note);
+          changed = true;
+        }
+      }
+      if (cp.weekNumber >= 4 && cumulativeByWeek[cp.weekNumber] != null) {
+        const newTarget = cumulativeByWeek[cp.weekNumber];
+        if (Number(cp.targetValue) !== newTarget) {
+          diffLines.push('Week ' + cp.weekNumber + ' cumulative target: ' + cp.targetValue + ' -> ' + newTarget + ' km');
+          next.targetValue = newTarget;
+          changed = true;
+        }
+      }
+      return changed ? next : cp;
     });
     if (!diffLines.length) return false; // nothing eligible — shouldn't happen given planBackfillEligible's own check, but never send a no-op patch
     if (!confirm('Backfill these weekly discipline targets?\n\n' + diffLines.join('\n'))) return false;
@@ -719,10 +806,26 @@ document.addEventListener('DOMContentLoaded', function () {
       return true;
     } catch (e) { alert('Could not save: ' + (e.message || String(e))); return false; }
   }
-  function describeDisciplines(d) {
+  // BUG FIX (reported) / new requirement: the Bike line in a
+  // checkpoint's discipline summary must stay hidden while the user
+  // has no recommendable bike-like activity type configured — EVEN for
+  // weeks 12+ where the stored disciplines.bike.km is a real, nonzero
+  // number written ahead of time for when a bicycle is available. The
+  // stored number is never deleted or zeroed for this — only the
+  // DISPLAY is conditional, checked live against activityTypes (the
+  // same recommendable + name-pattern convention gym.html's
+  // DISCIPLINE_NAME_PATTERNS already established for this exact
+  // purpose, duplicated here per this project's established per-file
+  // small-duplication convention rather than a cross-file import).
+  const BIKE_NAME_PATTERN = /\b(bike|cycl|ride|spin)/i;
+  function isBikeEnabled(activityTypes) {
+    return (activityTypes || []).some((t) => t.recommendable && BIKE_NAME_PATTERN.test(t.name || ''));
+  }
+  function describeDisciplines(d, opts) {
+    const showBike = !opts || opts.showBike !== false;
     const parts = [];
     if (d.run && d.run.km) parts.push('Run ' + d.run.km + 'km');
-    if (d.bike && d.bike.km) parts.push('Bike ' + d.bike.km + 'km');
+    if (showBike && d.bike && d.bike.km) parts.push('Bike ' + d.bike.km + 'km');
     if (d.swim && d.swim.sessions) parts.push('Swim ' + d.swim.sessions + '×' + (d.swim.meters ? '~' + d.swim.meters + 'm' : ''));
     if (d.strength && d.strength.sessions) parts.push('Strength ' + d.strength.sessions);
     return parts.join(' · ');
@@ -948,6 +1051,7 @@ document.addEventListener('DOMContentLoaded', function () {
     else { $('planChart').closest('.plan-chart-wrap').style.display = 'none'; }
 
     // Checkpoint list.
+    const bikeEnabled = isBikeEnabled(activityTypes);
     const listEl = $('planCheckpointList');
     listEl.innerHTML = plan.weeklyCheckpoints.map((cp) => {
       const range = checkpointCanonicalRange(cp);
@@ -959,8 +1063,10 @@ document.addEventListener('DOMContentLoaded', function () {
       // existing single numeric targetValue/dot/status machinery above
       // — completely untouched by this, since that's still what drives
       // the chart/progress bar/hit-or-missed logic for every goalType.
+      // Bike line hidden while disabled (see isBikeEnabled's own
+      // comment) — the STORED cp.disciplines.bike.km is never touched.
       const disciplinesLine = cp.disciplines
-        ? '<div class="plan-checkpoint-disciplines">' + escapeHtml(describeDisciplines(cp.disciplines)) + (cp.note ? ' — ' + escapeHtml(cp.note) : '') + '</div>'
+        ? '<div class="plan-checkpoint-disciplines">' + escapeHtml(describeDisciplines(cp.disciplines, { showBike: bikeEnabled })) + (cp.note ? ' — ' + escapeHtml(cp.note) : '') + '</div>'
         : '';
       return (
         '<div class="plan-checkpoint-row status-' + status + (status === 'current' ? ' is-current' : '') + '">' +
