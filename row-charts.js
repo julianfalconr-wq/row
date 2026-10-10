@@ -46,6 +46,15 @@
 //     legend: Boolean,   // defaults to datasets.length > 1
 //     beginAtZeroY: Boolean,   // defaults to true for bar, false for line
 //     maxTicksX: Number,   // defaults to 8
+//     yTickFormat: (value) => string,   // optional — e.g. a decimal-
+//       minutes pace value formatted as "3:18" instead of "3.3".
+//       Applied to the y-axis ticks only; omit for the default numeric
+//       ticks (every existing caller's unchanged behavior).
+//     tooltipValueFormat: (value) => string,   // optional — same
+//       formatting applied to the hover tooltip, so what's plotted and
+//       what's hovered always agree. Usually passed together with
+//       yTickFormat, but kept separate in case a caller ever wants only
+//       one of the two.
 //   }
 // Returns the Chart.js instance (same as `new Chart(...)` would) —
 // callers that need to .destroy() it before re-rendering keep doing
@@ -165,6 +174,14 @@
             display: spec.legend !== undefined ? spec.legend : datasets.length > 1,
             labels: { color: tickColor, font: { size: 10 }, boxWidth: 10 },
           },
+          tooltip: typeof spec.tooltipValueFormat === 'function' ? {
+            callbacks: {
+              label(ctx) {
+                const prefix = ctx.dataset && ctx.dataset.label ? ctx.dataset.label + ': ' : '';
+                return prefix + spec.tooltipValueFormat(ctx.parsed.y);
+              },
+            },
+          } : undefined,
         },
         scales: {
           x: {
@@ -172,7 +189,10 @@
             grid: { color: gridColor },
           },
           y: {
-            ticks: { color: tickColor, font: { size: 10 } },
+            ticks: {
+              color: tickColor, font: { size: 10 },
+              callback: typeof spec.yTickFormat === 'function' ? function (value) { return spec.yTickFormat(value); } : undefined,
+            },
             grid: { color: gridColor },
             beginAtZero: spec.beginAtZeroY !== undefined ? spec.beginAtZeroY : type === 'bar',
           },

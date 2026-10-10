@@ -220,39 +220,18 @@ body {
     <div class="trend-chart-wrap"><canvas id="nutritionTrendChart"></canvas></div>
   </div>
 
-  <div class="trend-card">
-    <div class="trend-card-head">
-      <h3>Activities — Distance per Session</h3>
-      <span class="trend-card-sub" id="activitiesDistanceSub">Loading…</span>
-    </div>
-    <div class="trend-chart-wrap"><canvas id="activitiesDistanceChart"></canvas></div>
-  </div>
-
-  <div class="trend-card">
-    <div class="trend-card-head">
-      <h3>Activities — Pace per Session</h3>
-      <span class="trend-card-sub" id="activitiesPaceSub">Loading…</span>
-    </div>
-    <div class="trend-chart-wrap"><canvas id="activitiesPaceChart"></canvas></div>
-  </div>
-
-  <!-- BUG FIX (reported) — swim entries used to be mixed into the
-       two charts above on a km-based scale, even though a swim
-       activity's own raw distance is in meters, not km: a single
-       swim session (e.g. 2000) would tower over every run/bike
-       distance, and its "pace" (computed as if it were km-based)
-       would show as a near-zero outlier next to normal run/bike
-       paces — neither chart was readable once any swim data existed.
-       Swim now gets its own chart, on its own natural min/100m scale,
-       entirely separate from run/bike's min/km one — see
-       loadActivitiesTrend's own comment for the classification. -->
-  <div class="trend-card" id="activitiesSwimPaceCard" style="display:none">
-    <div class="trend-card-head">
-      <h3>Swim — Pace per Session</h3>
-      <span class="trend-card-sub" id="activitiesSwimPaceSub">Loading…</span>
-    </div>
-    <div class="trend-chart-wrap"><canvas id="activitiesSwimPaceChart"></canvas></div>
-  </div>
+  <!-- BUG FIX (reported): a single shared "Distance per Session" /
+       "Pace per Session" chart used to mix EVERY activity type into
+       one series — a swim entry's meters value towering over run/bike
+       km, and (once swim was split out separately) Running and
+       Cycling entries still landing on the same line/axis, producing
+       nonsensical pace jumps (~5 to ~10) between unrelated sports.
+       loadActivitiesTrend() now builds one distance card + one pace
+       card PER activity type that has a logged session in range (each
+       in that type's own unit/pace format), injected here dynamically
+       since the set of types isn't known until data loads — never a
+       fixed/hardcoded pair or two. -->
+  <div id="activitiesChartsContainer"></div>
 
   <div class="trend-card">
     <div class="trend-card-head">
@@ -773,16 +752,66 @@ document.addEventListener('DOMContentLoaded', function () {
       return (j && j.ok && Array.isArray(j.types)) ? j.types : [];
     } catch (e) { return []; }
   }
-  // BUG FIX (reported): swim entries used to be mixed directly into
-  // the run/bike-oriented distance (km) and pace (min/km) charts below
-  // — a single swim session's raw meters value (e.g. 2000) dwarfs any
-  // real run/bike distance, and dividing duration by that same raw
-  // number produced a near-zero "pace" next to normal run/bike paces,
-  // making both charts unreadable whenever any swim data existed.
-  // Now classified by each entry's own activity type unit first:
-  // meters-native entries (swim) are excluded from the km-based charts
-  // entirely and get their own separate chart instead, on their own
-  // natural min/100m scale — see activitiesSwimPaceCard above.
+  // Formats a decimal-minutes pace value as "M:SS" (e.g. 3.3 -> "3:18")
+  // — used for the meter-native (swim) pace chart's axis ticks AND
+  // tooltip (via renderChart's valueFormat) so a reader never has to
+  // mentally convert "3.3" into a real pace. Run/bike's min/km chart
+  // deliberately keeps its existing plain-decimal format (unchanged,
+  // per the reported assertion "run chart unchanged in values") —
+  // this is swim-only.
+  function formatPaceClock(value) {
+    if (value == null || isNaN(value)) return '';
+    const abs = Math.abs(value);
+    const m = Math.floor(abs);
+    const s = Math.round((abs - m) * 60);
+    return (value < 0 ? '-' : '') + m + ':' + String(s).padStart(2, '0');
+  }
+  // BUG FIX (reported): two sessions on the SAME calendar day produced
+  // two identical-looking x-axis labels ("7 oct", "7 oct"), reading as
+  // a duplicated/buggy axis rather than two distinct sessions. Only
+  // dates that actually repeat within THIS series get a "#1"/"#2"
+  // suffix — a lone session per day is untouched.
+  function sessionAxisLabels(entries) {
+    const totalPerDate = {};
+    entries.forEach((a) => { totalPerDate[a.dateKey] = (totalPerDate[a.dateKey] || 0) + 1; });
+    const seen = {};
+    return entries.map((a) => {
+      const base = shortLabel(a.dateKey);
+      if (totalPerDate[a.dateKey] <= 1) return base;
+      seen[a.dateKey] = (seen[a.dateKey] || 0) + 1;
+      return base + ' #' + seen[a.dateKey];
+    });
+  }
+  // Card ids built and inserted into #activitiesChartsContainer by the
+  // last loadActivitiesTrend() call — tracked so a later call (a
+  // different date range, fewer activity types present) can remove
+  // cards/destroy chart instances for a type that no longer has any
+  // session in range, instead of leaving a stale empty chart behind.
+  let activeActivityCardIds = [];
+  function ensureActivityCard(cardId, title) {
+    let card = document.getElementById(cardId);
+    if (card) return card;
+    card = document.createElement('div');
+    card.className = 'trend-card';
+    card.id = cardId;
+    card.innerHTML = '<div class="trend-card-head"><h3>' + escapeHtml(title) + '</h3>'
+      + '<span class="trend-card-sub" id="' + cardId + 'Sub">Loading…</span></div>'
+      + '<div class="trend-chart-wrap"><canvas id="' + cardId + 'Chart"></canvas></div>';
+    $('activitiesChartsContainer').appendChild(card);
+    return card;
+  }
+  // BUG FIX (reported): a single shared distance/pace chart used to mix
+  // EVERY activity type into one series — first swim's raw meters
+  // towering over run/bike km (fixed by splitting swim out entirely),
+  // but Running and Cycling (or any two km-based types) still landed
+  // on the exact same line, producing nonsensical pace jumps (~5 to
+  // ~10 min/km) between unrelated sports on what looked like one
+  // continuous trend. Now builds one distance chart + one pace chart
+  // PER activity type that has a logged session with a distance in
+  // range — never more than one type's sessions in the same series,
+  // ever — each in that type's own real unit/pace format (km + min/km
+  // for a km-native type, m + min/100m for a meters-native one like
+  // Swimming).
   async function loadActivitiesTrend(fromKey, toKey) {
     let activities = [];
     try { activities = JSON.parse(localStorage.getItem('po_coach_activities')) || []; } catch (e) {}
@@ -795,41 +824,104 @@ document.addEventListener('DOMContentLoaded', function () {
       const t = types.find((x) => x.id === activityTypeId);
       return t ? t.unit : 'km'; // unknown/unconfigured type falls back to the historical km assumption, same default every other file here uses
     }
-    const kmEntries = inRange.filter((a) => a.distanceKm != null && !isMeterUnitTrends(unitFor(a.activityTypeId)));
-    const swimEntries = inRange.filter((a) => a.distanceKm != null && isMeterUnitTrends(unitFor(a.activityTypeId)));
-
-    const distanceLabels = kmEntries.map((a) => shortLabel(a.dateKey));
-    const distanceData = kmEntries.map((a) => Math.round(a.distanceKm * 100) / 100);
-    renderChart('activitiesDistanceChart', distanceLabels, [{ label: 'Distance (km)', data: distanceData }]);
-    $('activitiesDistanceSub').textContent = kmEntries.length
-      ? (kmEntries.length + ' session' + (kmEntries.length === 1 ? '' : 's') + ' with distance logged')
-      : 'No distance-based activities logged in this range';
-
-    const paceEntries = kmEntries.filter((a) => a.distanceKm > 0 && a.durationMin != null);
-    const paceLabels = paceEntries.map((a) => shortLabel(a.dateKey));
-    const paceData = paceEntries.map((a) => Math.round((a.durationMin / a.distanceKm) * 100) / 100); // minutes per km
-    renderChart('activitiesPaceChart', paceLabels, [{ label: 'Pace (min/km)', data: paceData, color: '#FFC93C' }]);
-    $('activitiesPaceSub').textContent = paceEntries.length
-      ? (paceEntries.length + ' session' + (paceEntries.length === 1 ? '' : 's') + ' with pace data')
-      : 'No sessions with both distance and duration in this range';
-
-    const swimPaceEntries = swimEntries.filter((a) => a.distanceKm > 0 && a.durationMin != null);
-    const swimPaceData = swimPaceEntries.map((a) => Math.round((a.durationMin / (a.distanceKm / 100)) * 100) / 100); // minutes per 100m
-    const swimPaceCard = $('activitiesSwimPaceCard');
-    if (swimPaceEntries.length) {
-      swimPaceCard.style.display = 'block';
-      const swimPaceLabels = swimPaceEntries.map((a) => shortLabel(a.dateKey));
-      renderChart('activitiesSwimPaceChart', swimPaceLabels, [{ label: 'Pace (min/100m)', data: swimPaceData, color: '#7DD3FC' }]);
-      $('activitiesSwimPaceSub').textContent = swimPaceEntries.length + ' session' + (swimPaceEntries.length === 1 ? '' : 's') + ' with pace data';
-    } else {
-      swimPaceCard.style.display = 'none';
+    function nameFor(activityTypeId) {
+      const t = types.find((x) => x.id === activityTypeId);
+      return (t && t.name) || 'Activity';
     }
+    // Kept EXACTLY as before (all km-native types combined) for the
+    // aggregate return value only — find-patterns/weekly-review's own
+    // payload shape (activities.distance/.pace) is unrelated to this
+    // bug report and untouched; the per-type split below is purely
+    // additive, for the CHARTS themselves.
+    const kmEntries = inRange.filter((a) => a.distanceKm != null && !isMeterUnitTrends(unitFor(a.activityTypeId)));
+    const swimEntriesLegacy = inRange.filter((a) => a.distanceKm != null && isMeterUnitTrends(unitFor(a.activityTypeId)));
+    const distanceData = kmEntries.map((a) => Math.round(a.distanceKm * 100) / 100);
+    const paceEntries = kmEntries.filter((a) => a.distanceKm > 0 && a.durationMin != null);
+    const paceData = paceEntries.map((a) => Math.round((a.durationMin / a.distanceKm) * 100) / 100);
+    const swimPaceEntriesLegacy = swimEntriesLegacy.filter((a) => a.distanceKm > 0 && a.durationMin != null);
+    const swimPaceDataLegacy = swimPaceEntriesLegacy.map((a) => Math.round((a.durationMin / (a.distanceKm / 100)) * 100) / 100);
+
+    // Group by activity type — never mixed, matching the reported fix.
+    const byType = {};
+    inRange.filter((a) => a.distanceKm != null).forEach((a) => {
+      const key = a.activityTypeId || '__unknown__';
+      if (!byType[key]) byType[key] = { name: nameFor(a.activityTypeId), isMeters: isMeterUnitTrends(unitFor(a.activityTypeId)), entries: [] };
+      byType[key].entries.push(a);
+    });
+
+    const newCardIds = [];
+    if (!Object.keys(byType).length) {
+      // Empty state — keeps a visible, explained card instead of the
+      // whole Activities section silently disappearing when nothing's
+      // logged yet in the selected range.
+      const emptyCardId = 'actType__empty';
+      newCardIds.push(emptyCardId);
+      const card = ensureActivityCard(emptyCardId, 'Activities — Distance & Pace per Session');
+      const wrap = card.querySelector('.trend-chart-wrap');
+      if (wrap) wrap.innerHTML = '';
+      $(emptyCardId + 'Sub').textContent = 'No distance-based activities logged in this range';
+    }
+    Object.keys(byType)
+      .sort((a, b) => byType[b].entries.length - byType[a].entries.length)
+      .forEach((typeId) => {
+        const group = byType[typeId];
+        const safeId = typeId.replace(/[^a-zA-Z0-9_-]/g, '_');
+        const distCardId = 'actType_' + safeId + '_distance';
+        const paceCardId = 'actType_' + safeId + '_pace';
+        newCardIds.push(distCardId, paceCardId);
+
+        ensureActivityCard(distCardId, group.name + ' — Distance per Session');
+        const distLabels = sessionAxisLabels(group.entries);
+        const distData = group.entries.map((a) => group.isMeters ? Math.round(a.distanceKm) : Math.round(a.distanceKm * 100) / 100);
+        renderChart(distCardId + 'Chart', distLabels, [{ label: 'Distance (' + (group.isMeters ? 'm' : 'km') + ')', data: distData }]);
+        $(distCardId + 'Sub').textContent = group.entries.length + ' session' + (group.entries.length === 1 ? '' : 's') + ' with distance logged';
+
+        const typePaceEntries = group.entries.filter((a) => a.distanceKm > 0 && a.durationMin != null);
+        ensureActivityCard(paceCardId, group.name + ' — Pace per Session');
+        const paceLabels = sessionAxisLabels(typePaceEntries);
+        const typePaceData = typePaceEntries.map((a) => group.isMeters
+          ? Math.round((a.durationMin / (a.distanceKm / 100)) * 100) / 100 // minutes per 100m
+          : Math.round((a.durationMin / a.distanceKm) * 100) / 100); // minutes per km
+        renderChart(
+          paceCardId + 'Chart', paceLabels,
+          [{ label: 'Pace (' + (group.isMeters ? 'min/100m' : 'min/km') + ')', data: typePaceData, color: group.isMeters ? '#7DD3FC' : '#FFC93C' }],
+          null, group.isMeters ? formatPaceClock : null
+        );
+        $(paceCardId + 'Sub').textContent = typePaceEntries.length
+          ? (typePaceEntries.length + ' session' + (typePaceEntries.length === 1 ? '' : 's') + ' with pace data')
+          : 'No sessions with both distance and duration in this range';
+
+        // BUG FIX (reported), investigation point #3 — prints exactly
+        // what each meters-native (swim) point is computed from, so a
+        // chart reading of "looks like ~2.9" against an expected 3:18
+        // can be checked against the real stored numbers rather than a
+        // coarse axis gridline. 2000m/66min must print paceMinPer100m:
+        // 3.3, paceClock: "3:18".
+        if (group.isMeters) {
+          console.log('[trends] ' + group.name + ' pace check:', typePaceEntries.map((a, i) => ({
+            date: a.dateKey, distanceM: a.distanceKm, durationMin: a.durationMin,
+            paceMinPer100m: typePaceData[i], paceClock: formatPaceClock(typePaceData[i]),
+          })));
+        }
+      });
+
+    // Remove any card left over from a previous call (different range,
+    // fewer types with data now) and destroy its chart instance —
+    // otherwise a stale empty card/canvas stays in the DOM forever.
+    activeActivityCardIds.forEach((id) => {
+      if (newCardIds.includes(id)) return;
+      const chartId = id + 'Chart';
+      if (chartInstances[chartId]) { chartInstances[chartId].destroy(); delete chartInstances[chartId]; }
+      const el = document.getElementById(id);
+      if (el) el.remove();
+    });
+    activeActivityCardIds = newCardIds;
 
     // See loadScoreTrend's own comment on why this is returned.
     return {
       distance: kmEntries.map((a, i) => ({ date: a.dateKey, km: distanceData[i] })),
       pace: paceEntries.map((a, i) => ({ date: a.dateKey, minPerKm: paceData[i] })),
-      swimPace: swimPaceEntries.map((a, i) => ({ date: a.dateKey, minPer100m: swimPaceData[i] })),
+      swimPace: swimPaceEntriesLegacy.map((a, i) => ({ date: a.dateKey, minPer100m: swimPaceDataLegacy[i] })),
     };
   }
 
@@ -861,7 +953,11 @@ document.addEventListener('DOMContentLoaded', function () {
   // unlike the line charts here a week bucket with zero sessions is a
   // real 0, not a gap, so spanGaps has no effect on a bar dataset
   // either way.
-  function renderChart(canvasId, labels, datasetsSpec, chartType) {
+  // valueFormat (optional): a (decimalValue) => string formatter applied
+  // to both the y-axis ticks and the hover tooltip — used by the swim/
+  // meter-native pace charts to show "3:18" instead of the raw decimal
+  // "3.3" everywhere a value is displayed, not just in the plotted data.
+  function renderChart(canvasId, labels, datasetsSpec, chartType, valueFormat) {
     const canvas = $(canvasId);
     if (!canvas) return;
     if (chartInstances[canvasId]) chartInstances[canvasId].destroy();
@@ -869,6 +965,8 @@ document.addEventListener('DOMContentLoaded', function () {
       type: chartType === 'bar' ? 'bar' : 'line',
       labels,
       datasets: datasetsSpec.map((ds) => ({ label: ds.label, data: ds.data, color: ds.color })),
+      yTickFormat: valueFormat || undefined,
+      tooltipValueFormat: valueFormat || undefined,
     });
     if (inst) chartInstances[canvasId] = inst;
   }
