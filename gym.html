@@ -5864,6 +5864,88 @@ img, video, canvas, svg { max-width: 100%; }
     return types.find((t) => pattern.test(t.name || '')) || null;
   }
 
+  // Shared by generateWeeklyPlan() AND the staleness check below —
+  // extracted so both ask the exact same question ("what does the
+  // active plan say THIS week needs") the exact same way, rather than
+  // generateWeeklyPlan() alone knowing how to resolve it. recommendableActivityTypes
+  // must be pre-fetched/filtered by the caller (same as before —
+  // generateWeeklyPlan() already needs it for other fields in the
+  // same request, so this doesn't trigger a second fetch there).
+  async function resolveActiveWeekDisciplines(recommendableActivityTypes) {
+    const rawDisciplines = await fetchActiveWeekDisciplines();
+    if (!rawDisciplines) return null;
+    const activeWeekDisciplines = {};
+    ['run', 'bike', 'swim'].forEach((disc) => {
+      const d = rawDisciplines[disc];
+      if (!d) return;
+      const type = resolveActivityTypeForDiscipline(disc, recommendableActivityTypes);
+      activeWeekDisciplines[disc] = Object.assign({}, d, { activityTypeId: type ? type.id : null });
+    });
+    if (rawDisciplines.strength) activeWeekDisciplines.strength = rawDisciplines.strength;
+    return activeWeekDisciplines;
+  }
+  // BUG FIX (reported): a cached plan can have a `targets` key that no
+  // longer matches the active plan's CURRENT week disciplines (e.g.
+  // generated once before the backfill, or before a discipline's
+  // activity type became non-recommendable) — just checking "does
+  // `targets` exist at all" isn't enough to detect that; it has to be
+  // compared against what the active plan actually says NOW.
+  function targetsMatchDisciplines(targets, activeWeekDisciplines) {
+    if (!targets || !activeWeekDisciplines) return false;
+    function sameAmount(disc) {
+      const t = targets[disc]; const a = activeWeekDisciplines[disc];
+      if (!t && !a) return true;
+      if (!t || !a) return false;
+      if (disc === 'swim') return Number(t.sessions) === Number(a.sessions) && Number(t.meters) === Number(a.meters);
+      if (disc === 'strength') return Number(t.sessions) === Number(a.sessions);
+      return Number(t.km) === Number(a.km);
+    }
+    return ['run', 'bike', 'swim', 'strength'].every(sameAmount);
+  }
+  // BUG FIX — deterministic fallback: this week's real NUMBERS come
+  // from the active plan's disciplines regardless of whether the AI
+  // call that would normally add descriptive text/an interval session
+  // succeeds — so a network/API failure (whatever its cause) never
+  // leaves a stale or invented plan in place once we already know the
+  // real target numbers. No model involved at all here; activityName
+  // is resolved from the already-fetched recommendableActivityTypes.
+  function buildFallbackPlanFromDisciplines(activeWeekDisciplines, recommendableActivityTypes) {
+    const targets = {};
+    ['run', 'bike'].forEach((disc) => {
+      const d = activeWeekDisciplines[disc];
+      if (!d || !d.km || !d.activityTypeId) return;
+      const type = recommendableActivityTypes.find((t) => t.id === d.activityTypeId);
+      targets[disc] = { activityTypeId: d.activityTypeId, activityName: (type && type.name) || '', km: d.km };
+    });
+    const swim = activeWeekDisciplines.swim;
+    if (swim && swim.sessions > 0 && swim.activityTypeId) {
+      const type = recommendableActivityTypes.find((t) => t.id === swim.activityTypeId);
+      targets.swim = { activityTypeId: swim.activityTypeId, activityName: (type && type.name) || '', sessions: swim.sessions, meters: Number(swim.meters) || 0 };
+    }
+    if (activeWeekDisciplines.strength && activeWeekDisciplines.strength.sessions > 0) {
+      targets.strength = { sessions: activeWeekDisciplines.strength.sessions };
+    }
+    // Legacy longSession/easyVolume mirror — same run-then-bike
+    // priority as api/training.js's own deriveLegacyCardioFromTargets,
+    // duplicated here since this fallback never reaches the server.
+    const distanceDisciplines = ['run', 'bike'].filter((d) => targets[d] && targets[d].km > 0);
+    function volumeSlotFor(disc) {
+      if (!disc) return { activityTypeId: null, activityName: '', targetAmount: 0, unit: '', description: '' };
+      const t = targets[disc];
+      return { activityTypeId: t.activityTypeId, activityName: t.activityName, targetAmount: t.km, unit: 'km', description: '' };
+    }
+    return {
+      strength: { targetSessions: (targets.strength && targets.strength.sessions) || 1, focus: '' },
+      cardio: {
+        interval: { activityTypeId: null, activityName: '', targetSessions: 0, targetMinutes: 0, description: '' },
+        longSession: volumeSlotFor(distanceDisciplines[0] || null),
+        easyVolume: volumeSlotFor(distanceDisciplines[1] || null),
+      },
+      targets,
+      rationale: 'Built directly from your active plan\'s targets for this week — these numbers always come from your plan, not invented, even when the AI description step itself fails.',
+    };
+  }
+
   // ---------- Phase 3.4 (amendment B): weekly capacity ----------
   // For every remaining day THIS week (today through Sunday —
   // thisWeekMondayKey() + 6 days, the same week-start the weekly plan
@@ -6077,6 +6159,11 @@ img, video, canvas, svg { max-width: 100%; }
     if (!secret) { if (!silent) alert('Set your dashboard secret first (on the Cronometer page) to use AI features.'); return; }
     const btn = $$('tpGenerateBtn');
     if (!silent) { btn.disabled = true; btn.classList.add('is-spinning'); }
+    // Hoisted above the try so the catch block below can still build
+    // the deterministic fallback plan from real numbers even if a
+    // LATER step (the AI call itself) is what actually fails.
+    let recommendableActivityTypes = [];
+    let activeWeekDisciplines = null;
     try {
       // String-compare local "YYYY-MM-DD" keys (cutoffKey, dk, r.dateKey)
       // rather than reconstructing Date objects from them — new Date(dk)
@@ -6115,7 +6202,7 @@ img, video, canvas, svg { max-width: 100%; }
       // status can change at any time via General Settings and a stale
       // client-side cache shouldn't decide what this deliberate,
       // infrequent action considers.
-      const recommendableActivityTypes = (await fetchActivityTypes())
+      recommendableActivityTypes = (await fetchActivityTypes())
         .filter((t) => t.recommendable)
         .map((t) => ({ id: t.id, name: t.name, unit: t.unit, unitKind: t.unitKind }));
 
@@ -6130,18 +6217,8 @@ img, video, canvas, svg { max-width: 100%; }
       // session to match real logged activities against them) and so
       // it can zero out a discipline whose only matching type turns
       // out to be restricted/non-recommendable.
-      const rawDisciplines = await fetchActiveWeekDisciplines();
-      let activeWeekDisciplines = null;
-      if (rawDisciplines) {
-        activeWeekDisciplines = {};
-        ['run', 'bike', 'swim'].forEach((disc) => {
-          const d = rawDisciplines[disc];
-          if (!d) return;
-          const type = resolveActivityTypeForDiscipline(disc, recommendableActivityTypes);
-          activeWeekDisciplines[disc] = Object.assign({}, d, { activityTypeId: type ? type.id : null });
-        });
-        if (rawDisciplines.strength) activeWeekDisciplines.strength = rawDisciplines.strength;
-      }
+      activeWeekDisciplines = await resolveActiveWeekDisciplines(recommendableActivityTypes);
+      if (window.__GYM_WEEKLY_DEBUG) console.log('[weekly-plan-debug] generateWeeklyPlan: activeWeekDisciplines =', JSON.stringify(activeWeekDisciplines));
 
       // Phase 3.4 — capacity summary (needed vs available per
       // discipline, per-day budgets) for the SAME week the targets
@@ -6169,7 +6246,24 @@ img, video, canvas, svg { max-width: 100%; }
       saveStoredPlan({ weekStart: thisWeekMondayKey(), plan: json.plan, generatedAt: new Date().toISOString() });
       renderWeeklyProgress();
     } catch (e) {
-      if (!silent) alert('Could not generate objectives: ' + (e.message || String(e)));
+      // BUG FIX — deterministic fallback: this week's real target
+      // NUMBERS are already known (resolved above from the active
+      // plan, independent of the AI call) — never leave a stale or
+      // invented plan in place just because the step that would have
+      // added descriptive text/an interval session failed. Only
+      // applies when activeWeekDisciplines actually resolved to
+      // something real; with nothing real to fall back to, the old
+      // behavior (leave whatever was there, alert if not silent)
+      // still applies — there's nothing better to show.
+      if (window.__GYM_WEEKLY_DEBUG) console.log('[weekly-plan-debug] generateWeeklyPlan FAILED:', e && (e.message || String(e)), 'activeWeekDisciplines was', JSON.stringify(activeWeekDisciplines));
+      if (activeWeekDisciplines) {
+        const fallbackPlan = buildFallbackPlanFromDisciplines(activeWeekDisciplines, recommendableActivityTypes);
+        saveStoredPlan({ weekStart: thisWeekMondayKey(), plan: fallbackPlan, generatedAt: new Date().toISOString() });
+        renderWeeklyProgress();
+        if (!silent) alert('Built directly from your active plan — the AI description step failed: ' + (e.message || String(e)));
+      } else if (!silent) {
+        alert('Could not generate objectives: ' + (e.message || String(e)));
+      }
     } finally {
       if (!silent) { btn.disabled = false; btn.classList.remove('is-spinning'); }
     }
@@ -6177,34 +6271,80 @@ img, video, canvas, svg { max-width: 100%; }
   $$('tpGenerateBtn').addEventListener('click', generateWeeklyPlan);
   renderWeeklyProgress();
 
-  // BUG FIX (reported): a cached po_coach_weekly_plan_v1 entry for the
-  // current week, saved before a long-term plan's disciplines existed
-  // for that week (or before the plan's own backfill was ever run),
-  // has no `targets` key — and previously just sat there rendering
-  // the legacy fallback (or, after the backfill was added later, kept
-  // showing invented numbers) until the user happened to notice and
-  // click refresh themselves. On page load, if the cached plan is
-  // current-week but lacks `targets`, AND the active long-term plan
-  // genuinely has real disciplines data for this exact week (checked
-  // the same canonical-week way fetchActiveWeekDisciplines/plan.html
-  // both use), silently regenerate it once — self-healing rather than
-  // requiring a manual refresh to notice stale/legacy data. Guarded by
+  // BUG FIX (reported, round 2): a cached po_coach_weekly_plan_v1
+  // entry for the current week can be stale even when it HAS a
+  // `targets` key — e.g. generated before the active plan's backfill,
+  // or before a discipline's activity type became non-recommendable —
+  // so checking "does `targets` exist" alone isn't enough; it must be
+  // compared against what the active plan says NOW
+  // (targetsMatchDisciplines). On page load, if the cached plan is
+  // current-week but its targets don't match (or it has none at all),
+  // AND the active long-term plan genuinely has real disciplines data
+  // for this exact (canonical) week, silently regenerate it once —
+  // self-healing rather than requiring a manual refresh. Guarded by
   // attemptedAutoRebuild so this can only ever fire once per page
   // load, never loop (generateWeeklyPlan's own success path calls
   // renderWeeklyProgress() again, which does NOT re-invoke this).
+  //
+  // TEMPORARY DEBUG (round 2 of this bug — the round-1 fix above
+  // didn't reproduce-fix on the user's real browser/data the way it
+  // did in a synthetic Playwright test, so this prints every input to
+  // the decision instead of guessing further) — console.log always,
+  // plus a one-line visible readout appended under the rationale text
+  // so it's visible without opening devtools. REMOVE once the cause
+  // is confirmed from this output.
   let attemptedAutoRebuild = false;
   async function autoRebuildStaleWeeklyPlanIfNeeded() {
-    if (attemptedAutoRebuild) return;
+    const debug = { ts: new Date().toISOString() };
+    if (attemptedAutoRebuild) { debug.skipped = 'already attempted this page load'; renderDebugLine(debug); return; }
     attemptedAutoRebuild = true;
     try {
       const stored = loadStoredPlan();
+      debug.thisWeekMondayKey = thisWeekMondayKey();
+      debug.storedExists = !!stored;
+      debug.storedWeekStart = stored && stored.weekStart;
+      debug.storedHasPlan = !!(stored && stored.plan);
+      debug.storedHasTargets = !!(stored && stored.plan && stored.plan.targets);
+      debug.storedTargets = stored && stored.plan && stored.plan.targets;
       const isCurrentWeek = !!(stored && stored.weekStart === thisWeekMondayKey() && stored.plan);
-      if (!isCurrentWeek || stored.plan.targets) return; // nothing cached for this week yet (handled by the empty state), or already targets-mode — nothing to fix
-      if (!getSecret()) return;
+      debug.isCurrentWeek = isCurrentWeek;
+      if (!isCurrentWeek) { debug.decision = 'SKIP: no cached plan for this exact week key (empty state handles this)'; renderDebugLine(debug); return; }
+      const hasSecret = !!getSecret();
+      debug.hasSecret = hasSecret;
+      if (!hasSecret) { debug.decision = 'SKIP: no dashboard secret set'; renderDebugLine(debug); return; }
+      const recommendableActivityTypes = (await fetchActivityTypes()).filter((t) => t.recommendable).map((t) => ({ id: t.id, name: t.name, unit: t.unit, unitKind: t.unitKind }));
+      debug.recommendableActivityTypes = recommendableActivityTypes.map((t) => t.name);
       const rawDisciplines = await fetchActiveWeekDisciplines();
-      if (!rawDisciplines) return; // genuinely no active-plan disciplines for this week — the legacy fallback IS the correct display
+      debug.fetchActiveWeekDisciplinesResult = rawDisciplines;
+      if (!rawDisciplines) { debug.decision = 'SKIP: fetchActiveWeekDisciplines() returned null — no active plan, or no checkpoint matches this canonical week'; renderDebugLine(debug); return; }
+      const activeWeekDisciplines = await resolveActiveWeekDisciplines(recommendableActivityTypes);
+      debug.resolvedActiveWeekDisciplines = activeWeekDisciplines;
+      const alreadyFresh = targetsMatchDisciplines(stored.plan.targets, activeWeekDisciplines);
+      debug.alreadyFresh = alreadyFresh;
+      if (alreadyFresh) { debug.decision = 'SKIP: stored targets already match the active plan\'s current-week disciplines'; renderDebugLine(debug); return; }
+      debug.decision = 'REBUILDING (silent) now...';
+      renderDebugLine(debug);
       await generateWeeklyPlan(true /* silent */);
-    } catch (e) { /* best-effort only — a failed auto-rebuild just leaves the existing (legacy) display in place */ }
+      debug.decision = 'REBUILD call finished — see the card above for the result';
+      renderDebugLine(debug);
+    } catch (e) {
+      debug.decision = 'ERROR during auto-rebuild: ' + (e && (e.message || String(e)));
+      renderDebugLine(debug);
+    }
+  }
+  function renderDebugLine(debug) {
+    console.log('[weekly-plan-debug]', debug);
+    try {
+      let el = $$('tpWeeklyDebugTemp');
+      if (!el) {
+        el = document.createElement('div');
+        el.id = 'tpWeeklyDebugTemp';
+        el.style.cssText = 'margin-top:10px;padding:8px;background:#3a1a1a;border:1px solid #a33;border-radius:8px;font-size:10px;font-family:monospace;white-space:pre-wrap;color:#fda;word-break:break-word;';
+        const card = $$('tpWeeklyCard');
+        if (card) card.appendChild(el);
+      }
+      el.textContent = '[DEBUG — temporary, will be removed] ' + JSON.stringify(debug, null, 1);
+    } catch (e) {}
   }
   autoRebuildStaleWeeklyPlanIfNeeded();
 
