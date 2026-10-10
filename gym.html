@@ -4871,6 +4871,32 @@ img, video, canvas, svg { max-width: 100%; }
   // 1am with a 2am day-end is still effectively Sunday, still last
   // week). Anchor on the effective today first, then find its Monday.
   function thisWeekMondayKey() { return dateKey(mondayOf(DayLib.parseDateKey(DayLib.effectiveDateKey()))); }
+  function addDaysKey(dateKeyStr, n) {
+    const d = DayLib.parseDateKey(dateKeyStr);
+    d.setDate(d.getDate() + n);
+    return dateKey(d);
+  }
+  // BUG FIX — same canonical-week mapping as plan.html's own
+  // checkpointCanonicalRange (see that file's comment for the full
+  // root-cause writeup): a long-term plan's checkpoint is stored on a
+  // fixed 7-day cycle anchored to whatever weekday plan.startDate
+  // happened to fall on (e.g. a Tuesday), NOT the Monday-Sunday week
+  // this app uses everywhere else (thisWeekMondayKey() above,
+  // api/training.js's mode=plan/mode=today). Matching "today" against
+  // the raw stored window instead of this canonical one could
+  // disagree with plan.html's own display on the Monday boundary day,
+  // making fetchActiveWeekDisciplines() below silently pick the WRONG
+  // checkpoint's disciplines (or none at all) on that one day even
+  // though plan.html correctly shows a different week as current. The
+  // checkpoint's own middle day (offset 3 of its 7) always lands in
+  // its majority-overlap Mon-Sun week, for a checkpoint anchored to
+  // ANY weekday — not just this plan's Tuesday.
+  function checkpointCanonicalRange(cp) {
+    const mid = DayLib.parseDateKey(cp.weekStartDate);
+    mid.setDate(mid.getDate() + 3);
+    const start = dateKey(mondayOf(mid));
+    return { start, end: addDaysKey(start, 6) };
+  }
   function escapeHtml(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
@@ -5610,24 +5636,44 @@ img, video, canvas, svg { max-width: 100%; }
   // activity type they were actually assigned, via the SAME
   // disciplineForActivityType() name-matching Phase 2 already
   // established — never invents a 4th bucket, never sums across
-  // different disciplines. A slot with session-count semantics
-  // (currently only `interval`, via targetSessions) contributes to
-  // that discipline's `sessions`; a distance slot (longSession/
-  // easyVolume, via targetAmount+unit) contributes to its `km`. Swim
-  // under a legacy plan only ever shows whichever of these two shapes
-  // the slot that happened to be assigned to it actually carries — an
+  // different disciplines.
+  //
+  // BUG FIX (reported): this used to add EVERY slot's targetAmount
+  // into `.km` unconditionally, regardless of the slot's own unit —
+  // so a swim-assigned legacy slot (unit "m", e.g. 1500) got dumped
+  // straight into a field literally named `.km`, silently treating
+  // 1500 meters as 1500 kilometers. Now unit-checked per slot: a
+  // genuine "km" amount adds to that discipline's `.km`, a genuine
+  // "m"/"meters" amount adds to its OWN separate `.meters` (and
+  // implies one session, when the slot itself carries no session
+  // count) — the two never combine, in this bucket or any other. Any
+  // other/unrecognized unit is skipped entirely rather than guessed
+  // into either field. A slot with real session-count semantics
+  // (`interval`, via targetSessions) still only ever contributes to
+  // `.sessions`. Swim under a legacy plan still only shows whichever
+  // single shape the one slot assigned to it actually carries — an
   // approximation, not the richer {sessions,meters} shape plan.targets
   // itself carries, which is the whole point of 3.1's backfill.
   function deriveLegacyDisciplineTargets(plan) {
-    const out = { run: { km: 0, sessions: 0 }, bike: { km: 0, sessions: 0 }, swim: { km: 0, sessions: 0 } };
+    const out = { run: { km: 0, sessions: 0 }, bike: { km: 0, sessions: 0 }, swim: { km: 0, meters: 0, sessions: 0 } };
     const cardio = plan && plan.cardio;
     if (!cardio) return out;
     [cardio.interval, cardio.longSession, cardio.easyVolume].forEach((slot) => {
       if (!slot || !slot.activityTypeId) return;
       const disc = disciplineForActivityType(slot.activityTypeId);
       if (!disc || !out[disc]) return; // unclassified type (e.g. a strength-only or padel type) — not one of run/bike/swim, nothing to bucket
-      if (slot.unit && slot.targetAmount) out[disc].km = Math.round((out[disc].km + Number(slot.targetAmount)) * 10) / 10;
       if (slot.targetSessions) out[disc].sessions += Number(slot.targetSessions) || 0;
+      if (slot.unit && slot.targetAmount) {
+        const amount = Number(slot.targetAmount) || 0;
+        const unit = String(slot.unit).toLowerCase();
+        if (unit === 'km') {
+          out[disc].km = Math.round((out[disc].km + amount) * 10) / 10;
+        } else if (unit === 'm' || unit === 'meters' || unit === 'meter') {
+          out[disc].meters = Math.round(out[disc].meters + amount);
+          if (!slot.targetSessions) out[disc].sessions += 1; // a bare volume slot with no session count of its own implies one session's worth
+        }
+        // any other unit (e.g. a count-based type routed here by mistake) is left out of both fields — never guessed, never mixed.
+      }
     });
     return out;
   }
@@ -5794,11 +5840,12 @@ img, video, canvas, svg { max-width: 100%; }
       const todayK = DayLib.effectiveDateKey();
       for (const p of plans) {
         if (p.status !== 'active' || !Array.isArray(p.weeklyCheckpoints)) continue;
+        // BUG FIX: canonical (Mon-Sun) week match, not the checkpoint's
+        // raw stored window — see checkpointCanonicalRange's own comment.
         const cp = p.weeklyCheckpoints.find((c) => {
           if (!c.weekStartDate) return false;
-          const start = DayLib.parseDateKey(c.weekStartDate);
-          const end = new Date(start); end.setDate(end.getDate() + 6);
-          return todayK >= c.weekStartDate && todayK <= dateKey(end);
+          const range = checkpointCanonicalRange(c);
+          return todayK >= range.start && todayK <= range.end;
         });
         if (cp && cp.disciplines) return cp.disciplines;
       }
@@ -6017,11 +6064,19 @@ img, video, canvas, svg { max-width: 100%; }
     };
   }
 
-  async function generateWeeklyPlan() {
+  // silent (BUG FIX — see autoRebuildStaleWeeklyPlan's own comment):
+  // true for the automatic background rebuild of a stale cached plan
+  // — suppresses the "set your secret" alert, the failure alert, and
+  // the refresh button's own spin/disabled state, none of which make
+  // sense for something the user didn't ask for and may not even
+  // notice happened. Completely unused by the real click handler
+  // (addEventListener below calls this with no arguments, same as
+  // always), so a manual refresh's UX is entirely unchanged.
+  async function generateWeeklyPlan(silent) {
     const secret = getSecret();
-    if (!secret) { alert('Set your dashboard secret first (on the Cronometer page) to use AI features.'); return; }
+    if (!secret) { if (!silent) alert('Set your dashboard secret first (on the Cronometer page) to use AI features.'); return; }
     const btn = $$('tpGenerateBtn');
-    btn.disabled = true; btn.classList.add('is-spinning');
+    if (!silent) { btn.disabled = true; btn.classList.add('is-spinning'); }
     try {
       // String-compare local "YYYY-MM-DD" keys (cutoffKey, dk, r.dateKey)
       // rather than reconstructing Date objects from them — new Date(dk)
@@ -6114,13 +6169,44 @@ img, video, canvas, svg { max-width: 100%; }
       saveStoredPlan({ weekStart: thisWeekMondayKey(), plan: json.plan, generatedAt: new Date().toISOString() });
       renderWeeklyProgress();
     } catch (e) {
-      alert('Could not generate objectives: ' + (e.message || String(e)));
+      if (!silent) alert('Could not generate objectives: ' + (e.message || String(e)));
     } finally {
-      btn.disabled = false; btn.classList.remove('is-spinning');
+      if (!silent) { btn.disabled = false; btn.classList.remove('is-spinning'); }
     }
   }
   $$('tpGenerateBtn').addEventListener('click', generateWeeklyPlan);
   renderWeeklyProgress();
+
+  // BUG FIX (reported): a cached po_coach_weekly_plan_v1 entry for the
+  // current week, saved before a long-term plan's disciplines existed
+  // for that week (or before the plan's own backfill was ever run),
+  // has no `targets` key — and previously just sat there rendering
+  // the legacy fallback (or, after the backfill was added later, kept
+  // showing invented numbers) until the user happened to notice and
+  // click refresh themselves. On page load, if the cached plan is
+  // current-week but lacks `targets`, AND the active long-term plan
+  // genuinely has real disciplines data for this exact week (checked
+  // the same canonical-week way fetchActiveWeekDisciplines/plan.html
+  // both use), silently regenerate it once — self-healing rather than
+  // requiring a manual refresh to notice stale/legacy data. Guarded by
+  // attemptedAutoRebuild so this can only ever fire once per page
+  // load, never loop (generateWeeklyPlan's own success path calls
+  // renderWeeklyProgress() again, which does NOT re-invoke this).
+  let attemptedAutoRebuild = false;
+  async function autoRebuildStaleWeeklyPlanIfNeeded() {
+    if (attemptedAutoRebuild) return;
+    attemptedAutoRebuild = true;
+    try {
+      const stored = loadStoredPlan();
+      const isCurrentWeek = !!(stored && stored.weekStart === thisWeekMondayKey() && stored.plan);
+      if (!isCurrentWeek || stored.plan.targets) return; // nothing cached for this week yet (handled by the empty state), or already targets-mode — nothing to fix
+      if (!getSecret()) return;
+      const rawDisciplines = await fetchActiveWeekDisciplines();
+      if (!rawDisciplines) return; // genuinely no active-plan disciplines for this week — the legacy fallback IS the correct display
+      await generateWeeklyPlan(true /* silent */);
+    } catch (e) { /* best-effort only — a failed auto-rebuild just leaves the existing (legacy) display in place */ }
+  }
+  autoRebuildStaleWeeklyPlanIfNeeded();
 
   // ============================================================
   // TODAY'S SESSION — api/training.js?mode=today
