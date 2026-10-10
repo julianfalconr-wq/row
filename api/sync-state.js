@@ -293,7 +293,12 @@
 //   {
 //     monday: [{ discipline: 'swim'|'run'|'strength'|'bike'|'rest',
 //                kind?: 'easy'|'interval'|'long'|'technique'|
-//                       'endurance'|'brick'|'strength', note?: String }],
+//                       'pace'|'brick'|'strength', note?: String }],
+//     // 'pace' = a continuous fast effort at goal/race pace (run,
+//     // bike, or swim) — renamed from 'endurance'; a stored
+//     // 'endurance' entry (from before this rename) is read back as
+//     // 'long' everywhere (see sanitizeWeeklyRhythmEntry's own
+//     // comment), never deleted or rejected.
 //     tuesday: [...], ... sunday: [...],
 //     // any weekday key MAY be absent entirely (tolerated, not an
 //     // error) — absence means "nothing scheduled that day", same as
@@ -445,7 +450,17 @@ function sanitizeAvailabilityOverride(raw) {
 
 // ---------- weekly-rhythm validation ----------
 const RHYTHM_DISCIPLINES = ['swim', 'run', 'strength', 'bike', 'rest'];
-const RHYTHM_KINDS = ['easy', 'interval', 'long', 'technique', 'endurance', 'brick', 'strength'];
+const RHYTHM_KINDS = ['easy', 'interval', 'long', 'technique', 'pace', 'brick', 'strength'];
+// BUG FIX (reported) / rename: 'endurance' was renamed to 'pace' — a
+// stored entry from before the rename (or a stale client that hasn't
+// picked up the new name yet) must keep working, never get rejected
+// or silently dropped. Mapped to 'long' (not deleted, never a 400) —
+// every reader of a rhythm entry's kind goes through this exact
+// mapping first, so 'endurance' is simply never seen again past this
+// point, in storage OR in any response.
+function normalizeRhythmKindForCompat(kind) {
+  return kind === 'endurance' ? 'long' : kind;
+}
 function sanitizeWeeklyRhythmEntry(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   if (!RHYTHM_DISCIPLINES.includes(raw.discipline)) return null;
@@ -455,10 +470,26 @@ function sanitizeWeeklyRhythmEntry(raw) {
   // dropped/coerced in a way that could misrepresent what the user
   // actually picked.
   if (raw.kind !== undefined && raw.kind !== null) {
-    if (!RHYTHM_KINDS.includes(raw.kind)) return null;
-    out.kind = raw.kind;
+    const kind = normalizeRhythmKindForCompat(raw.kind);
+    if (!RHYTHM_KINDS.includes(kind)) return null;
+    out.kind = kind;
   }
   if (typeof raw.note === 'string' && raw.note.trim()) out.note = raw.note.trim().slice(0, 140);
+  return out;
+}
+// Read-time counterpart to normalizeRhythmKindForCompat — a row saved
+// BEFORE the endurance->pace rename still has literal 'endurance'
+// sitting in storage (never rewritten there; see this resource's own
+// header comment: "never deleted or rejected"). Every GET response
+// passes through this first, so no reader anywhere ever sees
+// 'endurance' again, without touching the stored bytes themselves.
+function normalizeStoredRhythmForRead(rhythm) {
+  if (!rhythm || typeof rhythm !== 'object') return rhythm;
+  const out = {};
+  Object.keys(rhythm).forEach((wd) => {
+    const list = rhythm[wd];
+    out[wd] = Array.isArray(list) ? list.map((e) => (e && e.kind === 'endurance' ? Object.assign({}, e, { kind: 'long' }) : e)) : list;
+  });
   return out;
 }
 const CLEARED_RHYTHM = {};
@@ -748,7 +779,7 @@ export default async function handler(req, res) {
       if (resource === 'weekly-rhythm') {
         if (req.method === 'GET') {
           const rhythm = await getWeeklyRhythm();
-          return res.status(200).json({ ok: true, rhythm });
+          return res.status(200).json({ ok: true, rhythm: normalizeStoredRhythmForRead(rhythm) });
         }
         if (req.method === 'POST') {
           let body = req.body;

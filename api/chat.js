@@ -523,7 +523,14 @@ const PROPOSE_PLAN_STATUS_CHANGE_TOOL = {
 // none existed, include it with its full entries array.
 const RHYTHM_WEEKDAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 const RHYTHM_DISCIPLINES_CHAT = ['swim', 'run', 'strength', 'bike', 'rest'];
-const RHYTHM_KINDS_CHAT = ['easy', 'interval', 'long', 'technique', 'endurance', 'brick', 'strength'];
+const RHYTHM_KINDS_CHAT = ['easy', 'interval', 'long', 'technique', 'pace', 'brick', 'strength'];
+// Rename: 'endurance' -> 'pace'. Never rejects an older cached tool
+// call / stored entry still using the old name — mapped to 'long',
+// same compat convention as api/sync-state.js/api/training.js's own
+// copies of this mapping.
+function normalizeRhythmKindForCompatChat(kind) {
+  return kind === 'endurance' ? 'long' : kind;
+}
 const PROPOSE_WEEKLY_RHYTHM_TOOL = {
   name: 'propose_weekly_rhythm',
   description:
@@ -755,8 +762,9 @@ function normalizeProposedWeeklyRhythm(raw) {
       if (!e || typeof e !== 'object' || !RHYTHM_DISCIPLINES_CHAT.includes(e.discipline)) return null;
       const out = { discipline: e.discipline };
       if (e.kind !== undefined && e.kind !== null) {
-        if (!RHYTHM_KINDS_CHAT.includes(e.kind)) return null;
-        out.kind = e.kind;
+        const kind = normalizeRhythmKindForCompatChat(e.kind);
+        if (!RHYTHM_KINDS_CHAT.includes(kind)) return null;
+        out.kind = kind;
       }
       if (typeof e.note === 'string' && e.note.trim()) out.note = e.note.trim().slice(0, 140);
       return out;

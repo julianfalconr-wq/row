@@ -1092,25 +1092,43 @@ const RHYTHM_WEEKDAY_ORDER = ['monday', 'tuesday', 'wednesday', 'thursday', 'fri
 // duplicated per this project's established per-file small-
 // duplication convention (the two files never share a module).
 const RHYTHM_DISCIPLINE_VALUES = ['swim', 'run', 'strength', 'bike', 'rest'];
-const RHYTHM_KIND_VALUES = ['easy', 'interval', 'long', 'technique', 'endurance', 'brick', 'strength'];
+const RHYTHM_KIND_VALUES = ['easy', 'interval', 'long', 'technique', 'pace', 'brick', 'strength'];
+// Rename: 'endurance' -> 'pace'. A stale client or an already-stored
+// entry from before the rename must keep working, never get rejected
+// — mapped to 'long' (same compat mapping as api/sync-state.js's own
+// normalizeRhythmKindForCompat; duplicated per this project's per-file
+// convention). Every reader of an entry's kind in this file goes
+// through this first.
+function normalizeRhythmKindForCompat(kind) {
+  return kind === 'endurance' ? 'long' : kind;
+}
 function sanitizeRhythmEntries(raw) {
   if (!Array.isArray(raw)) return [];
   return raw.slice(0, 3).map((e) => {
     if (!e || typeof e !== 'object' || !RHYTHM_DISCIPLINE_VALUES.includes(e.discipline)) return null;
     const out = { discipline: e.discipline };
-    if (e.kind !== undefined && e.kind !== null && RHYTHM_KIND_VALUES.includes(e.kind)) out.kind = e.kind;
+    if (e.kind !== undefined && e.kind !== null) {
+      const kind = normalizeRhythmKindForCompat(e.kind);
+      if (RHYTHM_KIND_VALUES.includes(kind)) out.kind = kind;
+    }
     return out;
   }).filter(Boolean);
 }
 // Deliberately simple, documented heuristic (not a real training-
 // science model) for splitting a discipline's single weekly km target
 // across HOWEVER MANY rhythm sessions exist for it this week: a "long"
-// day takes the biggest share, "technique" the smallest, everything
+// day takes the biggest share, "technique" the smallest, "pace" (a
+// continuous fast effort at goal/race pace) a moderate share —
+// comparable to "interval", clearly less than "long" — everything
 // else close to even. Only run/bike use this — swim's target is
 // already per-session (see applyCapacityBackstop's own comment) and
 // strength has no distance to split at all.
-const RHYTHM_KIND_WEIGHT = { long: 1.5, endurance: 1.3, brick: 1.0, easy: 1.0, interval: 0.8, technique: 0.6 };
-const RHYTHM_HARD_KINDS = new Set(['interval', 'long']);
+const RHYTHM_KIND_WEIGHT = { long: 1.5, pace: 0.85, brick: 1.0, easy: 1.0, interval: 0.8, technique: 0.6 };
+// 'pace' counts as hard, same as 'interval'/'long' — a continuous
+// race-pace effort is exactly the kind of demanding session the
+// back-to-back-hard-days flag and the low-recovery downgrade rule
+// exist to catch.
+const RHYTHM_HARD_KINDS = new Set(['interval', 'long', 'pace']);
 function rhythmHasAnyEntries(rhythm) {
   return !!(rhythm && typeof rhythm === 'object' && RHYTHM_WEEKDAY_ORDER.some((wd) => Array.isArray(rhythm[wd]) && rhythm[wd].length));
 }
@@ -1119,12 +1137,20 @@ function rhythmHasAnyEntries(rhythm) {
 // DayLib — this server has no date library of its own, same "server
 // stays dumb about dates" discipline as api/sync-state.js). A weekday
 // missing from weekDates is skipped defensively rather than guessed.
+// rhythm entries arrive straight from the client's own weeklyRhythm
+// object (mode=plan has no per-entry sanitizer of its own the way
+// sanitizeRhythmEntries is for mode=today's rhythmForDay), so the
+// endurance->pace compat mapping is applied here too, right at the
+// one place every discipline's entries are actually read.
 function rhythmEntriesForDiscipline(rhythm, weekDates, discipline) {
   const out = [];
   RHYTHM_WEEKDAY_ORDER.forEach((wd) => {
     const dateKey = weekDates && weekDates[wd];
     if (!dateKey) return;
-    (rhythm[wd] || []).forEach((entry) => { if (entry.discipline === discipline) out.push({ dateKey, entry }); });
+    (rhythm[wd] || []).forEach((entry) => {
+      if (entry.discipline !== discipline) return;
+      out.push({ dateKey, entry: entry.kind ? Object.assign({}, entry, { kind: normalizeRhythmKindForCompat(entry.kind) }) : entry });
+    });
   });
   return out;
 }
@@ -1516,7 +1542,7 @@ async function handlePlan(req, res, apiKey, body) {
 
 function buildRhythmPromptSection(dayLabel, allowRecoveryDeviation) {
   const recoveryReason = allowRecoveryDeviation
-    ? 'WHOOP recovery is low enough (per WHOOP-ADJUSTMENT) to downgrade a hard rhythm entry (interval/long/brick) to something easier or to rest; '
+    ? 'WHOOP recovery is low enough (per WHOOP-ADJUSTMENT) to downgrade a hard rhythm entry (interval/long/pace) to something easier or to rest; '
     : ''; // Tomorrow's own prompt already forbids reasoning from today's specific recovery number — see RECOVERY IS UNKNOWN FOR THIS DAY above
   return (
     'WEEKLY RHYTHM (Phase 3.5): if context.rhythmForDay is non-empty, the user has a FIXED weekly pattern ' +

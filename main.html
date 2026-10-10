@@ -5240,14 +5240,24 @@ document.addEventListener('DOMContentLoaded', function () {
   // required, not optional.
   // =============================================================
   const RHYTHM_DISCIPLINES = [['run', 'Run'], ['swim', 'Swim'], ['bike', 'Bike'], ['strength', 'Strength'], ['rest', 'Rest']];
-  const RHYTHM_KINDS = [['easy', 'Easy'], ['interval', 'Interval'], ['long', 'Long'], ['technique', 'Technique'], ['endurance', 'Endurance'], ['brick', 'Brick']];
+  const RHYTHM_KINDS = [['easy', 'Easy'], ['interval', 'Interval'], ['long', 'Long'], ['technique', 'Technique'], ['pace', 'Pace'], ['brick', 'Brick']];
+  // Rename: 'endurance' -> 'pace'. A legacy-stored or stale-fetched
+  // entry still saying 'endurance' is displayed and treated as 'long'
+  // (never crashes, never silently dropped) — applied once, right
+  // where rhythm data enters this section, via normalizeRhythmKind
+  // ForCompatMain below.
+  function normalizeRhythmKindForCompatMain(kind) {
+    return kind === 'endurance' ? 'long' : kind;
+  }
   // Rough, fixed per-kind duration estimate used ONLY for this
   // settings grid's own "exceeds today's minutes budget" flag — a
   // light sanity check while editing, not the real pace-based
   // estimate Today's session/the weekly layout compute from actual
   // logged history. Intentionally simple and documented as such.
-  const RHYTHM_KIND_EST_MINUTES = { easy: 35, interval: 50, long: 70, technique: 30, endurance: 65, brick: 90, strength: 45 };
-  const RHYTHM_HARD_KINDS = new Set(['interval', 'long']);
+  const RHYTHM_KIND_EST_MINUTES = { easy: 35, interval: 50, long: 70, technique: 30, pace: 65, brick: 90, strength: 45 };
+  // 'pace' counts as hard, same as 'interval'/'long' (see
+  // api/training.js's own RHYTHM_HARD_KINDS comment).
+  const RHYTHM_HARD_KINDS = new Set(['interval', 'long', 'pace']);
 
   async function fetchWeeklyRhythm() {
     const secret = getSecret();
@@ -5383,20 +5393,55 @@ document.addEventListener('DOMContentLoaded', function () {
   // plan target is a km figure, not a count), so they're reported as a
   // plain count with no "of N" — matches the task's own example
   // exactly. rest is never counted.
-  function rhythmSummaryLine(rhythm, planDisciplines) {
-    const counts = { run: 0, swim: 0, bike: 0, strength: 0 };
-    GS_WEEKDAY_KEYS.forEach((day) => { (rhythm[day] || []).forEach((e) => { if (counts[e.discipline] !== undefined) counts[e.discipline]++; }); });
+  // BUG FIX (reported): the summary line only ever showed Swim/
+  // Strength — Run (the discipline most likely to actually have
+  // rhythm sessions) was silently missing entirely. Mirrors
+  // api/training.js's own per-session km split exactly (same weights,
+  // same per-session rounding) so "X km planned" matches what the
+  // server will actually assign for run/bike — including the same
+  // small rounding drift across sessions when summed, which is what
+  // the mismatch flag below is actually checking for (the split
+  // always TARGETS the weekly km exactly; independently-rounded
+  // per-session shares can land a few tenths off that sum).
+  const RHYTHM_KIND_WEIGHT_MAIN = { long: 1.5, pace: 0.85, brick: 1.0, easy: 1.0, interval: 0.8, technique: 0.6 };
+  function computeRhythmPlannedKm(entries, weeklyKm) {
+    if (!entries.length || !weeklyKm) return 0;
+    const weights = entries.map((e) => RHYTHM_KIND_WEIGHT_MAIN[e.kind] || 1);
+    const weightSum = weights.reduce((s, w) => s + w, 0);
+    return Math.round(entries.reduce((sum, e, i) => sum + Math.max(0, Math.round((weeklyKm * (weights[i] / weightSum)) * 10) / 10), 0) * 10) / 10;
+  }
+  function rhythmSummaryLine(rhythm, planDisciplines, enabled) {
+    const byDiscipline = { run: [], bike: [], swim: [], strength: [] };
+    GS_WEEKDAY_KEYS.forEach((day) => { (rhythm[day] || []).forEach((e) => { if (byDiscipline[e.discipline]) byDiscipline[e.discipline].push(e); }); });
     const parts = [];
-    ['swim', 'strength'].forEach((disc) => {
-      const target = planDisciplines && planDisciplines[disc] && Number(planDisciplines[disc].sessions);
-      if (counts[disc] || target) {
-        const label = disc === 'swim' ? 'Swim' : 'Strength';
-        parts.push(target ? (label + ' ' + counts[disc] + ' of ' + target) : (label + ' ' + counts[disc] + ' session' + (counts[disc] === 1 ? '' : 's')));
-      }
-    });
+
+    // Run always reported; Bike identically but ONLY when a
+    // recommendable bike type exists — never show a disabled
+    // discipline at all, not even as "no sessions set".
     ['run', 'bike'].forEach((disc) => {
-      if (counts[disc]) parts.push((disc === 'run' ? 'Run' : 'Bike') + ' ' + counts[disc] + ' session' + (counts[disc] === 1 ? '' : 's'));
+      if (disc === 'bike' && (!enabled || enabled.bike === false)) return;
+      const label = disc === 'run' ? 'Run' : 'Bike';
+      const entries = byDiscipline[disc];
+      if (!entries.length) { parts.push(label + ': no sessions set'); return; }
+      const weeklyKm = planDisciplines && planDisciplines[disc] && Number(planDisciplines[disc].km);
+      let line = label + ' ' + entries.length + ' session' + (entries.length === 1 ? '' : 's');
+      if (weeklyKm) {
+        const planned = computeRhythmPlannedKm(entries, weeklyKm);
+        line += ' - ' + planned + ' km planned of ' + weeklyKm + ' km';
+        if (Math.abs(planned - weeklyKm) >= 0.1) line += ' ⚠';
+      }
+      parts.push(line);
     });
+
+    ['swim', 'strength'].forEach((disc) => {
+      const entries = byDiscipline[disc];
+      const target = planDisciplines && planDisciplines[disc] && Number(planDisciplines[disc].sessions);
+      if (!entries.length && !target) return; // nothing real to report for this one
+      const label = disc === 'swim' ? 'Swim' : 'Strength';
+      const countPhrase = entries.length + (target ? ' of ' + target + (disc === 'swim' ? ' sessions' : '') : ' session' + (entries.length === 1 ? '' : 's'));
+      parts.push(label + ' ' + countPhrase);
+    });
+
     return parts.length ? parts.join(', ') : 'No sessions set yet.';
   }
 
@@ -5408,7 +5453,7 @@ document.addEventListener('DOMContentLoaded', function () {
   function renderRhythmGrid() {
     const enabled = rhythmEnabledDisciplines(rhythmActivityTypes);
     const { dayFlags, entryFlags } = computeRhythmFlags(rhythmDraft, availabilityDraft || defaultAvailabilityTemplate(), enabled);
-    $('gsRhythmSummary').textContent = rhythmSummaryLine(rhythmDraft, rhythmPlanDisciplines);
+    $('gsRhythmSummary').textContent = rhythmSummaryLine(rhythmDraft, rhythmPlanDisciplines, enabled);
     const grid = $('gsRhythmGrid');
     grid.innerHTML = GS_WEEKDAY_KEYS.map((day) => {
       const entries = rhythmDraft[day] || [];
@@ -5530,7 +5575,16 @@ document.addEventListener('DOMContentLoaded', function () {
   async function renderWeeklyRhythmSection() {
     $('gsRhythmGrid').innerHTML = 'Loading…';
     const [rhythm, types, planDisciplines] = await Promise.all([fetchWeeklyRhythm(), fetchActivityTypesForRhythm(getSecret()), fetchCurrentWeekPlanDisciplines()]);
-    rhythmDraft = rhythm || {};
+    // Defensive — the server's own GET already normalizes a legacy
+    // 'endurance' entry to 'long' (see api/sync-state.js), so this
+    // should never actually see the old name in practice, but the
+    // grid must show it as 'long' regardless of where that
+    // normalization happens.
+    const rawRhythm = rhythm || {};
+    rhythmDraft = {};
+    Object.keys(rawRhythm).forEach((wd) => {
+      rhythmDraft[wd] = (rawRhythm[wd] || []).map((e) => (e && e.kind ? Object.assign({}, e, { kind: normalizeRhythmKindForCompatMain(e.kind) }) : e));
+    });
     rhythmActivityTypes = types || [];
     rhythmPlanDisciplines = planDisciplines;
     renderRhythmGrid();

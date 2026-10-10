@@ -2422,7 +2422,9 @@ body {
     // the user last set it.
     const RHYTHM_CARD_WEEKDAY_LABELS = { monday: 'Monday', tuesday: 'Tuesday', wednesday: 'Wednesday', thursday: 'Thursday', friday: 'Friday', saturday: 'Saturday', sunday: 'Sunday' };
     const RHYTHM_CARD_DISCIPLINE_LABELS = { swim: 'Swim', run: 'Run', strength: 'Strength', bike: 'Bike', rest: 'Rest' };
-    const RHYTHM_CARD_KIND_LABELS = { easy: 'easy', interval: 'interval', long: 'long', technique: 'technique', endurance: 'endurance', brick: 'brick', strength: 'strength' };
+    // 'endurance' (renamed to 'pace') displays as 'long' here too, in
+    // case a stale cached proposal still uses the old name.
+    const RHYTHM_CARD_KIND_LABELS = { easy: 'easy', interval: 'interval', long: 'long', technique: 'technique', pace: 'pace', endurance: 'long', brick: 'brick', strength: 'strength' };
     function describeRhythmDayEntries(entries) {
       if (!entries || !entries.length) return '(cleared)';
       return entries.map((e) => (RHYTHM_CARD_DISCIPLINE_LABELS[e.discipline] || e.discipline) + (e.kind && e.discipline !== 'rest' ? ' ' + (RHYTHM_CARD_KIND_LABELS[e.kind] || e.kind) : '') + (e.note ? ' (' + e.note + ')' : '')).join(' + ');
