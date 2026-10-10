@@ -282,6 +282,36 @@
 //      so a literal null would violate that constraint. Every reader
 //      treats weekStart:null the same as "no override" either way.
 //
+// weekly-rhythm (Phase 3.5) — a STANDING per-weekday pattern of which
+// discipline + kind of session happens on each day (e.g. "Tuesday:
+// run interval", "Saturday: run long"), separate from availability
+// (which only says HOW MUCH time/which disciplines are possible, not
+// which one actually happens). Reuses habit_config as a seventh row
+// ("weeklyRhythm") — same single-blob-per-user reasoning as every
+// other resource above. The user fills this in by hand (or confirms a
+// chat proposal); nothing here ever invents or changes it on its own.
+//   {
+//     monday: [{ discipline: 'swim'|'run'|'strength'|'bike'|'rest',
+//                kind?: 'easy'|'interval'|'long'|'technique'|
+//                       'endurance'|'brick'|'strength', note?: String }],
+//     tuesday: [...], ... sunday: [...],
+//     // any weekday key MAY be absent entirely (tolerated, not an
+//     // error) — absence means "nothing scheduled that day", same as
+//     // an empty array. A day can hold more than one entry (a second
+//     // session), e.g. a strength day that's also an easy swim day.
+//   }
+// null (never saved) and {} (saved but empty) both mean "no rhythm
+// configured" to every reader — see each consumer's own
+// rhythmHasAnyEntries()-style check, so "no rhythm exists" behaves
+// byte-for-byte like before this phase existed anywhere that reads it.
+//
+// GET  /api/sync-state?secret=...&resource=weekly-rhythm
+//   -> { ok:true, rhythm: {...} | null }
+// POST /api/sync-state?secret=...  { resource: "weekly-rhythm", rhythm: {...} | null }
+//   -> upserts habit_config's "weeklyRhythm" row; rhythm:null clears it
+//      (stored as {} — same NOT NULL jsonb constraint as the override
+//      above, no literal SQL null involved)
+//
 // -------------------------------------------------------------
 // GET  /api/sync-state?secret=...&resource=plans
 //   -> { ok:true, plans: [...] }  ALL plans (active + past), most
@@ -413,6 +443,40 @@ function sanitizeAvailabilityOverride(raw) {
   return { weekStart: raw.weekStart, days };
 }
 
+// ---------- weekly-rhythm validation ----------
+const RHYTHM_DISCIPLINES = ['swim', 'run', 'strength', 'bike', 'rest'];
+const RHYTHM_KINDS = ['easy', 'interval', 'long', 'technique', 'endurance', 'brick', 'strength'];
+function sanitizeWeeklyRhythmEntry(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  if (!RHYTHM_DISCIPLINES.includes(raw.discipline)) return null;
+  const out = { discipline: raw.discipline };
+  // kind is optional (a 'rest' entry typically has none), but if
+  // present must be one of the real enum values — never silently
+  // dropped/coerced in a way that could misrepresent what the user
+  // actually picked.
+  if (raw.kind !== undefined && raw.kind !== null) {
+    if (!RHYTHM_KINDS.includes(raw.kind)) return null;
+    out.kind = raw.kind;
+  }
+  if (typeof raw.note === 'string' && raw.note.trim()) out.note = raw.note.trim().slice(0, 140);
+  return out;
+}
+const CLEARED_RHYTHM = {};
+function sanitizeWeeklyRhythm(raw) {
+  if (raw === null || raw === undefined) return CLEARED_RHYTHM;
+  if (typeof raw !== 'object' || Array.isArray(raw)) return undefined; // invalid, distinct from a real (empty) clear
+  const out = {};
+  for (const wd of WEEKDAY_KEYS) {
+    const list = raw[wd];
+    if (!Array.isArray(list)) continue; // a missing weekday is tolerated, not an error — see this resource's own header comment
+    // Capped at 3 sessions/day — defensive against a malformed/huge
+    // payload; the UI itself only ever offers "add a second session".
+    const entries = list.map(sanitizeWeeklyRhythmEntry).filter(Boolean).slice(0, 3);
+    if (entries.length) out[wd] = entries;
+  }
+  return out;
+}
+
 async function readRow(key) {
   const r = await fetch(supabaseUrl('app_state?key=eq.' + encodeURIComponent(key) + '&select=data'), {
     headers: supabaseHeaders(),
@@ -460,6 +524,8 @@ const getTrainingAvailability = () => getConfigRow('trainingAvailability');
 const saveTrainingAvailabilityRow = (template) => saveConfigRow('trainingAvailability', template);
 const getTrainingAvailabilityOverride = () => getConfigRow('trainingAvailabilityOverride');
 const saveTrainingAvailabilityOverrideRow = (override) => saveConfigRow('trainingAvailabilityOverride', override);
+const getWeeklyRhythm = () => getConfigRow('weeklyRhythm');
+const saveWeeklyRhythmRow = (rhythm) => saveConfigRow('weeklyRhythm', rhythm);
 
 // ---------- daily_habits ----------
 async function getDailyHabits(date) {
@@ -568,7 +634,7 @@ export default async function handler(req, res) {
 
   const resource = req.query && req.query.resource;
 
-  if (resource === 'habit-config' || resource === 'daily-habits' || resource === 'general-settings' || resource === 'restrictions' || resource === 'activity-types' || resource === 'plans' || resource === 'race-checklist' || resource === 'training-availability' || resource === 'training-availability-override') {
+  if (resource === 'habit-config' || resource === 'daily-habits' || resource === 'general-settings' || resource === 'restrictions' || resource === 'activity-types' || resource === 'plans' || resource === 'race-checklist' || resource === 'training-availability' || resource === 'training-availability-override' || resource === 'weekly-rhythm') {
     if (!checkAuth(req, res)) return;
     if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_KEY) {
       return res.status(500).json({ error: 'missing SUPABASE_URL / SUPABASE_SERVICE_KEY' });
@@ -674,6 +740,22 @@ export default async function handler(req, res) {
           const override = sanitizeAvailabilityOverride(body && body.override);
           if (override === undefined) return res.status(400).json({ error: 'override must be {weekStart (YYYY-MM-DD), days} or null to clear' });
           await saveTrainingAvailabilityOverrideRow(override);
+          return res.status(200).json({ ok: true });
+        }
+        return res.status(405).json({ error: 'method not allowed' });
+      }
+
+      if (resource === 'weekly-rhythm') {
+        if (req.method === 'GET') {
+          const rhythm = await getWeeklyRhythm();
+          return res.status(200).json({ ok: true, rhythm });
+        }
+        if (req.method === 'POST') {
+          let body = req.body;
+          if (typeof body === 'string') { try { body = JSON.parse(body); } catch (e) { body = {}; } }
+          const rhythm = sanitizeWeeklyRhythm(body && body.rhythm !== undefined ? body.rhythm : null);
+          if (rhythm === undefined) return res.status(400).json({ error: 'rhythm must be an object of {weekday: [{discipline, kind?, note?}]} or null to clear' });
+          await saveWeeklyRhythmRow(rhythm);
           return res.status(200).json({ ok: true });
         }
         return res.status(405).json({ error: 'method not allowed' });

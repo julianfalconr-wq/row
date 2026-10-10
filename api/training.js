@@ -536,6 +536,49 @@ function applyFeasibilityBackstop(recommendation, feasibility) {
   if (!feasible.length) return 'Rest — nothing in this week\'s plan fits today\'s available time/disciplines';
   return feasible[0].label;
 }
+function describeRhythmEntryForToday(entry) {
+  if (entry.discipline === 'rest') return 'Rest';
+  const disc = entry.discipline.charAt(0).toUpperCase() + entry.discipline.slice(1);
+  return disc + (entry.kind && entry.kind !== 'strength' ? ' ' + entry.kind : '');
+}
+// Phase 3.5 — the LAST-resort code check: the prompt already tells
+// the model today's rhythm entry is the default and to only deviate
+// for a short, specific list of checkable reasons (buildRhythm
+// PromptSection). This re-verifies that at least ONE of those reasons
+// is actually, verifiably true from the same inputs the prompt had —
+// never from the model's own text, which could just assert a reason
+// that isn't real. If the model's recommendation names a different
+// discipline+kind AND none of those reasons check out, the rhythm
+// entry wins outright — same "never trust the model's pick blindly"
+// discipline as applyFeasibilityBackstop above.
+function applyRhythmBackstop(recommendation, rhythmForDay, feasibility, restrictions, whoopToday, strengthContext) {
+  if (!Array.isArray(rhythmForDay) || !rhythmForDay.length) return recommendation;
+  const entry = rhythmForDay[0]; // a second same-day session, if any, is additive on top of the primary one this backstop concerns itself with
+  if (entry.discipline === 'rest') return recommendation; // nothing to default to or compare against
+  const disciplinePattern = BACKSTOP_DISCIPLINE_PATTERNS[entry.discipline];
+  const mentionsDiscipline = disciplinePattern ? disciplinePattern.test(recommendation) : false;
+  const mentionsKind = !entry.kind || entry.kind === 'strength' || new RegExp('\\b' + entry.kind + '\\b', 'i').test(recommendation);
+  if (mentionsDiscipline && mentionsKind) return recommendation; // already matches the rhythm -- nothing to backstop
+
+  // Restriction scope values are "running"/"strength"/"padel" (see
+  // api/chat.js's propose_restriction tool) — a different vocabulary
+  // from the rhythm's own run/bike/swim/strength discipline keys, not
+  // the same string. Bike/swim have no scope value of their own in
+  // that enum at all (an injury affecting them would be logged with
+  // scope omitted instead), so they can never match a restriction
+  // here — consistent with the restriction system's own real
+  // limitation, not something new this backstop invents.
+  const RHYTHM_DISCIPLINE_TO_RESTRICTION_SCOPE = { run: 'running', strength: 'strength' };
+  const restrictedScopes = restrictedScopeSet(restrictions);
+  const isRestricted = restrictedScopes.has(RHYTHM_DISCIPLINE_TO_RESTRICTION_SCOPE[entry.discipline]);
+  const feasibilityKillsIt = !!(feasibility && feasibility.configured && feasibility.allowedDisciplines && feasibility.allowedDisciplines[entry.discipline] === false);
+  const recoveryPct = whoopToday && typeof whoopToday.recoveryPct === 'number' ? whoopToday.recoveryPct : null;
+  const recoveryLow = recoveryPct != null && recoveryPct < 34 && RHYTHM_HARD_KINDS.has(entry.kind);
+  const hasMissedCatchUp = entry.discipline === 'strength' && !!(strengthContext && Array.isArray(strengthContext.missedDayTypes) && strengthContext.missedDayTypes.length);
+  if (isRestricted || feasibilityKillsIt || recoveryLow || hasMissedCatchUp) return recommendation; // a real, code-checkable reason exists -- trust the model's own call
+
+  return describeRhythmEntryForToday(entry) + ' (today\'s rhythm) — was: ' + recommendation;
+}
 
 // ------------------------------------------------------------
 // MODE: plan
@@ -1030,10 +1073,120 @@ function buildCapacityPromptSection(capacity, trimNote) {
 // rather than trusting placement blindly.
 // ---------------------------------------------------------------
 
-function buildSessionsToPlace(targets, capacity) {
+// ------------------------------------------------------------
+// Phase 3.5 — fixed weekly rhythm. The user defines, per weekday,
+// which discipline + kind of session happens (see api/sync-state.js's
+// own "weekly-rhythm" doc comment for the stored shape). When the
+// rhythm covers a discipline this week, EVERY session for that
+// discipline is built AND PLACED from the rhythm (sized in code, day
+// fixed to whatever the rhythm says) instead of the generic long/easy
+// split below that then needs the model to pick a day. A discipline
+// the rhythm says nothing about this week is untouched by any of
+// this — it still goes through the exact pre-3.5 code path — which is
+// what makes "no rhythm configured => output identical to before" and
+// "a rhythm covering only some disciplines" both fall out of the same
+// function rather than needing a separate branch.
+// ------------------------------------------------------------
+const RHYTHM_WEEKDAY_ORDER = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+// Same enums as api/sync-state.js's own RHYTHM_DISCIPLINES/_KINDS —
+// duplicated per this project's established per-file small-
+// duplication convention (the two files never share a module).
+const RHYTHM_DISCIPLINE_VALUES = ['swim', 'run', 'strength', 'bike', 'rest'];
+const RHYTHM_KIND_VALUES = ['easy', 'interval', 'long', 'technique', 'endurance', 'brick', 'strength'];
+function sanitizeRhythmEntries(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw.slice(0, 3).map((e) => {
+    if (!e || typeof e !== 'object' || !RHYTHM_DISCIPLINE_VALUES.includes(e.discipline)) return null;
+    const out = { discipline: e.discipline };
+    if (e.kind !== undefined && e.kind !== null && RHYTHM_KIND_VALUES.includes(e.kind)) out.kind = e.kind;
+    return out;
+  }).filter(Boolean);
+}
+// Deliberately simple, documented heuristic (not a real training-
+// science model) for splitting a discipline's single weekly km target
+// across HOWEVER MANY rhythm sessions exist for it this week: a "long"
+// day takes the biggest share, "technique" the smallest, everything
+// else close to even. Only run/bike use this — swim's target is
+// already per-session (see applyCapacityBackstop's own comment) and
+// strength has no distance to split at all.
+const RHYTHM_KIND_WEIGHT = { long: 1.5, endurance: 1.3, brick: 1.0, easy: 1.0, interval: 0.8, technique: 0.6 };
+const RHYTHM_HARD_KINDS = new Set(['interval', 'long']);
+function rhythmHasAnyEntries(rhythm) {
+  return !!(rhythm && typeof rhythm === 'object' && RHYTHM_WEEKDAY_ORDER.some((wd) => Array.isArray(rhythm[wd]) && rhythm[wd].length));
+}
+// This week's rhythm entries for ONE discipline, in weekday order,
+// each paired with its real dateKey (weekDates is client-computed via
+// DayLib — this server has no date library of its own, same "server
+// stays dumb about dates" discipline as api/sync-state.js). A weekday
+// missing from weekDates is skipped defensively rather than guessed.
+function rhythmEntriesForDiscipline(rhythm, weekDates, discipline) {
+  const out = [];
+  RHYTHM_WEEKDAY_ORDER.forEach((wd) => {
+    const dateKey = weekDates && weekDates[wd];
+    if (!dateKey) return;
+    (rhythm[wd] || []).forEach((entry) => { if (entry.discipline === discipline) out.push({ dateKey, entry }); });
+  });
+  return out;
+}
+// Returns the FULL list of sessions for `discipline` this week, sized
+// and pre-placed (each carries its own dateKey already) — or null if
+// the rhythm has nothing for this discipline this week, telling the
+// caller to fall back to the pre-3.5 behavior for it. An empty array
+// (not null) means the rhythm DOES cover it but there's no real
+// target to size sessions from (never invents one).
+function buildRhythmSessionsForDiscipline(discipline, targets, capacity, rhythm, weekDates, mismatchNotes) {
+  const entries = rhythmEntriesForDiscipline(rhythm, weekDates, discipline);
+  if (!entries.length) return null;
+  const t = targets[discipline];
+  const perDiscipline = (capacity && capacity.configured) ? capacity.perDiscipline : {};
+  if (discipline === 'run' || discipline === 'bike') {
+    if (!t || !t.km || !t.activityTypeId) return [];
+    const pace = (perDiscipline[discipline] && perDiscipline[discipline].paceMinPerKm) || 6;
+    const weights = entries.map((e) => RHYTHM_KIND_WEIGHT[e.entry.kind] || 1);
+    const weightSum = weights.reduce((s, w) => s + w, 0);
+    return entries.map((e, i) => {
+      const km = Math.max(0, Math.round((t.km * (weights[i] / weightSum)) * 10) / 10);
+      return {
+        id: discipline + '-rhythm-' + i, discipline, kind: e.entry.kind || 'easy', activityTypeId: t.activityTypeId, activityName: t.activityName,
+        targetAmount: km, unit: 'km', estMinutes: Math.round(km * pace), hard: RHYTHM_HARD_KINDS.has(e.entry.kind), dateKey: e.dateKey,
+      };
+    });
+  }
+  if (discipline === 'swim') {
+    if (!t || !t.sessions || !t.activityTypeId) return [];
+    if (entries.length !== t.sessions) {
+      mismatchNotes.push('Rhythm has ' + entries.length + ' swim session' + (entries.length === 1 ? '' : 's') + ' this week, but the plan targets ' + t.sessions + '.');
+    }
+    const pace = (perDiscipline.swim && perDiscipline.swim.paceMinPer100m) || 2.5;
+    const metersPerSession = Number(t.meters) || 0; // already per-session (see applyCapacityBackstop's own comment)
+    const est = Math.round((metersPerSession / 100) * pace);
+    return entries.map((e, i) => ({
+      id: 'swim-rhythm-' + i, discipline: 'swim', kind: e.entry.kind || 'session', activityTypeId: t.activityTypeId, activityName: t.activityName,
+      targetAmount: metersPerSession, unit: 'm', estMinutes: est, hard: RHYTHM_HARD_KINDS.has(e.entry.kind), dateKey: e.dateKey,
+    }));
+  }
+  if (discipline === 'strength') {
+    if (!t || !t.sessions) return [];
+    if (entries.length !== t.sessions) {
+      mismatchNotes.push('Rhythm has ' + entries.length + ' strength session' + (entries.length === 1 ? '' : 's') + ' this week, but the plan targets ' + t.sessions + '.');
+    }
+    return entries.map((e, i) => ({
+      id: 'strength-rhythm-' + i, discipline: 'strength', kind: 'strength', activityTypeId: null, activityName: 'Strength',
+      targetAmount: null, unit: '', estMinutes: 45, hard: false, dateKey: e.dateKey,
+    }));
+  }
+  return null;
+}
+// rhythm/weekDates/mismatchNotes are all optional — omitting them (as
+// every caller did before Phase 3.5) reproduces the exact pre-3.5
+// behavior byte-for-byte.
+function buildSessionsToPlace(targets, capacity, rhythm, weekDates, mismatchNotes) {
   const sessions = [];
   const perDiscipline = (capacity && capacity.configured) ? capacity.perDiscipline : {};
+  const notes = mismatchNotes || [];
   ['run', 'bike'].forEach((disc) => {
+    const rhythmSessions = rhythm ? buildRhythmSessionsForDiscipline(disc, targets, capacity, rhythm, weekDates, notes) : null;
+    if (rhythmSessions) { sessions.push(...rhythmSessions); return; }
     const t = targets[disc];
     if (!t || !t.km || !t.activityTypeId) return;
     const pace = (perDiscipline[disc] && perDiscipline[disc].paceMinPerKm) || 6;
@@ -1042,7 +1195,10 @@ function buildSessionsToPlace(targets, capacity) {
     sessions.push({ id: disc + '-long', discipline: disc, kind: 'long', activityTypeId: t.activityTypeId, activityName: t.activityName, targetAmount: longKm, unit: 'km', estMinutes: Math.round(longKm * pace), hard: true });
     if (easyKm >= 1) sessions.push({ id: disc + '-easy', discipline: disc, kind: 'easy', activityTypeId: t.activityTypeId, activityName: t.activityName, targetAmount: easyKm, unit: 'km', estMinutes: Math.round(easyKm * pace), hard: false });
   });
-  if (targets.swim && targets.swim.sessions > 0 && targets.swim.activityTypeId) {
+  const swimRhythmSessions = rhythm ? buildRhythmSessionsForDiscipline('swim', targets, capacity, rhythm, weekDates, notes) : null;
+  if (swimRhythmSessions) {
+    sessions.push(...swimRhythmSessions);
+  } else if (targets.swim && targets.swim.sessions > 0 && targets.swim.activityTypeId) {
     const pace = (perDiscipline.swim && perDiscipline.swim.paceMinPer100m) || 2.5;
     const metersPerSession = Number(targets.swim.meters) || 0; // already per-session (see applyCapacityBackstop's own comment)
     const est = Math.round((metersPerSession / 100) * pace);
@@ -1050,7 +1206,10 @@ function buildSessionsToPlace(targets, capacity) {
       sessions.push({ id: 'swim-' + i, discipline: 'swim', kind: 'session', activityTypeId: targets.swim.activityTypeId, activityName: targets.swim.activityName, targetAmount: metersPerSession, unit: 'm', estMinutes: est, hard: false });
     }
   }
-  if (targets.strength && targets.strength.sessions > 0) {
+  const strengthRhythmSessions = rhythm ? buildRhythmSessionsForDiscipline('strength', targets, capacity, rhythm, weekDates, notes) : null;
+  if (strengthRhythmSessions) {
+    sessions.push(...strengthRhythmSessions);
+  } else if (targets.strength && targets.strength.sessions > 0) {
     for (let i = 0; i < targets.strength.sessions; i++) {
       sessions.push({ id: 'strength-' + i, discipline: 'strength', kind: 'strength', activityTypeId: null, activityName: 'Strength', targetAmount: null, unit: '', estMinutes: 45, hard: false });
     }
@@ -1132,7 +1291,18 @@ function buildFinalLayout(assignments, sessionsToPlace, perDay, unplacedSeed) {
     if (session.hard) {
       const thisMs = Date.parse(a.dateKey);
       const adjacent = [...hardDates].some((hd) => Math.abs(Date.parse(hd) - thisMs) === HARD_ADJACENT_MS);
-      if (adjacent) {
+      // Phase 3.5 — session.dateKey (set only by a rhythm-sourced
+      // session — see buildRhythmSessionsForDiscipline) means this
+      // placement is the USER's own deliberate choice, not something
+      // the model picked. Back-to-back hard days is a heuristic this
+      // function uses to protect against the MODEL stacking fatigue by
+      // accident; it was never meant to override a day the user fixed
+      // on purpose (e.g. "Tuesday is always my interval day, Wednesday
+      // is always my long day"), so a rhythm-fixed hard session is
+      // never rejected for this reason. It still COUNTS toward
+      // hardDates below, though — a model-placed hard session must
+      // still avoid landing next to it.
+      if (adjacent && !session.dateKey) {
         unplaced.push({ id: a.id, reason: 'Would stack two demanding sessions on back-to-back days.' });
         return;
       }
@@ -1161,7 +1331,7 @@ function buildFinalLayout(assignments, sessionsToPlace, perDay, unplacedSeed) {
   return { layout, unplaced };
 }
 
-function normalizePlan(raw, restrictions, recommendableTypes, activeWeekDisciplines, capacity) {
+function normalizePlan(raw, restrictions, recommendableTypes, activeWeekDisciplines, capacity, rhythm, weekDates) {
   const restricted = restrictedScopeSet(restrictions);
   const types = Array.isArray(recommendableTypes) ? recommendableTypes : [];
   const r = raw || {};
@@ -1191,11 +1361,20 @@ function normalizePlan(raw, restrictions, recommendableTypes, activeWeekDiscipli
   // always reflect the FINAL, trimmed targets.
   let layout = undefined;
   let unplaced = undefined;
+  const rhythmMismatchNotes = [];
   if (targets && capacity && capacity.configured && capacity.perDay.length) {
-    const sessionsToPlace = buildSessionsToPlace(targets, capacity);
+    const sessionsToPlace = buildSessionsToPlace(targets, capacity, rhythm, weekDates, rhythmMismatchNotes);
     const unplaceableSeed = buildUnplaceableSeed(targets, capacity);
     const placeableSessions = sessionsToPlace.filter((s) => !unplaceableSeed.some((u) => u.id === s.discipline));
-    const assignments = sanitizeAssignments(r.assignments, placeableSessions, capacity.perDay);
+    // Phase 3.5 — a rhythm-sourced session already carries its own
+    // dateKey; it's taken as a fixed assignment directly (never asked
+    // of the model), then validated against capacity in
+    // buildFinalLayout exactly like every other placement — "capacity
+    // trimming still applies on top" of the rhythm, not instead of it.
+    const rhythmAssignments = placeableSessions.filter((s) => s.dateKey).map((s) => ({ id: s.id, dateKey: s.dateKey }));
+    const sessionsNeedingModelPlacement = placeableSessions.filter((s) => !s.dateKey);
+    const modelAssignments = sanitizeAssignments(r.assignments, sessionsNeedingModelPlacement, capacity.perDay);
+    const assignments = rhythmAssignments.concat(modelAssignments);
     const built = buildFinalLayout(assignments, placeableSessions, capacity.perDay, unplaceableSeed);
     layout = built.layout;
     unplaced = built.unplaced;
@@ -1224,6 +1403,11 @@ function normalizePlan(raw, restrictions, recommendableTypes, activeWeekDiscipli
     availableSummary: (capacity && capacity.configured) ? { totalFreeMin: capacity.perDay.reduce((s, d) => s + d.availableMin, 0), daysWithTimeCount: capacity.perDay.filter((d) => d.availableMin > 0).length } : undefined,
     layout,
     unplaced,
+    // Phase 3.5 — "3 swims in a 2-swim week": surfaced so the card can
+    // show it, never silently resolved either direction (the rhythm
+    // isn't trimmed to match the target, nor is the target changed to
+    // match the rhythm).
+    rhythmMismatchNotes: rhythmMismatchNotes.length ? rhythmMismatchNotes : undefined,
     rationale: typeof r.rationale === 'string' ? truncateAtWordBoundary(r.rationale.trim(), 900) : '',
   };
 }
@@ -1252,9 +1436,22 @@ async function handlePlan(req, res, apiKey, body) {
     preTargets = trimmed.targets;
     preTrimNote = trimmed.trimNote;
   }
-  const sessionsToPlace = preTargets ? buildSessionsToPlace(preTargets, capacity) : [];
+  // Phase 3.5 — weeklyRhythm/weekDates are both optional (absent or
+  // empty => every discipline falls back to the pre-3.5 sizing below,
+  // byte-for-byte). weekDates maps weekday -> this week's real dateKey
+  // (client-computed via DayLib); without it a rhythm entry can't be
+  // placed at all and that discipline falls back the same way.
+  const rhythm = (body.weeklyRhythm && typeof body.weeklyRhythm === 'object' && rhythmHasAnyEntries(body.weeklyRhythm)) ? body.weeklyRhythm : null;
+  const weekDates = (body.weekDates && typeof body.weekDates === 'object') ? body.weekDates : null;
+  const preMismatchNotes = [];
+  const sessionsToPlace = preTargets ? buildSessionsToPlace(preTargets, capacity, rhythm, weekDates, preMismatchNotes) : [];
   const unplaceableSeed = preTargets ? buildUnplaceableSeed(preTargets, capacity) : [];
   const placeableSessions = sessionsToPlace.filter((s) => !unplaceableSeed.some((u) => u.id === s.discipline));
+  // A rhythm-sourced session already has its own dateKey — the model
+  // is NEVER asked to place it (only re-validated against capacity
+  // further down, same as every other placement). Only the subset
+  // still missing a day goes into the layout prompt at all.
+  const sessionsNeedingModelPlacement = placeableSessions.filter((s) => !s.dateKey);
 
   const context = {
     recentStrengthSessions: Array.isArray(body.strengthSessions) ? body.strengthSessions.slice(0, 30) : [],
@@ -1268,7 +1465,7 @@ async function handlePlan(req, res, apiKey, body) {
   const text = await callClaude(apiKey, {
     system: buildPlanSystemPrompt(restrictions, recommendableTypes, activeWeekDisciplines)
       + buildCapacityPromptSection(capacity, preTrimNote)
-      + buildLayoutPromptSection(placeableSessions, capacity),
+      + buildLayoutPromptSection(sessionsNeedingModelPlacement, capacity),
     userContent: 'Recent history:\n' + JSON.stringify(context, null, 2),
     // Confirmed via the [plan debug] log (not assumed): stop_reason
     // was 'max_tokens' with 327 of the 800-token budget spent on
@@ -1310,13 +1507,31 @@ async function handlePlan(req, res, apiKey, body) {
   const parsed = extractJson(text);
   if (!parsed) return res.status(502).json({ ok: false, error: 'Model did not return valid JSON.' });
 
-  return res.status(200).json({ ok: true, plan: normalizePlan(parsed, restrictions, recommendableTypes, activeWeekDisciplines, capacity) });
+  return res.status(200).json({ ok: true, plan: normalizePlan(parsed, restrictions, recommendableTypes, activeWeekDisciplines, capacity, rhythm, weekDates) });
 }
 
 // ------------------------------------------------------------
 // MODE: today
 // ------------------------------------------------------------
 
+function buildRhythmPromptSection(dayLabel, allowRecoveryDeviation) {
+  const recoveryReason = allowRecoveryDeviation
+    ? 'WHOOP recovery is low enough (per WHOOP-ADJUSTMENT) to downgrade a hard rhythm entry (interval/long/brick) to something easier or to rest; '
+    : ''; // Tomorrow's own prompt already forbids reasoning from today's specific recovery number — see RECOVERY IS UNKNOWN FOR THIS DAY above
+  return (
+    'WEEKLY RHYTHM (Phase 3.5): if context.rhythmForDay is non-empty, the user has a FIXED weekly pattern ' +
+    'and it already says which discipline + kind ' + dayLabel + ' is — that is the DEFAULT recommendation, ' +
+    'not a suggestion to weigh against other ideas. Recommend exactly that discipline + kind unless one of ' +
+    'these specific, checkable things says otherwise: an active restriction blocks that discipline; ' +
+    recoveryReason +
+    dayLabel + '\'s feasibility/calendar (an event, padel) rules that discipline out entirely; or a ' +
+    'Phase-3.3 missed strength day-type legitimately takes priority over a rhythm strength day. Never ' +
+    'invent a session that is neither in rhythmForDay nor already part of weekPlan\'s own targets — no ' +
+    'extra interval "just because". If you deviate from the rhythm for any of these reasons, say so in ONE ' +
+    'short clause naming the real reason (e.g. "Easy run instead of interval — recovery 31%"). If ' +
+    'rhythmForDay is empty/absent, ignore this paragraph and decide as you would otherwise.\n\n'
+  );
+}
 function buildTodaySystemPrompt(restrictions, feasibility) {
   return (
     'You recommend today\'s training on a personal dashboard. This week\'s plan (weekPlan) always covers ' +
@@ -1324,6 +1539,7 @@ function buildTodaySystemPrompt(restrictions, feasibility) {
     'actually outstanding and appropriate today into ONE recommendation (e.g. "Push + Cycling interval"). ' +
     'It is normal and expected for the answer to include both — do not default to naming only strength; ' +
     'check cardio\'s status with the same weight every time.\n\n' +
+    buildRhythmPromptSection('today', true) +
     'WHOOP-ADJUSTMENT (match this app\'s existing convention exactly): recovery >=67% is high/well-' +
     'recovered — combining strength with even the hard interval piece today is fine if both are due. ' +
     '34-66% is moderate — combining is still fine for lighter pairings (e.g. strength + easy cardio ' +
@@ -1436,6 +1652,7 @@ function buildTomorrowSystemPrompt(restrictions, feasibility) {
     'appropriate for that day into ONE recommendation (e.g. "Push + Cycling interval"). It is normal and ' +
     'expected for the answer to include both — do not default to naming only strength; check cardio\'s ' +
     'status with the same weight every time.\n\n' +
+    buildRhythmPromptSection('tomorrow', false) +
     'RECOVERY IS UNKNOWN FOR THIS DAY — do NOT lead with or rely on today\'s specific WHOOP recovery/strain ' +
     'numbers as if they predict or describe tomorrow; a future day\'s recovery is fundamentally unknowable in ' +
     'advance, and presenting today\'s numbers as if they answer the question would be misleading. Reason ' +
@@ -1493,6 +1710,14 @@ async function handleToday(req, res, apiKey, body) {
     whoopToday: body.whoopToday && typeof body.whoopToday === 'object' ? body.whoopToday : null,
     whoopRecentStrain: Array.isArray(body.whoopRecentStrain) ? body.whoopRecentStrain.slice(0, 14) : null,
     activeRestrictions: restrictions,
+    // Phase 3.5 — the client resolves which weekday this request is
+    // actually for (today, or tomorrow when forTomorrow) and sends
+    // ONLY that day's rhythm entries, already picked out of the full
+    // weekly rhythm — this file never needs a date library to know
+    // "today" itself (same "server stays dumb about dates" discipline
+    // as everywhere else here). Absent/empty means no rhythm is
+    // configured, or nothing is set for this specific day.
+    rhythmForDay: sanitizeRhythmEntries(body.rhythmForDay),
   };
   if (forTomorrow) {
     // No padel/calendar input for this variant — out of scope (see
@@ -1539,6 +1764,13 @@ async function handleToday(req, res, apiKey, body) {
   // Phase 3.2: the backstop is the same re-check regardless of which
   // day this recommendation is for — applies to both now.
   recommendation = applyFeasibilityBackstop(recommendation, context.feasibility);
+  // Phase 3.5 — applied AFTER the feasibility backstop so a rhythm
+  // entry that feasibility has already ruled out never gets forced
+  // back in; recoveryPct is only ever real for the TODAY variant
+  // (Tomorrow's own prompt is told not to use it — see
+  // buildTomorrowSystemPrompt's own comment), so forTomorrow passes
+  // null there, same as the prompt's own recovery-blind framing.
+  recommendation = applyRhythmBackstop(recommendation, context.rhythmForDay, context.feasibility, restrictions, forTomorrow ? null : context.whoopToday, context.strengthContext);
 
   return res.status(200).json({ ok: true, recommendation });
 }

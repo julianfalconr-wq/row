@@ -1275,6 +1275,44 @@ body {
 /* [type="time"] here ties in specificity with ".gs-field input[type='time']" above (both one class + one attribute selector) — placed AFTER it in the cascade so width:auto correctly wins over that rule's width:100%, same specificity gotcha already hit once in the Routines feature's .po-field input[type="number"] fix. */
 .gs-weekday-time-row input[type="time"] { width: auto; flex: 1; min-width: 0; }
 
+/* Weekly rhythm (Phase 3.5) — each weekday is a tappable summary row
+   that expands into its own edit body (chips for discipline, then
+   kind, a note input, remove/add-session buttons). min-width:0 /
+   flex-wrap throughout for phone widths, same discipline as every
+   other grid in this modal. */
+.gs-rhythm-summary { font-size: 12px; color: var(--text-secondary); margin-bottom: 10px; line-height: 1.5; }
+.gs-rhythm-grid { display: flex; flex-direction: column; gap: 6px; }
+.gs-rhythm-day { border: 1px solid var(--line); border-radius: var(--radius-sm, 10px); overflow: hidden; }
+.gs-rhythm-day-head {
+  width: 100%; display: flex; align-items: center; gap: 8px; min-width: 0;
+  background: var(--inset-bg); border: none; padding: 9px 10px; cursor: pointer;
+  -webkit-tap-highlight-color: transparent; text-align: left; font-family: inherit;
+}
+.gs-rhythm-day-label { font-size: 12.5px; color: var(--text-secondary); font-weight: 700; width: 32px; flex-shrink: 0; }
+.gs-rhythm-day-chips { flex: 1; min-width: 0; font-size: 12px; color: var(--text-primary); display: flex; flex-wrap: wrap; gap: 4px; }
+.gs-rhythm-day-chip { background: var(--chip-bg, var(--inset-bg)); border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; white-space: nowrap; }
+.gs-rhythm-day-chip-empty { color: var(--text-tertiary); font-style: italic; }
+.gs-rhythm-day-flag { flex-shrink: 0; color: var(--warning); font-size: 13px; }
+.gs-rhythm-day-body { padding: 10px; display: flex; flex-direction: column; gap: 10px; }
+.gs-rhythm-entry { display: flex; flex-direction: column; gap: 6px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.gs-rhythm-entry:last-of-type { border-bottom: none; padding-bottom: 0; }
+.gs-rhythm-chiprow { display: flex; flex-wrap: wrap; gap: 5px; }
+.gs-rhythm-chip {
+  background: var(--inset-bg); border: 1px solid var(--line); color: var(--text-tertiary);
+  font-family: inherit; font-size: 11px; font-weight: 700; padding: 6px 10px; border-radius: 999px;
+  cursor: pointer; -webkit-tap-highlight-color: transparent; transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.gs-rhythm-chip.is-active { background: var(--btn-primary-a); color: var(--btn-primary-text); border-color: var(--btn-primary-a); }
+.gs-rhythm-entry-note {
+  width: 100%; background: var(--inset-bg); border: 1px solid var(--line); color: var(--text-primary);
+  font-family: inherit; font-size: 12px; padding: 7px 9px; border-radius: var(--radius-xs, 6px); outline: none;
+}
+.gs-rhythm-entry-flag { font-size: 11.5px; color: var(--warning); }
+.gs-rhythm-entry-actions { display: flex; justify-content: flex-end; }
+.gs-rhythm-entry-remove { background: transparent; border: none; color: var(--text-tertiary); font-family: inherit; font-size: 11.5px; font-weight: 700; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.gs-rhythm-entry-remove:hover { color: var(--danger); }
+.gs-rhythm-add-session { background: transparent; border: 1px dashed var(--line); color: var(--text-tertiary); font-family: inherit; font-size: 11.5px; font-weight: 700; padding: 7px; border-radius: var(--radius-xs, 6px); cursor: pointer; -webkit-tap-highlight-color: transparent; }
+
 .gs-restrictions-list { display: flex; flex-direction: column; gap: 8px; }
 .gs-restriction-row {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
@@ -1545,6 +1583,30 @@ body {
             </select>
           </div>
           <div class="gs-avail-save-status" id="gsAvailSaveStatus"></div>
+        </div>
+      </div>
+
+      <div class="set-divider"></div>
+
+      <!-- Weekly rhythm (Phase 3.5) — a STANDING per-weekday pattern of
+           which discipline + kind of session happens that day (e.g.
+           "Tuesday: Run interval", "Saturday: Run long"). Separate
+           from availability above (which only says how much time/
+           which disciplines are POSSIBLE, never which one actually
+           happens) — see api/sync-state.js's own "weekly-rhythm"
+           section for the full data shape. The user fills this in by
+           hand; nothing here invents or changes it on its own. Same
+           auto-save-per-change convention as the availability grid
+           above, for the same reason (this isn't a single atomic form,
+           it's a live, continuously-editable schedule). -->
+      <div class="set-section">
+        <h4>Weekly rhythm</h4>
+        <div class="gs-habits-note">A fixed weekly pattern you define once — which discipline and kind of session happens on each day (e.g. Tuesday: Run interval, Saturday: Run long). Today's session and this week's objectives follow this instead of picking a session kind fresh each day. Leave a day empty to not fix it. Changes here save automatically.</div>
+        <button type="button" class="hf-advanced-toggle" id="gsRhythmToggleBtn">Set weekly rhythm ▾</button>
+        <div class="hf-advanced-body" id="gsRhythmBody" hidden>
+          <div class="gs-rhythm-summary" id="gsRhythmSummary"></div>
+          <div class="gs-rhythm-grid" id="gsRhythmGrid"></div>
+          <div class="gs-avail-save-status" id="gsRhythmSaveStatus"></div>
         </div>
       </div>
 
@@ -3378,6 +3440,15 @@ document.addEventListener('DOMContentLoaded', function () {
       return (j && j.ok && Array.isArray(j.types)) ? j.types : [];
     } catch (e) { return []; }
   }
+  // Phase 3.5 — same resource gym.html's own fetchWeeklyRhythm() reads;
+  // duplicated per this project's established per-file convention.
+  async function fetchWeeklyRhythmForTomorrow(secret) {
+    try {
+      const r = await fetch('/api/sync-state?secret=' + encodeURIComponent(secret) + '&resource=weekly-rhythm');
+      const j = await r.json();
+      return (j && j.ok && j.rhythm) ? j.rhythm : {};
+    } catch (e) { return {}; }
+  }
   // The free window for an arbitrary date: [that weekday's configured
   // wake time, that weekday's configured sleep time] — unlike today's
   // version (gym.html's resolveTodayBedtimeMs, anchored on "now"
@@ -3591,6 +3662,16 @@ document.addEventListener('DOMContentLoaded', function () {
       }
     } catch (e) { feasibility = { configured: false }; }
 
+    // Phase 3.5 — tomorrow's own rhythm entries, resolved client-side
+    // the same way gym.html resolves today's (this file already has
+    // DayLib; the server never resolves a specific weekday itself).
+    let rhythmForDay = [];
+    try {
+      const weeklyRhythm = await fetchWeeklyRhythmForTomorrow(secret);
+      const tomorrowWeekday = AVAIL_WEEKDAY_NAMES_MAIN[DayLib.parseDateKey(tomorrowDateKey).getDay()];
+      rhythmForDay = weeklyRhythm[tomorrowWeekday] || [];
+    } catch (e) { rhythmForDay = []; }
+
     try {
       const res = await fetch('/api/training?mode=today&secret=' + encodeURIComponent(secret), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -3601,6 +3682,7 @@ document.addEventListener('DOMContentLoaded', function () {
           forTomorrow: true,
           todayRecommendation,
           feasibility,
+          rhythmForDay,
         }),
       });
       const json = await res.json();
@@ -5147,6 +5229,321 @@ document.addEventListener('DOMContentLoaded', function () {
     } catch (e) { alert("Couldn't clear override: " + (e.message || e)); }
   });
 
+  // =============================================================
+  // Weekly rhythm (Phase 3.5) — see api/sync-state.js's own
+  // "weekly-rhythm" doc comment for the stored shape and this
+  // section's own HTML comment above for why it lives right next to
+  // availability. RHYTHM_DISCIPLINES/_KINDS intentionally mirror the
+  // server's RHYTHM_DISCIPLINES/_KINDS enums exactly (api/sync-
+  // state.js) — a value here that isn't in that list would just get
+  // silently rejected server-side, so keeping them in sync by hand is
+  // required, not optional.
+  // =============================================================
+  const RHYTHM_DISCIPLINES = [['run', 'Run'], ['swim', 'Swim'], ['bike', 'Bike'], ['strength', 'Strength'], ['rest', 'Rest']];
+  const RHYTHM_KINDS = [['easy', 'Easy'], ['interval', 'Interval'], ['long', 'Long'], ['technique', 'Technique'], ['endurance', 'Endurance'], ['brick', 'Brick']];
+  // Rough, fixed per-kind duration estimate used ONLY for this
+  // settings grid's own "exceeds today's minutes budget" flag — a
+  // light sanity check while editing, not the real pace-based
+  // estimate Today's session/the weekly layout compute from actual
+  // logged history. Intentionally simple and documented as such.
+  const RHYTHM_KIND_EST_MINUTES = { easy: 35, interval: 50, long: 70, technique: 30, endurance: 65, brick: 90, strength: 45 };
+  const RHYTHM_HARD_KINDS = new Set(['interval', 'long']);
+
+  async function fetchWeeklyRhythm() {
+    const secret = getSecret();
+    if (!secret) return {};
+    try {
+      const r = await fetch('/api/sync-state?secret=' + encodeURIComponent(secret) + '&resource=weekly-rhythm');
+      const j = await r.json();
+      return (j && j.ok && j.rhythm) ? j.rhythm : {};
+    } catch (e) { return {}; }
+  }
+  async function saveWeeklyRhythmToServer(rhythm) {
+    const secret = getSecret();
+    if (!secret) throw new Error('Set your dashboard secret first');
+    const r = await fetch('/api/sync-state?secret=' + encodeURIComponent(secret) + '&resource=weekly-rhythm', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ resource: 'weekly-rhythm', rhythm }),
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok) throw new Error((j && j.error) || ('HTTP ' + r.status));
+  }
+  // fetchActivityTypesForFeasibility/DISCIPLINE_NAME_PATTERNS_MAIN
+  // (defined earlier in this file) live in a DIFFERENT, already-closed
+  // <script> block/closure — not reachable from here (confirmed live:
+  // referencing them threw a ReferenceError). Local copies, per this
+  // file's own established per-closure small-duplication convention
+  // (see e.g. tomorrowStrengthContext's own header comment on exactly
+  // this).
+  async function fetchActivityTypesForRhythm(secret) {
+    try {
+      const r = await fetch('/api/sync-state?secret=' + encodeURIComponent(secret) + '&resource=activity-types');
+      const j = await r.json();
+      return (j && j.ok && Array.isArray(j.types)) ? j.types : [];
+    } catch (e) { return []; }
+  }
+  const RHYTHM_DISCIPLINE_NAME_PATTERNS = { swim: /swim/i, bike: /\b(bike|cycl|ride|spin)/i, run: /\b(run|jog)/i };
+  // Disabled disciplines are hidden from the picker entirely (never
+  // offered, per the task spec) — reuses the exact same recommendable-
+  // type + name-pattern check gym.html's own discipline resolution
+  // uses. strength/rest are never activity-type-backed, so always
+  // enabled.
+  function rhythmEnabledDisciplines(types) {
+    const out = { strength: true, rest: true };
+    ['run', 'bike', 'swim'].forEach((disc) => {
+      out[disc] = (types || []).some((t) => t.recommendable && RHYTHM_DISCIPLINE_NAME_PATTERNS[disc].test(t.name || ''));
+    });
+    return out;
+  }
+  // Minimal canonical-week checkpoint lookup for the weekly summary
+  // line's "vs plan targets" comparison — same median-day technique
+  // established in gym.html/plan.html's own checkpointCanonicalRange
+  // (duplicated per this project's established per-file small-
+  // duplication convention), kept to exactly what this summary needs
+  // (session-count targets only, not the full progress/chart machinery
+  // those other files build on top of it).
+  function rhythmCanonicalWeekStart(dateKeyStr) {
+    const d = window.DayLib.parseDateKey(dateKeyStr);
+    const day = d.getDay();
+    const diff = (day === 0 ? -6 : 1) - day;
+    d.setDate(d.getDate() + diff);
+    return window.DayLib.plainDateKey ? window.DayLib.plainDateKey(d) : d.toISOString().slice(0, 10);
+  }
+  async function fetchCurrentWeekPlanDisciplines() {
+    const secret = getSecret();
+    if (!secret) return null;
+    try {
+      const r = await fetch('/api/sync-state?secret=' + encodeURIComponent(secret) + '&resource=plans');
+      const j = await r.json();
+      const plans = (j && j.ok && Array.isArray(j.plans)) ? j.plans : [];
+      const todayK = window.DayLib.effectiveDateKey();
+      for (const p of plans) {
+        if (p.status !== 'active' || !Array.isArray(p.weeklyCheckpoints)) continue;
+        const cp = p.weeklyCheckpoints.find((c) => {
+          if (!c.weekStartDate) return false;
+          const start = rhythmCanonicalWeekStart(c.weekStartDate);
+          const end = (() => { const d = window.DayLib.parseDateKey(start); d.setDate(d.getDate() + 6); return window.DayLib.plainDateKey ? window.DayLib.plainDateKey(d) : d.toISOString().slice(0, 10); })();
+          return todayK >= start && todayK <= end;
+        });
+        if (cp && cp.disciplines) return cp.disciplines;
+      }
+    } catch (e) {}
+    return null;
+  }
+  // Flags are informational only — never block saving (the task spec
+  // says "inline flags (not silent)", not "reject the entry"). Each
+  // day's entries are checked against: (1) that discipline not allowed
+  // on that weekday per the availability template above (strength IS
+  // one of availability's own discipline toggles; rest has no such
+  // check — there's nothing to disallow), (2) the day's total estimated
+  // minutes (RHYTHM_KIND_EST_MINUTES sum) exceeding availability's
+  // minutes budget for that day (skipped when minutes is null —
+  // unconstrained), (3) two hard (interval/long) sessions on
+  // calendar-adjacent days (Sun/Mon are NOT treated as adjacent here —
+  // this is a within-week pattern, not a real rolling 7-day calendar).
+  function computeRhythmFlags(rhythm, availability, enabled) {
+    const dayFlags = {};
+    const entryFlags = {};
+    const hardDays = {};
+    GS_WEEKDAY_KEYS.forEach((day, i) => {
+      const entries = rhythm[day] || [];
+      const avail = (availability && availability[day]) || defaultAvailabilityDay();
+      let totalMin = 0;
+      let dayHasHard = false;
+      entryFlags[day] = entries.map((e) => {
+        const flags = [];
+        if (e.discipline !== 'rest' && avail.disciplines && avail.disciplines[e.discipline] === false) {
+          flags.push((RHYTHM_DISCIPLINES.find((d) => d[0] === e.discipline) || [, e.discipline])[1] + ' isn\'t an allowed discipline on ' + AVAIL_WEEKDAY_LABELS[day]);
+        }
+        if (e.discipline !== 'rest' && enabled && enabled[e.discipline] === false) {
+          flags.push((RHYTHM_DISCIPLINES.find((d) => d[0] === e.discipline) || [, e.discipline])[1] + ' has no recommendable activity type — ignored at runtime');
+        }
+        totalMin += RHYTHM_KIND_EST_MINUTES[e.kind] || (e.discipline === 'strength' ? RHYTHM_KIND_EST_MINUTES.strength : 0);
+        if (RHYTHM_HARD_KINDS.has(e.kind)) dayHasHard = true;
+        return flags;
+      });
+      if (avail.minutes != null && totalMin > avail.minutes) {
+        dayFlags[day] = (dayFlags[day] || []).concat(['Est. ' + totalMin + ' min exceeds the ' + avail.minutes + ' min budget for ' + AVAIL_WEEKDAY_LABELS[day]]);
+      }
+      hardDays[day] = dayHasHard;
+    });
+    GS_WEEKDAY_KEYS.forEach((day, i) => {
+      if (i === 0) return;
+      const prevDay = GS_WEEKDAY_KEYS[i - 1];
+      if (hardDays[day] && hardDays[prevDay]) {
+        dayFlags[day] = (dayFlags[day] || []).concat(['Hard session (interval/long) back-to-back with ' + AVAIL_WEEKDAY_LABELS[prevDay]]);
+        dayFlags[prevDay] = (dayFlags[prevDay] || []).concat(['Hard session (interval/long) back-to-back with ' + AVAIL_WEEKDAY_LABELS[day]]);
+      }
+    });
+    return { dayFlags, entryFlags };
+  }
+  // "Swim 2 of 2, Strength 3 of 3, Run 3 sessions" — session-count
+  // disciplines (swim/strength) compare against the plan's real
+  // target; run/bike have no session-count target of their own (their
+  // plan target is a km figure, not a count), so they're reported as a
+  // plain count with no "of N" — matches the task's own example
+  // exactly. rest is never counted.
+  function rhythmSummaryLine(rhythm, planDisciplines) {
+    const counts = { run: 0, swim: 0, bike: 0, strength: 0 };
+    GS_WEEKDAY_KEYS.forEach((day) => { (rhythm[day] || []).forEach((e) => { if (counts[e.discipline] !== undefined) counts[e.discipline]++; }); });
+    const parts = [];
+    ['swim', 'strength'].forEach((disc) => {
+      const target = planDisciplines && planDisciplines[disc] && Number(planDisciplines[disc].sessions);
+      if (counts[disc] || target) {
+        const label = disc === 'swim' ? 'Swim' : 'Strength';
+        parts.push(target ? (label + ' ' + counts[disc] + ' of ' + target) : (label + ' ' + counts[disc] + ' session' + (counts[disc] === 1 ? '' : 's')));
+      }
+    });
+    ['run', 'bike'].forEach((disc) => {
+      if (counts[disc]) parts.push((disc === 'run' ? 'Run' : 'Bike') + ' ' + counts[disc] + ' session' + (counts[disc] === 1 ? '' : 's'));
+    });
+    return parts.length ? parts.join(', ') : 'No sessions set yet.';
+  }
+
+  let rhythmDraft = null;
+  let rhythmActivityTypes = [];
+  let rhythmPlanDisciplines = null;
+  let rhythmOpenDay = null; // which day's edit body is currently expanded, if any — preserved across a re-render so toggling one chip doesn't collapse the whole thing
+  function defaultRhythmEntry() { return { discipline: 'run', kind: 'easy' }; }
+  function renderRhythmGrid() {
+    const enabled = rhythmEnabledDisciplines(rhythmActivityTypes);
+    const { dayFlags, entryFlags } = computeRhythmFlags(rhythmDraft, availabilityDraft || defaultAvailabilityTemplate(), enabled);
+    $('gsRhythmSummary').textContent = rhythmSummaryLine(rhythmDraft, rhythmPlanDisciplines);
+    const grid = $('gsRhythmGrid');
+    grid.innerHTML = GS_WEEKDAY_KEYS.map((day) => {
+      const entries = rhythmDraft[day] || [];
+      const isOpen = rhythmOpenDay === day;
+      const chips = entries.length
+        ? entries.map((e) => '<span class="gs-rhythm-day-chip">' + escapeHtml((RHYTHM_DISCIPLINES.find((d) => d[0] === e.discipline) || [, e.discipline])[1] + (e.kind && e.discipline !== 'rest' ? ' · ' + (RHYTHM_KINDS.find((k) => k[0] === e.kind) || [, e.kind])[1] : '')) + '</span>').join('')
+        : '<span class="gs-rhythm-day-chip gs-rhythm-day-chip-empty">Not set</span>';
+      const flagged = (dayFlags[day] && dayFlags[day].length) || (entryFlags[day] || []).some((f) => f.length);
+      const entriesHtml = entries.map((e, idx) => {
+        const showKindRow = e.discipline !== 'rest' && e.discipline !== 'strength';
+        const kindChips = RHYTHM_KINDS.map(([key, label]) => (
+          '<button type="button" class="gs-rhythm-chip' + (e.kind === key ? ' is-active' : '') + '" data-field="kind" data-value="' + key + '">' + label + '</button>'
+        )).join('');
+        const discChips = RHYTHM_DISCIPLINES.filter(([key]) => key === 'rest' || key === 'strength' || enabled[key] !== false).map(([key, label]) => (
+          '<button type="button" class="gs-rhythm-chip' + (e.discipline === key ? ' is-active' : '') + '" data-field="discipline" data-value="' + key + '">' + label + '</button>'
+        )).join('');
+        const entryFlagLines = (entryFlags[day] && entryFlags[day][idx] || []).map((f) => '<div class="gs-rhythm-entry-flag">⚠ ' + escapeHtml(f) + '</div>').join('');
+        return (
+          '<div class="gs-rhythm-entry" data-day="' + day + '" data-index="' + idx + '">' +
+            '<div class="gs-rhythm-chiprow" data-role="disciplines">' + discChips + '</div>' +
+            (showKindRow ? '<div class="gs-rhythm-chiprow" data-role="kinds">' + kindChips + '</div>' : '') +
+            '<input type="text" class="gs-rhythm-entry-note" placeholder="Note (optional)" value="' + escapeHtml(e.note || '') + '" maxlength="140">' +
+            entryFlagLines +
+            '<div class="gs-rhythm-entry-actions"><button type="button" class="gs-rhythm-entry-remove" data-day="' + day + '" data-index="' + idx + '">Remove</button></div>' +
+          '</div>'
+        );
+      }).join('');
+      const dayFlagLines = (dayFlags[day] || []).map((f) => '<div class="gs-rhythm-entry-flag">⚠ ' + escapeHtml(f) + '</div>').join('');
+      return (
+        '<div class="gs-rhythm-day" data-day="' + day + '">' +
+          '<button type="button" class="gs-rhythm-day-head" data-day="' + day + '">' +
+            '<span class="gs-rhythm-day-label">' + AVAIL_WEEKDAY_LABELS[day] + '</span>' +
+            '<span class="gs-rhythm-day-chips">' + chips + '</span>' +
+            (flagged ? '<span class="gs-rhythm-day-flag" title="This day has a flag">⚠</span>' : '') +
+          '</button>' +
+          '<div class="gs-rhythm-day-body"' + (isOpen ? '' : ' hidden') + '>' +
+            entriesHtml + dayFlagLines +
+            (entries.length < 3 ? '<button type="button" class="gs-rhythm-add-session" data-day="' + day + '">+ Add a ' + (entries.length ? 'second' : '') + ' session</button>' : '') +
+          '</div>' +
+        '</div>'
+      );
+    }).join('');
+    wireRhythmGridHandlers();
+  }
+  function wireRhythmGridHandlers() {
+    const grid = $('gsRhythmGrid');
+    grid.querySelectorAll('.gs-rhythm-day-head').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const day = btn.getAttribute('data-day');
+        rhythmOpenDay = rhythmOpenDay === day ? null : day;
+        renderRhythmGrid();
+      });
+    });
+    grid.querySelectorAll('.gs-rhythm-chiprow').forEach((row) => {
+      row.querySelectorAll('.gs-rhythm-chip').forEach((chip) => {
+        chip.addEventListener('click', () => {
+          const entryEl = chip.closest('.gs-rhythm-entry');
+          const day = entryEl.getAttribute('data-day');
+          const idx = Number(entryEl.getAttribute('data-index'));
+          const field = chip.getAttribute('data-field');
+          const value = chip.getAttribute('data-value');
+          const entry = (rhythmDraft[day] || [])[idx];
+          if (!entry) return;
+          if (field === 'discipline') {
+            entry.discipline = value;
+            if (value === 'rest') { delete entry.kind; }
+            else if (value === 'strength') { entry.kind = 'strength'; }
+            else if (!entry.kind || entry.kind === 'strength') { entry.kind = 'easy'; }
+          } else if (field === 'kind') {
+            entry.kind = value;
+          }
+          saveRhythmDraft();
+        });
+      });
+    });
+    grid.querySelectorAll('.gs-rhythm-entry-note').forEach((input) => {
+      input.addEventListener('change', () => {
+        const entryEl = input.closest('.gs-rhythm-entry');
+        const day = entryEl.getAttribute('data-day');
+        const idx = Number(entryEl.getAttribute('data-index'));
+        const entry = (rhythmDraft[day] || [])[idx];
+        if (!entry) return;
+        const v = input.value.trim().slice(0, 140);
+        if (v) entry.note = v; else delete entry.note;
+        saveRhythmDraft();
+      });
+    });
+    grid.querySelectorAll('.gs-rhythm-entry-remove').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const day = btn.getAttribute('data-day');
+        const idx = Number(btn.getAttribute('data-index'));
+        if (!rhythmDraft[day]) return;
+        rhythmDraft[day].splice(idx, 1);
+        if (!rhythmDraft[day].length) delete rhythmDraft[day];
+        saveRhythmDraft();
+      });
+    });
+    grid.querySelectorAll('.gs-rhythm-add-session').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const day = btn.getAttribute('data-day');
+        if (!rhythmDraft[day]) rhythmDraft[day] = [];
+        if (rhythmDraft[day].length >= 3) return;
+        rhythmDraft[day].push(defaultRhythmEntry());
+        saveRhythmDraft();
+      });
+    });
+  }
+  function setRhythmSaveStatus(ok, errMsg) {
+    const el = $('gsRhythmSaveStatus');
+    el.classList.remove('is-saved', 'is-error');
+    if (ok) { el.textContent = 'Saved ✓'; el.classList.add('is-saved'); setTimeout(() => { if (el.textContent === 'Saved ✓') el.textContent = ''; }, 2000); }
+    else { el.textContent = "Couldn't save: " + (errMsg || 'unknown error'); el.classList.add('is-error'); }
+  }
+  async function saveRhythmDraft() {
+    renderRhythmGrid();
+    try { await saveWeeklyRhythmToServer(rhythmDraft); setRhythmSaveStatus(true); }
+    catch (e) { setRhythmSaveStatus(false, e.message || String(e)); }
+  }
+  async function renderWeeklyRhythmSection() {
+    $('gsRhythmGrid').innerHTML = 'Loading…';
+    const [rhythm, types, planDisciplines] = await Promise.all([fetchWeeklyRhythm(), fetchActivityTypesForRhythm(getSecret()), fetchCurrentWeekPlanDisciplines()]);
+    rhythmDraft = rhythm || {};
+    rhythmActivityTypes = types || [];
+    rhythmPlanDisciplines = planDisciplines;
+    renderRhythmGrid();
+    $('gsRhythmBody').hidden = true;
+    $('gsRhythmToggleBtn').textContent = 'Set weekly rhythm ▾';
+    $('gsRhythmSaveStatus').textContent = '';
+  }
+  $('gsRhythmToggleBtn').addEventListener('click', () => {
+    const body = $('gsRhythmBody');
+    body.hidden = !body.hidden;
+    $('gsRhythmToggleBtn').textContent = 'Set weekly rhythm ' + (body.hidden ? '▾' : '▴');
+  });
+
   // Day Ring's per-weekday wake/sleep schedule — a field of the same
   // shared "General Settings" profile object DayLib stores/syncs
   // (dayEndTime/timezone/categoryWeights all live there too), but this
@@ -5182,6 +5579,7 @@ document.addEventListener('DOMContentLoaded', function () {
     renderActivityTypesList();
     renderRestrictionsList();
     renderTrainingAvailability();
+    renderWeeklyRhythmSection();
     $('generalSettingsModalBg').classList.add('show');
   }
   $('generalSettingsGearBtn').addEventListener('click', openGeneralSettings);

@@ -1759,6 +1759,13 @@ img, video, canvas, svg { max-width: 100%; }
         <span id="tpCapacityText"></span>
         <span class="tp-capacity-trim-note" id="tpCapacityTrimNote" style="display:none"></span>
       </div>
+      <!-- Phase 3.5 — "3 swims in a 2-swim week": the rhythm's own
+           session count for a discipline not matching the plan
+           target, surfaced plainly rather than silently resolved
+           either direction. Hidden when there's nothing to report. -->
+      <div class="tp-capacity-line" id="tpRhythmMismatchLine" style="display:none">
+        <span class="tp-capacity-trim-note" id="tpRhythmMismatchNote"></span>
+      </div>
       <div class="tp-progress-row">
         <div class="tp-progress-label"><span>Strength</span><span id="tpStrengthProgressText">0 of 0 sessions</span></div>
         <div class="tp-progress-track"><div class="tp-progress-fill" id="tpStrengthProgressFill" style="width:0%"></div></div>
@@ -4852,6 +4859,32 @@ img, video, canvas, svg { max-width: 100%; }
       return (j && j.ok && Array.isArray(j.restrictions)) ? j.restrictions : [];
     } catch (e) { return []; }
   }
+  // Phase 3.5 — the fixed weekly rhythm (see api/sync-state.js's own
+  // "weekly-rhythm" doc comment). {} (no secret, fetch failure, or
+  // genuinely never configured) is sent through to the server exactly
+  // as "no rhythm" — api/training.js's rhythmHasAnyEntries() already
+  // treats that the same as omitting it entirely.
+  async function fetchWeeklyRhythm() {
+    const secret = getSecret();
+    if (!secret) return {};
+    try {
+      const r = await fetch('/api/sync-state?secret=' + encodeURIComponent(secret) + '&resource=weekly-rhythm');
+      const j = await r.json();
+      return (j && j.ok && j.rhythm) ? j.rhythm : {};
+    } catch (e) { return {}; }
+  }
+  // Maps weekday name -> this week's real dateKey, computed via
+  // DayLib/thisWeekMondayKey (the SAME canonical Mon-Sun week every
+  // other weekly feature in this file uses) — the server has no date
+  // library of its own, so it never resolves "today"/"this week"
+  // itself (see api/training.js's own comment on buildSessionsToPlace).
+  const WEEK_DATES_WEEKDAY_ORDER = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+  function computeWeekDates() {
+    const monday = thisWeekMondayKey();
+    const out = {};
+    WEEK_DATES_WEEKDAY_ORDER.forEach((wd, i) => { out[wd] = addDaysKey(monday, i); });
+    return out;
+  }
   function dateKey(d) {
     return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
   }
@@ -5961,6 +5994,13 @@ img, video, canvas, svg { max-width: 100%; }
       $$('tpCapacityLine').style.display = 'none';
     }
 
+    // Phase 3.5 — rhythm/plan session-count mismatch, e.g. "3 swims in
+    // a 2-swim week". Absent entirely when there's nothing to report
+    // (no rhythm configured, or everything matches).
+    const hasRhythmMismatch = Array.isArray(plan.rhythmMismatchNotes) && plan.rhythmMismatchNotes.length;
+    $$('tpRhythmMismatchLine').style.display = hasRhythmMismatch ? 'flex' : 'none';
+    $$('tpRhythmMismatchNote').textContent = hasRhythmMismatch ? plan.rhythmMismatchNotes.join(' ') : '';
+
     // Phase 3.4 — week layout: compact per-day list, done/pending from
     // real logs. Tolerates plans with no `layout` key (every plan
     // generated before this phase, or a week with nothing placeable)
@@ -6440,6 +6480,8 @@ img, video, canvas, svg { max-width: 100%; }
       const whoopTrend = await fetchWhoopTrend(14);
       const whoop = whoopTrend.connected ? { recentRecovery: whoopTrend.recentRecovery, recentStrain: whoopTrend.recentStrain } : null;
       const restrictions = await fetchActiveRestrictions();
+      const weeklyRhythm = await fetchWeeklyRhythm();
+      const weekDates = computeWeekDates();
 
       // Phase 3.1 — resolve each discipline's actual activityTypeId (if
       // any recommendable type matches it by name) so the server can
@@ -6470,7 +6512,7 @@ img, video, canvas, svg { max-width: 100%; }
 
       const res = await fetch('/api/training?mode=plan&secret=' + encodeURIComponent(secret), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ strengthSessions, recentExerciseNames, activitySessions, recommendableActivityTypes, whoop, restrictions, activeWeekDisciplines, capacity }),
+        body: JSON.stringify({ strengthSessions, recentExerciseNames, activitySessions, recommendableActivityTypes, whoop, restrictions, activeWeekDisciplines, capacity, weeklyRhythm, weekDates }),
       });
       const json = await res.json().catch((parseErr) => { throw new Error('Response was not valid JSON: ' + parseErr.message); });
       if (!res.ok || !json.ok) throw new Error('HTTP ' + res.status + (res.ok ? '' : ' ' + res.statusText) + ' — ' + ((json && json.error) || '(no error detail in response body)'));
@@ -7159,6 +7201,13 @@ img, video, canvas, svg { max-width: 100%; }
       const todayCalendar = await detectPadelToday(ctx);
       const restrictions = await fetchActiveRestrictions();
       const feasibility = buildTodayFeasibility(ctx, plan);
+      // Phase 3.5 — resolve TODAY's own rhythm entries client-side
+      // (this file already has DayLib; the server never resolves
+      // "today" itself — see api/training.js's own comment) and send
+      // only that day's entries, never the whole weekly rhythm.
+      const weeklyRhythm = await fetchWeeklyRhythm();
+      const todayWeekdayForRhythm = AVAIL_WEEKDAY_NAMES[DayLib.parseDateKey(DayLib.effectiveDateKey()).getDay()];
+      const rhythmForDay = weeklyRhythm[todayWeekdayForRhythm] || [];
 
       const res = await fetch('/api/training?mode=today&secret=' + encodeURIComponent(secret), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -7181,6 +7230,7 @@ img, video, canvas, svg { max-width: 100%; }
           todayCalendar,
           restrictions,
           feasibility,
+          rhythmForDay,
         }),
       });
       const json = await res.json();

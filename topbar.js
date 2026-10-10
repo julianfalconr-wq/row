@@ -1567,6 +1567,19 @@ body {
     // this keeps the same week boundary that those use. -->
     const availabilitySecret = (() => { try { return localStorage.getItem('dashboard:secret') || ''; } catch (e) { return ''; } })();
     const AVAIL_WEEKDAY_NAMES = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+    // Weekly rhythm (Phase 3.5) — fetched independently of availability
+    // (it's a separate, standing pattern, not dependent on whether an
+    // availability template happens to exist yet). {} (never
+    // configured, or explicitly cleared) is sent through as-is; chat.js
+    // treats an empty object the same as "no rhythm" — see
+    // api/sync-state.js's own weekly-rhythm doc comment.
+    let weeklyRhythm = {};
+    if (availabilitySecret) {
+      try {
+        const rhythmRes = await fetch('/api/sync-state?secret=' + encodeURIComponent(availabilitySecret) + '&resource=weekly-rhythm').then((r) => r.json()).catch(() => null);
+        if (rhythmRes && rhythmRes.ok && rhythmRes.rhythm) weeklyRhythm = rhythmRes.rhythm;
+      } catch (e) { /* keep {} — chat treats this exactly like "no rhythm ever saved" */ }
+    }
     let availability = { configured: false };
     if (availabilitySecret && typeof window.DayLib !== 'undefined') {
       try {
@@ -1601,7 +1614,7 @@ body {
       } catch (e) { /* keep configured:false — chat treats this exactly like "no template ever saved" */ }
     }
 
-    return { date: todayKey, nutrition, goals, foodScans, gym, activities, whoop, plan, finance, dailyStack, calendar, availability };
+    return { date: todayKey, nutrition, goals, foodScans, gym, activities, whoop, plan, finance, dailyStack, calendar, availability, weeklyRhythm };
   };
 
   // =============================================================
@@ -2397,6 +2410,84 @@ body {
       container.appendChild(card);
     }
 
+    // ---------- weekly rhythm proposal (Phase 3.5 — see
+    // api/chat.js's propose_weekly_rhythm tool) ----------
+    // Same explicit-confirmation pattern as the override card above,
+    // but MERGES into the existing stored rhythm rather than replacing
+    // it wholesale — resource=weekly-rhythm's POST expects the
+    // COMPLETE rhythm object (not a partial patch, unlike availability-
+    // override's own weekStart-scoped shape), so this fetches the
+    // current one first and only overwrites the specific day(s) the
+    // proposal actually touches, leaving every other day exactly as
+    // the user last set it.
+    const RHYTHM_CARD_WEEKDAY_LABELS = { monday: 'Monday', tuesday: 'Tuesday', wednesday: 'Wednesday', thursday: 'Thursday', friday: 'Friday', saturday: 'Saturday', sunday: 'Sunday' };
+    const RHYTHM_CARD_DISCIPLINE_LABELS = { swim: 'Swim', run: 'Run', strength: 'Strength', bike: 'Bike', rest: 'Rest' };
+    const RHYTHM_CARD_KIND_LABELS = { easy: 'easy', interval: 'interval', long: 'long', technique: 'technique', endurance: 'endurance', brick: 'brick', strength: 'strength' };
+    function describeRhythmDayEntries(entries) {
+      if (!entries || !entries.length) return '(cleared)';
+      return entries.map((e) => (RHYTHM_CARD_DISCIPLINE_LABELS[e.discipline] || e.discipline) + (e.kind && e.discipline !== 'rest' ? ' ' + (RHYTHM_CARD_KIND_LABELS[e.kind] || e.kind) : '') + (e.note ? ' (' + e.note + ')' : '')).join(' + ');
+    }
+    function renderWeeklyRhythmProposalCard(container, proposal) {
+      const card = document.createElement('div');
+      card.className = 'chat-plan-card';
+
+      if (proposal.reason) card.appendChild(planRow('Reason', proposal.reason, ''));
+      (proposal.days || []).forEach((d) => {
+        card.appendChild(planRow(RHYTHM_CARD_WEEKDAY_LABELS[d.weekday] || d.weekday, describeRhythmDayEntries(d.entries), ''));
+      });
+
+      const actions = document.createElement('div');
+      actions.className = 'chat-plan-actions';
+      const saveBtn = document.createElement('button');
+      saveBtn.type = 'button'; saveBtn.className = 'chat-plan-save-btn';
+      saveBtn.textContent = 'Save rhythm';
+      const dismissBtn = document.createElement('button');
+      dismissBtn.type = 'button'; dismissBtn.className = 'chat-plan-dismiss-btn';
+      dismissBtn.textContent = 'Not now';
+      actions.appendChild(saveBtn);
+      actions.appendChild(dismissBtn);
+      card.appendChild(actions);
+
+      function showStatus(text, isSaved) {
+        actions.remove();
+        const status = document.createElement('div');
+        status.className = 'chat-plan-status ' + (isSaved ? 'is-saved' : 'is-dismissed');
+        status.textContent = text;
+        card.appendChild(status);
+      }
+
+      saveBtn.addEventListener('click', async () => {
+        const secret = getSecret();
+        if (!secret) { showStatus('Set your dashboard secret first (on the Cronometer page).', false); return; }
+        saveBtn.disabled = true;
+        try {
+          const r1 = await fetch('/api/sync-state?secret=' + encodeURIComponent(secret) + '&resource=weekly-rhythm');
+          const j1 = await r1.json();
+          const current = (j1 && j1.ok && j1.rhythm) ? j1.rhythm : {};
+          const merged = Object.assign({}, current);
+          (proposal.days || []).forEach((d) => {
+            if (d.entries && d.entries.length) merged[d.weekday] = d.entries;
+            else delete merged[d.weekday];
+          });
+          // resource= must be in the QUERY STRING, not just the body —
+          // same real bug this project already hit once (see
+          // renderAvailabilityOverrideCard's own comment above).
+          const r2 = await fetch('/api/sync-state?secret=' + encodeURIComponent(secret) + '&resource=weekly-rhythm', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ resource: 'weekly-rhythm', rhythm: merged }),
+          });
+          const j2 = await r2.json();
+          if (!r2.ok || !j2.ok) throw new Error((j2 && j2.error) || ('HTTP ' + r2.status));
+          showStatus('Saved ✓ — this is now part of your weekly rhythm', true);
+        } catch (e) {
+          showStatus('Could not save: ' + (e.message || String(e)), false);
+        }
+      });
+      dismissBtn.addEventListener('click', () => showStatus('Not saved', false));
+
+      container.appendChild(card);
+    }
+
     // ---------- today's session override (see api/chat.js's
     // propose_today_session tool) ----------
     // Same explicit-confirmation pattern as the cards above, but purely
@@ -2673,7 +2764,7 @@ body {
     // merged into one), so the user sees and approves every real-
     // calendar change individually. See api/chat.js's handler comment
     // on why this can't just be a single object per type.
-    function addBubble(role, text, proposedObjectives, proposedCalendarEvents, proposedRestriction, proposedTodaySession, proposedCalendarEventUpdates, proposedCalendarEventDeletes, proposedLongTermPlan, proposedPlanStatusChange, proposedAvailabilityOverride) {
+    function addBubble(role, text, proposedObjectives, proposedCalendarEvents, proposedRestriction, proposedTodaySession, proposedCalendarEventUpdates, proposedCalendarEventDeletes, proposedLongTermPlan, proposedPlanStatusChange, proposedAvailabilityOverride, proposedWeeklyRhythm) {
       emptyEl.style.display = 'none';
       const el = document.createElement('div');
       el.className = 'chat-bubble ' + role;
@@ -2682,6 +2773,7 @@ body {
       (proposedCalendarEvents || []).forEach((ev) => renderCalendarEventCard(el, ev));
       if (proposedRestriction) renderRestrictionCard(el, proposedRestriction);
       if (proposedAvailabilityOverride) renderAvailabilityOverrideCard(el, proposedAvailabilityOverride);
+      if (proposedWeeklyRhythm) renderWeeklyRhythmProposalCard(el, proposedWeeklyRhythm);
       if (proposedTodaySession) renderTodaySessionCard(el, proposedTodaySession);
       (proposedCalendarEventUpdates || []).forEach((u) => renderCalendarEventUpdateCard(el, u));
       (proposedCalendarEventDeletes || []).forEach((d) => renderCalendarEventDeleteCard(el, d));
@@ -3021,7 +3113,7 @@ body {
           : (updates.length ? (updates.length > 1 ? "Here are the changes I'm proposing:" : "Here's the change I'm proposing:")
           : (deletes.length ? (deletes.length > 1 ? "Here are the events I'm proposing to delete:" : "Here's what I'm proposing to delete:")
           : '(no reply)'))))))));
-        addBubble('assistant', json.reply || fallbackText, json.proposedObjectives || null, events, json.proposedRestriction || null, json.proposedTodaySession || null, updates, deletes, json.proposedLongTermPlan || null, json.proposedPlanStatusChange || null, json.proposedAvailabilityOverride || null);
+        addBubble('assistant', json.reply || fallbackText, json.proposedObjectives || null, events, json.proposedRestriction || null, json.proposedTodaySession || null, updates, deletes, json.proposedLongTermPlan || null, json.proposedPlanStatusChange || null, json.proposedAvailabilityOverride || null, json.proposedWeeklyRhythm || null);
         archiveToServer(chatTodayKey(), chatHistory); // best-effort, doesn't block the UI
       } catch (e) {
         typingEl.remove();

@@ -505,6 +505,68 @@ const PROPOSE_PLAN_STATUS_CHANGE_TOOL = {
     },
     required: ['id', 'status', 'goalDescription'],
   },
+};
+
+// ---------- propose_weekly_rhythm tool (Phase 3.5) ----------
+// Lets the user change their STANDING weekly pattern (which discipline
+// + kind of session happens on each weekday — e.g. "make Tuesday a
+// long run instead of interval") or set up a whole new one, through
+// the chat instead of General Settings' grid directly. Same per-
+// weekday structured shape as propose_availability_override, but this
+// is the PERMANENT pattern (no appliesTo/this-week-vs-next-week
+// concept — availability's one-week EXCEPTION and this standing
+// rhythm are deliberately separate features, never conflated). This
+// does NOT save anything by itself — the user sees the proposal and
+// explicitly confirms it, same card-confirm pattern as every other
+// propose_* tool. days omitted entirely means "no change to that
+// day" when adjusting a single day; to set a NEW day's entries where
+// none existed, include it with its full entries array.
+const RHYTHM_WEEKDAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+const RHYTHM_DISCIPLINES_CHAT = ['swim', 'run', 'strength', 'bike', 'rest'];
+const RHYTHM_KINDS_CHAT = ['easy', 'interval', 'long', 'technique', 'endurance', 'brick', 'strength'];
+const PROPOSE_WEEKLY_RHYTHM_TOOL = {
+  name: 'propose_weekly_rhythm',
+  description:
+    'Propose a change to the user\'s STANDING weekly training rhythm — which discipline and kind of session ' +
+    'happens on each weekday (e.g. "Tuesday: run interval", "Saturday: run long") — or a whole new rhythm. This ' +
+    'is the PERMANENT pattern Today\'s session and the weekly layout follow every week, NOT a one-week exception ' +
+    '(use propose_availability_override for "no pool this Tuesday" instead). This does NOT save anything by ' +
+    'itself — the user sees the proposal in the chat and explicitly chooses to save it or not. Only include the ' +
+    'day(s) actually changing — omit a day entirely to leave its current entries untouched; include a day with ' +
+    'an EMPTY entries array to clear it. Never propose a discipline the user has no recommendable activity type ' +
+    'for (check TODAY\'S DATA\'s activity types/recommendable flags first) — Bike while the user has no bicycle, ' +
+    'for example.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      days: {
+        type: 'array',
+        description: 'Only the days actually changing — see this tool\'s own description for what omitting a day vs. including it with [] means.',
+        items: {
+          type: 'object',
+          properties: {
+            weekday: { type: 'string', description: 'One of: monday, tuesday, wednesday, thursday, friday, saturday, sunday' },
+            entries: {
+              type: 'array',
+              description: 'This day\'s full session list after the change (replaces whatever was there, not merged) — usually 1 entry, occasionally 2 (e.g. a strength day that\'s also an easy swim).',
+              items: {
+                type: 'object',
+                properties: {
+                  discipline: { type: 'string', enum: RHYTHM_DISCIPLINES_CHAT },
+                  kind: { type: 'string', enum: RHYTHM_KINDS_CHAT, description: 'Omit for a "rest" entry.' },
+                  note: { type: 'string', description: 'Optional short note, e.g. "300-400m continuous blocks".' },
+                },
+                required: ['discipline'],
+              },
+            },
+          },
+          required: ['weekday', 'entries'],
+        },
+      },
+      reason: { type: 'string', description: 'Short human-readable reason for the change.' },
+    },
+    required: ['days', 'reason'],
+  },
   // Last tool in the tools array -> caches every tool definition up to
   // and including this one (see the prompt-caching note in the handler
   // below). Tool definitions never change between requests, so this is
@@ -669,6 +731,39 @@ function normalizeProposedAvailabilityOverride(raw) {
   }).filter(Boolean);
   return {
     appliesTo,
+    days,
+    reason: typeof r.reason === 'string' ? r.reason.slice(0, 300) : '',
+  };
+}
+
+// Defensive normalization for propose_weekly_rhythm. Returns
+// {days: [{weekday, entries}], reason} — a day's `entries` REPLACES
+// that day's full list (never merged with whatever the client already
+// has), matching the tool's own description. Invalid entries are
+// dropped individually rather than rejecting the whole day; a day
+// whose entries all turn out invalid still keeps `entries: []`
+// (explicit clear), distinct from omitting the day entirely (no
+// change) — the frontend's own confirm step is what actually decides
+// which weekdays to send to api/sync-state.js's resource=weekly-rhythm.
+function normalizeProposedWeeklyRhythm(raw) {
+  const r = raw || {};
+  const rawDays = Array.isArray(r.days) ? r.days : [];
+  const days = rawDays.slice(0, 7).map((d) => {
+    if (!d || typeof d !== 'object' || !RHYTHM_WEEKDAYS.includes(d.weekday)) return null;
+    const rawEntries = Array.isArray(d.entries) ? d.entries : [];
+    const entries = rawEntries.slice(0, 3).map((e) => {
+      if (!e || typeof e !== 'object' || !RHYTHM_DISCIPLINES_CHAT.includes(e.discipline)) return null;
+      const out = { discipline: e.discipline };
+      if (e.kind !== undefined && e.kind !== null) {
+        if (!RHYTHM_KINDS_CHAT.includes(e.kind)) return null;
+        out.kind = e.kind;
+      }
+      if (typeof e.note === 'string' && e.note.trim()) out.note = e.note.trim().slice(0, 140);
+      return out;
+    }).filter(Boolean);
+    return { weekday: d.weekday, entries };
+  }).filter(Boolean);
+  return {
     days,
     reason: typeof r.reason === 'string' ? r.reason.slice(0, 300) : '',
   };
@@ -1123,6 +1218,18 @@ function buildStaticSystemPrompt() {
     'tell them to edit it directly in General Settings\' Training availability section — do not call this ' +
     'tool for something meant to apply every week going forward. When you do call it, also say a short ' +
     'summary sentence in your normal reply text (the proposal is shown as its own card with a Save button).\n\n' +
+    'WEEKLY RHYTHM: TODAY\'S DATA\'s own "weeklyRhythm" field (when present and non-empty) is the user\'s ' +
+    'STANDING pattern of which discipline + kind of session happens on each weekday (e.g. "tuesday: run ' +
+    'interval", "saturday: run long") — this is DIFFERENT from availability above (which only says how much ' +
+    'time/which disciplines are POSSIBLE, never which one actually happens) and is PERMANENT, not a one-week ' +
+    'thing (use propose_availability_override instead for a single-week exception). When the user wants to ' +
+    'change which kind of session happens on a day, or set up a rhythm from scratch ("make Tuesdays interval ' +
+    'days", "I want a fixed weekly pattern"), call propose_weekly_rhythm with ONLY the day(s) actually ' +
+    'changing (include a day with its full new entries list to set/replace it, omit any day that stays the ' +
+    'same) and a short reason. Never propose a discipline the user has no recommendable activity type for — ' +
+    'check TODAY\'S DATA\'s activity types first (e.g. never propose Bike while the user has no bicycle). ' +
+    'When you do call it, also say a short summary sentence in your normal reply text (the proposal is shown ' +
+    'as its own card with a Save button).\n\n' +
     'TODAY\'S SESSION OVERRIDE: the user can also directly override what Training\'s "Today\'s session" ' +
     'card currently recommends — e.g. "today I want to run 10km instead, I have great recovery", "put Push ' +
     '+ 5K in today\'s session", "my knee feels fine now, change today\'s pick to Legs". This is a DIFFERENT ' +
@@ -1248,7 +1355,7 @@ export default async function handler(req, res) {
           output_config: { effort: 'medium' },
           system: systemBlocks,
           messages,
-          tools: [{ type: 'memory_20250818', name: 'memory' }, PROPOSE_OBJECTIVES_TOOL, PROPOSE_CALENDAR_EVENT_TOOL, PROPOSE_CALENDAR_EVENT_UPDATE_TOOL, PROPOSE_CALENDAR_EVENT_DELETE_TOOL, PROPOSE_RESTRICTION_TOOL, PROPOSE_AVAILABILITY_OVERRIDE_TOOL, PROPOSE_TODAY_SESSION_TOOL, PROPOSE_LONG_TERM_PLAN_TOOL, PROPOSE_PLAN_STATUS_CHANGE_TOOL],
+          tools: [{ type: 'memory_20250818', name: 'memory' }, PROPOSE_OBJECTIVES_TOOL, PROPOSE_CALENDAR_EVENT_TOOL, PROPOSE_CALENDAR_EVENT_UPDATE_TOOL, PROPOSE_CALENDAR_EVENT_DELETE_TOOL, PROPOSE_RESTRICTION_TOOL, PROPOSE_AVAILABILITY_OVERRIDE_TOOL, PROPOSE_TODAY_SESSION_TOOL, PROPOSE_LONG_TERM_PLAN_TOOL, PROPOSE_PLAN_STATUS_CHANGE_TOOL, PROPOSE_WEEKLY_RHYTHM_TOOL],
         }),
       });
 
@@ -1296,6 +1403,7 @@ export default async function handler(req, res) {
       let proposedTodaySession = null;
       let proposedLongTermPlan = null;
       let proposedPlanStatusChange = null;
+      let proposedWeeklyRhythm = null; // singular, same reasoning as proposedAvailabilityOverride above
       const toolResults = [];
       for (const toolUse of toolUses) {
         if (toolUse.name === 'propose_training_objectives') {
@@ -1376,6 +1484,15 @@ export default async function handler(req, res) {
           });
           continue;
         }
+        if (toolUse.name === 'propose_weekly_rhythm') {
+          proposedWeeklyRhythm = normalizeProposedWeeklyRhythm(toolUse.input);
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: toolUse.id,
+            content: 'Proposal shown to the user in the chat UI for review. Not saved automatically — only the user can save it.',
+          });
+          continue;
+        }
         if (toolUse.name === 'propose_today_session') {
           proposedTodaySession = normalizeProposedTodaySession(toolUse.input);
           toolResults.push({
@@ -1423,7 +1540,7 @@ export default async function handler(req, res) {
       }
       messages.push({ role: 'user', content: toolResults });
 
-      if (proposedObjectives || proposedCalendarEvents.length || proposedCalendarEventUpdates.length || proposedCalendarEventDeletes.length || proposedRestriction || proposedAvailabilityOverride || proposedTodaySession || proposedLongTermPlan || proposedPlanStatusChange) {
+      if (proposedObjectives || proposedCalendarEvents.length || proposedCalendarEventUpdates.length || proposedCalendarEventDeletes.length || proposedRestriction || proposedAvailabilityOverride || proposedTodaySession || proposedLongTermPlan || proposedPlanStatusChange || proposedWeeklyRhythm) {
         const textBlock = (data.content || []).find((b) => b.type === 'text');
         const responseBody = { reply: textBlock ? textBlock.text : '', history: messages };
         if (proposedObjectives) responseBody.proposedObjectives = proposedObjectives;
@@ -1435,6 +1552,7 @@ export default async function handler(req, res) {
         if (proposedTodaySession) responseBody.proposedTodaySession = proposedTodaySession;
         if (proposedLongTermPlan) responseBody.proposedLongTermPlan = proposedLongTermPlan;
         if (proposedPlanStatusChange) responseBody.proposedPlanStatusChange = proposedPlanStatusChange;
+        if (proposedWeeklyRhythm) responseBody.proposedWeeklyRhythm = proposedWeeklyRhythm;
         return res.status(200).json(responseBody);
       }
     }
