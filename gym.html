@@ -5487,6 +5487,20 @@ img, video, canvas, svg { max-width: 100%; }
     populateActivityTypeSelect();
     runRender();
     renderTrainingHistory();
+    // BUG FIX (reported): the Weekly Objectives card's first render (a
+    // few lines below, synchronous, at page-load time) necessarily runs
+    // BEFORE this async fetch resolves, using only the built-in
+    // placeholder `activityTypes = [{id:'running'}]` declared above.
+    // Every real activity's type lookup failed to match that
+    // placeholder and (pre-fix) fell back to being counted as Run.
+    // autoRebuildStaleWeeklyPlanIfNeeded() does NOT reliably re-render
+    // once the real types land — it returns early whenever the active
+    // plan's discipline fingerprint already matches the stored one
+    // (the common case), which is exactly when a stale, wrongly-
+    // classified first render would otherwise persist indefinitely.
+    // Re-rendering here, now that the real types are in, fixes the bars
+    // regardless of fingerprint staleness.
+    renderWeeklyProgress();
   });
 
   // ============================================================
@@ -5633,13 +5647,46 @@ img, video, canvas, svg { max-width: 100%; }
   // Playwright run that showed the progress bars silently failing to
   // render on page load with this exact error.
   const DISCIPLINE_NAME_PATTERNS = { swim: /swim/i, bike: /\b(bike|cycl|ride|spin)/i, run: /\b(run|jog)/i };
+  // BUG FIX (reported): this used to resolve the type via the LENIENT
+  // activityTypeById(), which silently falls back to activityTypes[0]
+  // (whatever type happens to be first — commonly "Running") for ANY
+  // id it can't find in the currently-loaded activityTypes list. That
+  // made the `if (!type) return null` guard below dead code in
+  // practice: an activity logged under a type that's since been
+  // renamed, deleted, or just not yet loaded (e.g. the brief window
+  // before fetchActivityTypes() resolves at page load — see its own
+  // .then() callback's comment) got silently counted as a RUN, raw
+  // distance and all. A swim entry's raw meters value then landed
+  // directly in the Run km total (11.9 real run km + 2000 raw swim
+  // meters = "2011.9 of 20 km"), and the same entry stopped matching
+  // 'swim' at all. Classification now uses a STRICT lookup — no match
+  // in the real list means no discipline, period; it never defaults
+  // to Running. See also logUnmatchedActivitiesThisWeek() below, which
+  // surfaces exactly which entries (if any) this affects.
   function disciplineForActivityType(activityTypeId) {
-    const type = activityTypeById(activityTypeId);
+    const type = activityTypes.find((t) => t.id === activityTypeId);
     if (!type) return null;
     for (const key of Object.keys(DISCIPLINE_NAME_PATTERNS)) {
       if (DISCIPLINE_NAME_PATTERNS[key].test(type.name || '')) return key;
     }
     return null;
+  }
+  // Permanent, lightweight diagnostic (not the temporary debug box from
+  // earlier rounds, which was removed once confirmed) — logs any
+  // activity entry logged this week whose activityTypeId doesn't match
+  // ANY currently-loaded activity type, so a future "why isn't this
+  // counted" question doesn't require guesswork. These entries count
+  // toward NO discipline (never toward Run) — see disciplineForActivityType.
+  function logUnmatchedActivitiesThisWeek() {
+    try {
+      const monday = thisWeekMondayKey();
+      const unmatched = activityEntries.filter((a) => a.dateKey >= monday && !activityTypes.some((t) => t.id === a.activityTypeId));
+      if (unmatched.length) {
+        console.warn('[weekly-plan] ' + unmatched.length + ' activity entr' + (unmatched.length === 1 ? 'y' : 'ies')
+          + ' this week reference an activityTypeId not present in the current activity-types list — counted toward NO discipline:',
+          unmatched.map((a) => ({ id: a.id, activityTypeId: a.activityTypeId, dateKey: a.dateKey, distanceKm: a.distanceKm })));
+      }
+    } catch (e) {}
   }
 
   function computeWeekProgress(plan) {
@@ -5739,6 +5786,7 @@ img, video, canvas, svg { max-width: 100%; }
   // — verified via grep before touching anything here) — so this is
   // purely additive, read by the card's rendering only.
   function computeWeekProgressByDiscipline(plan) {
+    logUnmatchedActivitiesThisWeek();
     const monday = thisWeekMondayKey();
     const weekActivities = activityEntries.filter((a) => a.dateKey >= monday);
     // BUG FIX (reported) — this used to always compute `meters = km *
@@ -6444,7 +6492,18 @@ img, video, canvas, svg { max-width: 100%; }
       if (!silent) { btn.disabled = false; btn.classList.remove('is-spinning'); }
     }
   }
-  $$('tpGenerateBtn').addEventListener('click', generateWeeklyPlan);
+  // BUG FIX (reported): addEventListener passes the click MouseEvent as
+  // generateWeeklyPlan's first argument — which IS its `silent`
+  // parameter. A truthy Event made every `if (!silent)` check inside
+  // generateWeeklyPlan false on every manual click, silently
+  // suppressing both the spinner/disabled-button UI AND the failure
+  // alert — so if the request failed (e.g. activeWeekDisciplines
+  // resolved to null, or the AI call errored) nothing was saved,
+  // nothing re-rendered, and the user saw no error at all: tapping
+  // refresh looked like it did nothing, identical stale bars and
+  // rationale left in place. Wrapped so a manual click always calls
+  // generateWeeklyPlan() with no arguments (silent === undefined).
+  $$('tpGenerateBtn').addEventListener('click', () => generateWeeklyPlan());
   renderWeeklyProgress();
 
   // BUG FIX (reported, round 3 — confirmed via the round-2 debug box
@@ -6472,6 +6531,19 @@ img, video, canvas, svg { max-width: 100%; }
   // Debug instrumentation from rounds 2-3 of this bug has been removed
   // now that the real cause (the fingerprint comparison above) is
   // confirmed fixed and verified live.
+  // BUG FIX (reported): the fingerprint only tracks discipline AMOUNTS
+  // (run/bike/swim/strength numbers), never the rationale text — so a
+  // plan saved with a mid-word-truncated rationale (the old bare
+  // .slice(0,600) in api/training.js, fixed server-side via
+  // truncateAtWordBoundary) would stay cached and displayed FOREVER
+  // once its numbers matched the active plan, since nothing else ever
+  // flags it as stale. A rationale that doesn't end in terminal
+  // punctuation is a strong signal of exactly that old cut — treated
+  // as stale here too, so it gets regenerated on the next load/refresh
+  // instead of persisting indefinitely.
+  function rationaleLooksTruncated(rationale) {
+    return !!(rationale && rationale.trim() && !/[.!?…"')\]]\s*$/.test(rationale.trim()));
+  }
   let attemptedAutoRebuild = false;
   async function autoRebuildStaleWeeklyPlanIfNeeded() {
     if (attemptedAutoRebuild) return;
@@ -6486,7 +6558,8 @@ img, video, canvas, svg { max-width: 100%; }
       if (!resolved) return; // genuinely no active-plan disciplines for this week — the legacy fallback IS the correct display
       const activeWeekDisciplines = resolved.disciplines;
       const currentFingerprint = buildDisciplinesFingerprint(activeWeekDisciplines);
-      if (currentFingerprint === stored.plan.disciplinesFingerprint) return; // already fresh — no AI call needed
+      const fingerprintMatches = currentFingerprint === stored.plan.disciplinesFingerprint;
+      if (fingerprintMatches && !rationaleLooksTruncated(stored.plan.rationale)) return; // already fresh — no AI call needed
       const throttle = loadAutorebuildThrottle();
       const recentlyAttempted = !!(throttle && throttle.fingerprint === currentFingerprint && throttle.weekStart === thisWeekMondayKey() && (Date.now() - throttle.attemptedAt) < AUTOREBUILD_COOLDOWN_MS);
       if (recentlyAttempted) {
