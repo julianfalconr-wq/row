@@ -6542,6 +6542,19 @@ img, video, canvas, svg { max-width: 100%; }
   // phase: no HARD backlog session, and a much smaller spare-minutes
   // allowance than a normal day.
   const REBALANCE_PADEL_MAX_EXTRA_MIN = 20;
+  // A continuous-volume discipline (run/bike) splitting across days can
+  // leave a tiny trailing remainder (e.g. 0.6km) that isn't a real
+  // session on its own. Below this, a chunk is merged into the
+  // nearest (immediately preceding) day's chunk if that day's own
+  // cardio cap can absorb the combined size without exceeding
+  // REBALANCE_MAX_EXTRA_MIN_PER_DAY; otherwise it is reported as
+  // "too small to schedule" rather than placed. Swim's own equivalent
+  // minimum is simply "one whole session" — already guaranteed by
+  // construction (a swim backlog session is always placed as exactly
+  // one full perSessionMeters unit, never a fraction of one), so no
+  // separate constant/logic is needed for it; still printed in the
+  // cap report below for transparency.
+  const REBALANCE_MIN_SESSION_KM = 3; // applies to run and bike
 
   function dayHasPadel(allEvents, dateKeyStr) {
     return (allEvents || []).some((ev) => {
@@ -6690,7 +6703,7 @@ img, video, canvas, svg { max-width: 100%; }
   // backlog never introduces a new hard session, and the rhythm's own
   // hard sessions are never touched or moved by this function.
   function buildRebalanceLayout(outstanding, capacity, weeklyRhythm, restrictions, activeWeekDisciplines, isDeload) {
-    const cap = { maxExtraMinPerDay: REBALANCE_MAX_EXTRA_MIN_PER_DAY, tomorrowMaxShare: REBALANCE_TOMORROW_MAX_SHARE, padelMaxExtraMin: REBALANCE_PADEL_MAX_EXTRA_MIN };
+    const cap = { maxExtraMinPerDay: REBALANCE_MAX_EXTRA_MIN_PER_DAY, tomorrowMaxShare: REBALANCE_TOMORROW_MAX_SHARE, padelMaxExtraMin: REBALANCE_PADEL_MAX_EXTRA_MIN, minSessionKm: REBALANCE_MIN_SESSION_KM, minSessionSwim: 'one whole session' };
     const discKeys = Object.keys(outstanding);
     if (!discKeys.length) return { layout: [], cantFit: [], movedNote: '', cap };
     if (isDeload) {
@@ -6768,23 +6781,68 @@ img, video, canvas, svg { max-width: 100%; }
           if (aRhy !== bRhy) return bRhy - aRhy;
           return a.dateKey < b.dateKey ? -1 : 1;
         });
-        const movedDays = [];
+        // Chunks are tracked (not finalized into movedParts/cantFit)
+        // until the minimum-session pass below has had a chance to
+        // merge or drop a too-small trailing one.
+        const chunks = []; // { day, session, km }
         candidates.forEach((day) => {
           if (remainingKm <= 0) return;
           const roomMin = cardioRoomOnDay(day);
           if (roomMin <= 0) return;
           const roomKm = Math.round((roomMin / runPace) * 10) / 10;
           const takeKm = Math.min(remainingKm, roomKm);
-          if (takeKm < 0.5) return; // not worth a near-zero session
+          if (takeKm <= 0) return; // rounds to literally nothing -- the minimum-session pass below handles anything above zero but still too small
           const estMinutes = Math.round(takeKm * runPace);
-          day.sessions.push({ discipline: 'run', kind: 'easy', targetAmount: takeKm, unit: 'km', estMinutes, activityTypeId: outstanding.run.activityTypeId, activityName: outstanding.run.activityName, isBacklog: true });
+          const session = { discipline: 'run', kind: 'easy', targetAmount: takeKm, unit: 'km', estMinutes, activityTypeId: outstanding.run.activityTypeId, activityName: outstanding.run.activityName, isBacklog: true };
+          day.sessions.push(session);
           day.backlogUsed += estMinutes;
           day.totalBacklogUsed += estMinutes;
           remainingKm = Math.round((remainingKm - takeKm) * 10) / 10;
-          movedDays.push(day.weekday);
+          chunks.push({ day, session, km: takeKm });
         });
-        const placedKm = Math.round((outstanding.run.outstandingKm - remainingKm) * 10) / 10;
+        // Minimum-session pass (SMALL FIX) — a chunk below
+        // REBALANCE_MIN_SESSION_KM is never left as its own standalone
+        // session. Walk from the last (most recently placed, i.e. the
+        // trailing remainder) backward: merge it into the NEAREST
+        // preceding day's chunk if that day's cardio cap can absorb
+        // the combined size without exceeding
+        // REBALANCE_MAX_EXTRA_MIN_PER_DAY; otherwise drop it and
+        // report it as too small to schedule, never silently keep it
+        // and never let the merge itself exceed the cap.
+        const tooSmallKmParts = [];
+        for (let i = chunks.length - 1; i >= 0; i--) {
+          if (chunks[i].km >= REBALANCE_MIN_SESSION_KM) continue;
+          const small = chunks[i];
+          const prev = chunks[i - 1];
+          let merged = false;
+          if (prev) {
+            const mergedKm = Math.round((prev.km + small.km) * 10) / 10;
+            const mergedMinutes = Math.round(mergedKm * runPace);
+            const prevDayCardioCap = prev.day.isPadel ? REBALANCE_PADEL_MAX_EXTRA_MIN : REBALANCE_MAX_EXTRA_MIN_PER_DAY;
+            const prevDayOtherCardioMinutes = prev.day.backlogUsed - prev.session.estMinutes; // any OTHER cardio already on that day, excluding prev's own chunk
+            if (prevDayOtherCardioMinutes + mergedMinutes <= prevDayCardioCap) {
+              prev.day.backlogUsed += mergedMinutes - prev.session.estMinutes;
+              prev.day.totalBacklogUsed += mergedMinutes - prev.session.estMinutes;
+              prev.session.targetAmount = mergedKm;
+              prev.session.estMinutes = mergedMinutes;
+              prev.km = mergedKm;
+              merged = true;
+            }
+          }
+          // Remove the small chunk's own session from its day either way.
+          small.day.sessions = small.day.sessions.filter((s) => s !== small.session);
+          small.day.backlogUsed -= small.session.estMinutes;
+          small.day.totalBacklogUsed -= small.session.estMinutes;
+          chunks.splice(i, 1);
+          if (!merged) tooSmallKmParts.push(small.km);
+        }
+        const placedKm = Math.round(chunks.reduce((s, c) => s + c.km, 0) * 10) / 10;
+        const movedDays = chunks.map((c) => c.day.weekday);
         if (placedKm > 0) movedParts.push(placedKm + 'km of run moved to ' + movedDays.join('/'));
+        if (tooSmallKmParts.length) {
+          const tooSmallKm = Math.round(tooSmallKmParts.reduce((s, k) => s + k, 0) * 10) / 10;
+          cantFit.push({ discipline: 'run', reason: tooSmallKm + 'km too small to schedule on its own.' });
+        }
         if (remainingKm > 0) cantFit.push({ discipline: 'run', reason: remainingKm + 'km could not fit this week’s remaining days/budget.' });
       }
     }
@@ -6893,7 +6951,7 @@ img, video, canvas, svg { max-width: 100%; }
       const rhythmExceedsNotes = rhythmExceedsTargetNotes(activeWeekDisciplines, weeklyRhythm);
       const deload = isDeloadWeek(raw.note);
 
-      let result = { layout: [], cantFit: [], movedNote: '', cap: { maxExtraMinPerDay: REBALANCE_MAX_EXTRA_MIN_PER_DAY, tomorrowMaxShare: REBALANCE_TOMORROW_MAX_SHARE, padelMaxExtraMin: REBALANCE_PADEL_MAX_EXTRA_MIN } };
+      let result = { layout: [], cantFit: [], movedNote: '', cap: { maxExtraMinPerDay: REBALANCE_MAX_EXTRA_MIN_PER_DAY, tomorrowMaxShare: REBALANCE_TOMORROW_MAX_SHARE, padelMaxExtraMin: REBALANCE_PADEL_MAX_EXTRA_MIN, minSessionKm: REBALANCE_MIN_SESSION_KM, minSessionSwim: 'one whole session' } };
       if (Object.keys(outstanding).length) {
         const ready = await waitForGatherTodayContext(3000);
         if (ready) {
