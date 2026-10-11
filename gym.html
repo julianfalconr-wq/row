@@ -1756,11 +1756,23 @@ img, video, canvas, svg { max-width: 100%; }
     </div>
     <div id="tpWeeklyEmpty" class="tp-empty">No objectives generated yet this week — tap the refresh icon to have Claude build a strength + triathlon training plan from your recent history.</div>
     <div id="tpWeeklyBody" style="display:none">
+      <!-- BUG FIX (transition week, reported) — shown when the active
+           plan has no checkpoint for the current Mon-Sun week (e.g.
+           the gap between an old plan ending and a restarted plan's
+           own first checkpoint starting next Monday). -->
+      <div class="tp-capacity-trim-note" id="tpWeekTransitionNote" style="display:none"></div>
       <!-- Phase 3.4 (amendment B): "Available this week: 6h20 across 5
            days", plus a trim note when the week couldn't hold the
            full target. Hidden entirely when capacity wasn't computed
            (no availability template, or a plan generated before this
-           phase). -->
+           phase). BUG FIX (reported): this used to render from the
+           plan's own CACHED availableSummary (a one-time snapshot
+           from whenever the plan was last actually generated), so a
+           page left open since Saturday kept showing Saturday's "6h00
+           across 2 days" into Sunday with only 1 real day left. Now
+           always recomputed live (see refreshCapacityLineLive) —
+           hidden here, filled in asynchronously once real numbers
+           resolve. -->
       <div class="tp-capacity-line" id="tpCapacityLine" style="display:none">
         <span id="tpCapacityText"></span>
         <span class="tp-capacity-trim-note" id="tpCapacityTrimNote" style="display:none"></span>
@@ -5906,6 +5918,37 @@ img, video, canvas, svg { max-width: 100%; }
     };
   }
 
+  // BUG FIX (reported) — recomputes "Available this week" LIVE on
+  // every render, from today's own real remaining time (nowTime +
+  // dayRingSchedule's wake/sleep window) and real calendar gaps
+  // through Sunday, via the SAME buildWeekCapacity the rebalancer
+  // already uses — never the plan's own cached availableSummary
+  // snapshot (see renderWeeklyProgress's own comment on why that went
+  // stale). Async/fire-and-forget on purpose: renderWeeklyProgress
+  // itself stays synchronous (many call sites, none awaited) and
+  // simply hides the line until this resolves.
+  async function refreshCapacityLineLive(plan) {
+    if (!plan) return;
+    try {
+      const ready = await waitForGatherTodayContext(3000);
+      if (!ready) return;
+      const ctx = await window.gatherTodayContext();
+      const capacity = await buildWeekCapacity(ctx, null);
+      if (!capacity.configured) { $$('tpCapacityLine').style.display = 'none'; return; }
+      const totalMin = capacity.totalFreeMin;
+      const h = Math.floor(totalMin / 60), m = Math.round(totalMin % 60);
+      const timeLabel = h > 0 ? (h + 'h' + String(m).padStart(2, '0')) : (m + 'm');
+      $$('tpCapacityLine').style.display = 'flex';
+      $$('tpCapacityText').textContent = 'Available this week: ' + timeLabel + ' across ' + capacity.daysWithTimeCount + ' day' + (capacity.daysWithTimeCount === 1 ? '' : 's');
+      // The trim note (whether the AI had to cut a weekly TARGET to
+      // fit, decided once at generation time) is a plan-content fact,
+      // not a live-clock one — still read from the cached plan.
+      const hasTrim = typeof plan.capacityNote === 'string' && plan.capacityNote;
+      $$('tpCapacityTrimNote').style.display = hasTrim ? 'inline' : 'none';
+      $$('tpCapacityTrimNote').textContent = hasTrim ? plan.capacityNote : '';
+    } catch (e) {}
+  }
+
   function renderWeeklyProgress() {
     const stored = loadStoredPlan();
     const isCurrentWeek = !!(stored && stored.weekStart === thisWeekMondayKey() && stored.plan);
@@ -6019,24 +6062,24 @@ img, video, canvas, svg { max-width: 100%; }
       '</div>'
     )).join('');
 
-    // Phase 3.4 (amendment B) — "Available this week: 6h20 across 5
-    // days" (spec's exact wording) + a trim note when anything had to
-    // be cut to fit. Absent entirely on a plan generated before this
-    // phase (no .availableSummary key at all) — hidden, not an empty line.
-    if (plan.availableSummary) {
-      const totalMin = plan.availableSummary.totalFreeMin;
-      const h = Math.floor(totalMin / 60), m = Math.round(totalMin % 60);
-      // Spec's own exact example format: "6h20" (no trailing 'm' when
-      // hours are present; zero-padded minutes), "45m" alone below 1h.
-      const timeLabel = h > 0 ? (h + 'h' + String(m).padStart(2, '0')) : (m + 'm');
-      $$('tpCapacityLine').style.display = 'flex';
-      $$('tpCapacityText').textContent = 'Available this week: ' + timeLabel + ' across ' + plan.availableSummary.daysWithTimeCount + ' day' + (plan.availableSummary.daysWithTimeCount === 1 ? '' : 's');
-      const hasTrim = typeof plan.capacityNote === 'string' && plan.capacityNote;
-      $$('tpCapacityTrimNote').style.display = hasTrim ? 'inline' : 'none';
-      $$('tpCapacityTrimNote').textContent = hasTrim ? plan.capacityNote : '';
-    } else {
-      $$('tpCapacityLine').style.display = 'none';
-    }
+    // BUG FIX (reported) — "Available this week" used to render from
+    // plan.availableSummary, a ONE-TIME snapshot cached on the plan
+    // from whenever it was last actually (re)generated — so a page
+    // left open since Saturday kept showing Saturday's "6h00 across 2
+    // days" into Sunday with only 1 real day (and far less of it)
+    // left, never refreshing on its own. Hidden here synchronously;
+    // refreshCapacityLineLive (below) recomputes it live on every
+    // render instead, from TODAY's own real remaining time + calendar.
+    $$('tpCapacityLine').style.display = 'none';
+    refreshCapacityLineLive(plan);
+
+    // BUG FIX (transition week, reported) — the active plan has no
+    // checkpoint for the current Mon-Sun week (set by
+    // autoRebuildStaleWeeklyPlanIfNeeded/generateWeeklyPlan, never
+    // computed here).
+    const hasTransitionNote = typeof plan.weekTransitionNote === 'string' && plan.weekTransitionNote;
+    $$('tpWeekTransitionNote').style.display = hasTransitionNote ? 'block' : 'none';
+    $$('tpWeekTransitionNote').textContent = hasTransitionNote ? plan.weekTransitionNote : '';
 
     // Phase 3.5 — rhythm/plan session-count mismatch, e.g. "3 swims in
     // a 2-swim week". Absent entirely when there's nothing to report
@@ -6076,12 +6119,16 @@ img, video, canvas, svg { max-width: 100%; }
 
     $$('tpRationale').textContent = plan.rationale || '';
 
-    // Phase 4.1 — missed-session rebalancing. plan.rebalance is
-    // entirely optional (absent on every plan generated before this
-    // phase, or a week with nothing outstanding) -- hides the whole
-    // section rather than rendering an empty one.
+    // Phase 4.1 — missed-session rebalancing. plan.rebalance itself is
+    // optional (absent on every plan generated before this phase, or
+    // simply never computed yet this week) -- ONLY that genuinely
+    // empty state hides the section (the always-visible button right
+    // above it is the explicit invitation to run it). BUG FIX
+    // (reported): once rb exists, it must ALWAYS show something —
+    // sessions, an explicit can't-fit list, or rb.emptyReason — never
+    // silently render blank despite real outstanding work.
     const rb = plan.rebalance;
-    if (rb && (rb.layout.length || rb.cantFit.length || rb.isDeloadWeek)) {
+    if (rb) {
       $$('tpRebalanceSection').style.display = 'block';
       const WEEKDAY_SHORT = { sunday: 'Sun', monday: 'Mon', tuesday: 'Tue', wednesday: 'Wed', thursday: 'Thu', friday: 'Fri', saturday: 'Sat' };
       $$('tpRebalanceDays').innerHTML = rb.layout.length
@@ -6092,7 +6139,7 @@ img, video, canvas, svg { max-width: 100%; }
             }).join('');
             return '<div class="tp-layout-day"><span class="tp-layout-day-label">' + (WEEKDAY_SHORT[day.weekday] || day.weekday) + '</span><span class="tp-layout-day-sessions">' + sessionsHtml + '</span></div>';
           }).join('')
-        : '<div class="tp-layout-day"><span class="tp-layout-day-sessions">Nothing moved.</span></div>';
+        : '<div class="tp-layout-day"><span class="tp-layout-day-sessions">' + escapeHtml(rb.emptyReason || 'Nothing moved.') + '</span></div>';
       $$('tpRebalanceMoved').style.display = rb.movedNote ? 'block' : 'none';
       $$('tpRebalanceMoved').textContent = rb.movedNote || '';
       $$('tpRebalanceCantFit').style.display = rb.cantFit.length ? 'block' : 'none';
@@ -6132,6 +6179,26 @@ img, video, canvas, svg { max-width: 100%; }
     if (!activePlans.length) return null;
     return activePlans.reduce((a, b) => (b.startDate > a.startDate ? b : a));
   }
+  // BUG FIX (transition week, reported) — human-readable note for the
+  // gap between an old plan ending and a restarted plan's own first
+  // checkpoint starting next Monday. Pure formatting, no logic beyond
+  // picking which of the two wordings applies; `transition` is
+  // whatever fetchActiveWeekDisciplines/resolveActiveWeekDisciplines
+  // returned (null when there is no transition at all this week).
+  const WEEK_TRANSITION_WEEKDAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const WEEK_TRANSITION_MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  function formatTransitionDate(dateKeyStr) {
+    if (!dateKeyStr) return '';
+    const d = DayLib.parseDateKey(dateKeyStr);
+    return WEEK_TRANSITION_WEEKDAY_SHORT[d.getDay()] + ' ' + d.getDate() + ' ' + WEEK_TRANSITION_MONTH_SHORT[d.getMonth()];
+  }
+  function buildWeekTransitionNote(transition) {
+    if (!transition) return null;
+    const newDate = formatTransitionDate(transition.newPlanStartDate);
+    return transition.fromPreviousPlan
+      ? 'Finishing last week of the previous plan; new plan starts ' + newDate + '.'
+      : 'New plan starts ' + newDate + '.';
+  }
   async function fetchActiveWeekDisciplines() {
     const secret = getSecret();
     if (!secret) return null;
@@ -6140,17 +6207,41 @@ img, video, canvas, svg { max-width: 100%; }
       const j = await r.json();
       const plans = (j && j.ok && Array.isArray(j.plans)) ? j.plans : [];
       const p = resolveActivePlan(plans);
-      if (!p || !Array.isArray(p.weeklyCheckpoints)) return null;
+      if (!p || !Array.isArray(p.weeklyCheckpoints)) return null; // genuinely no active plan at all
       const todayK = DayLib.effectiveDateKey();
       // BUG FIX: canonical (Mon-Sun) week match, not the checkpoint's
       // raw stored window — see checkpointCanonicalRange's own comment.
-      const cp = p.weeklyCheckpoints.find((c) => {
+      const findCpForWeek = (plan) => (plan.weeklyCheckpoints || []).find((c) => {
         if (!c.weekStartDate) return false;
         const range = checkpointCanonicalRange(c);
         return todayK >= range.start && todayK <= range.end;
       });
+      const cp = findCpForWeek(p);
       if (cp && cp.disciplines) return { disciplines: cp.disciplines, note: typeof cp.note === 'string' ? cp.note : null };
-      return null;
+      // BUG FIX (transition week, reported) — the resolved ACTIVE plan
+      // (latest startDate) genuinely has no checkpoint covering the
+      // CURRENT canonical week, e.g. the week between a restarted
+      // plan's own first checkpoint (next Monday) and today. That is
+      // NOT the same as "no active plan at all" — the cached numbers
+      // from whichever plan/week this was LAST computed under are no
+      // longer relevant and must never be kept silently. Fall back
+      // (read-only — never writes, never changes which plan is
+      // "active") to the MOST RECENT plan of ANY status whose own
+      // checkpoint DOES cover this week, so real, still-correct
+      // numbers (the previous plan's own final week) are used instead
+      // of stale ones. "Most recent" = latest startDate among
+      // candidates, same convention as resolveActivePlan.
+      const candidates = plans.filter((other) => other.id !== p.id && Array.isArray(other.weeklyCheckpoints) && findCpForWeek(other));
+      const prevPlan = candidates.length ? candidates.reduce((a, b) => (b.startDate > a.startDate ? b : a)) : null;
+      const prevCp = prevPlan ? findCpForWeek(prevPlan) : null;
+      if (prevCp && prevCp.disciplines) {
+        return {
+          disciplines: prevCp.disciplines,
+          note: typeof prevCp.note === 'string' ? prevCp.note : null,
+          transition: { fromPreviousPlan: true, newPlanStartDate: p.startDate },
+        };
+      }
+      return { disciplines: null, note: null, transition: { fromPreviousPlan: false, newPlanStartDate: p.startDate } };
     } catch (e) { return null; }
   }
   // Inverse of disciplineForActivityType() (Phase 2) — given a
@@ -6180,6 +6271,13 @@ img, video, canvas, svg { max-width: 100%; }
   async function resolveActiveWeekDisciplines(recommendableActivityTypes) {
     const raw = await fetchActiveWeekDisciplines();
     if (!raw) return null;
+    // BUG FIX (transition week) — raw.disciplines can now legitimately
+    // be null (no checkpoint at all, from the active plan OR any
+    // previous one) while raw itself is still truthy (it carries
+    // raw.transition). Pass that through so callers can show the
+    // transition note / skip the AI rebuild without crashing on
+    // raw.disciplines[disc] below.
+    if (!raw.disciplines) return { disciplines: null, note: null, transition: raw.transition || null };
     const activeWeekDisciplines = {};
     ['run', 'bike', 'swim'].forEach((disc) => {
       const d = raw.disciplines[disc];
@@ -6188,7 +6286,7 @@ img, video, canvas, svg { max-width: 100%; }
       activeWeekDisciplines[disc] = Object.assign({}, d, { activityTypeId: type ? type.id : null });
     });
     if (raw.disciplines.strength) activeWeekDisciplines.strength = raw.disciplines.strength;
-    return { disciplines: activeWeekDisciplines, note: raw.note };
+    return { disciplines: activeWeekDisciplines, note: raw.note, transition: raw.transition || null };
   }
   // BUG FIX, round 2 (confirmed via the debug box the user ran live):
   // the round-1 comparison (targetsMatchDisciplines, now removed)
@@ -6905,6 +7003,80 @@ img, video, canvas, svg { max-width: 100%; }
     return { layout, cantFit, movedNote: movedParts.join('; '), cap };
   }
 
+  // BUG FIX (reported contradiction) — priority order for TODAY's
+  // single recommendation when not everything that's due fits in one
+  // day: (1) the OLDEST missed STRENGTH day-type this week (most
+  // specific, most time-sensitive -- the rotation already names a
+  // real day that was skipped), (2) a RUN (or other cardio) backlog
+  // chunk from today's own slice of the weekly rebalance layout
+  // (already sized/capped by buildRebalanceLayout above -- never
+  // re-sized here), (3) today's own RHYTHM entry (the existing
+  // default), (4) anything left over -> reported, never silently
+  // dropped. Strength stays at most ONE session per day regardless of
+  // tier (a missed day-type from tier 1 already claims it; a tier-3
+  // rhythm strength entry is then skipped, not stacked). Printed in
+  // the saved object (todayPick.priorityOrder) so the report/UI can
+  // see exactly what was applied, per the task's own "defined in one
+  // constant and reported" requirement.
+  const REBALANCE_TODAY_PRIORITY_ORDER = ['missedStrengthDayType', 'runBacklogChunk', 'rhythmEntry'];
+  // A combined "today" budget ceiling across tiers 1+2 together,
+  // before the lower-priority rhythm default gets displaced --
+  // deliberately the SAME flat assumptions this whole phase already
+  // uses for a single day (one strength session's worth, 45min, plus
+  // one cardio chunk's worth, capped at REBALANCE_MAX_EXTRA_MIN_PER_DAY)
+  // rather than inventing a new number.
+  const REBALANCE_TODAY_BUDGET_MIN = DEFAULT_SESSION_MINUTES.strength + REBALANCE_MAX_EXTRA_MIN_PER_DAY;
+  function buildTodayRebalancePick(missedDayTypes, todayLayoutEntry, rhythmForDay) {
+    const sessions = [];
+    const cantFit = [];
+    let usedMin = 0;
+    const satisfied = new Set();
+
+    // Priority 1 — missed strength day-type.
+    if (missedDayTypes && missedDayTypes.length) {
+      const oldest = missedDayTypes[0];
+      sessions.push({ discipline: 'strength', kind: 'auto', dayType: oldest.dayType, weekday: oldest.weekday, targetAmount: null, unit: '', estMinutes: DEFAULT_SESSION_MINUTES.strength, reason: oldest.dayType + ' missed ' + oldest.weekday + ' this week', priority: 'missedStrengthDayType' });
+      usedMin += DEFAULT_SESSION_MINUTES.strength;
+      satisfied.add('strength');
+    }
+
+    // Priority 2 — backlog session(s) the weekly layout already
+    // placed today (run, chiefly; rides along for any other
+    // discipline buildRebalanceLayout placed today too, e.g. swim --
+    // these are already-validated placements, never re-sized/re-
+    // capped here).
+    if (todayLayoutEntry && Array.isArray(todayLayoutEntry.sessions)) {
+      todayLayoutEntry.sessions.forEach((s) => {
+        if (satisfied.has(s.discipline)) return;
+        const amountLabel = s.targetAmount ? (s.targetAmount + (s.unit || '')) : 'a session';
+        sessions.push(Object.assign({ reason: amountLabel + ' behind this week', priority: 'runBacklogChunk' }, s));
+        usedMin += s.estMinutes;
+        satisfied.add(s.discipline);
+      });
+    }
+
+    // Priority 3 — today's own rhythm entry, only for a discipline
+    // not already satisfied by a higher tier, and only while there's
+    // room left in today's combined budget; otherwise it is bumped to
+    // "can't fit" instead of silently vanishing.
+    (rhythmForDay || []).forEach((entry) => {
+      if (satisfied.has(entry.discipline) || entry.discipline === 'rest') return;
+      // A plain rhythm entry carries no sizing info of its own here —
+      // a flat, documented placeholder (same spirit as
+      // DEFAULT_SESSION_MINUTES.genericCount) just for this budget check.
+      const estMinutes = entry.discipline === 'strength' ? DEFAULT_SESSION_MINUTES.strength : DEFAULT_SESSION_MINUTES.genericCount;
+      if (usedMin + estMinutes <= REBALANCE_TODAY_BUDGET_MIN) {
+        sessions.push({ discipline: entry.discipline, kind: entry.kind, estMinutes, reason: 'today’s rhythm', priority: 'rhythmEntry' });
+        usedMin += estMinutes;
+        satisfied.add(entry.discipline);
+      } else {
+        cantFit.push({ discipline: entry.discipline, reason: 'No time left today after higher-priority catch-up.' });
+      }
+    });
+
+    return { priorityOrder: REBALANCE_TODAY_PRIORITY_ORDER, sessions, cantFit };
+  }
+
   // Entry point for BOTH triggers (manual button + automatic, see
   // autoRebalanceIfNeeded below) — manual=true shows the loading
   // state and alerts on failure (same established pattern as
@@ -6916,6 +7088,15 @@ img, video, canvas, svg { max-width: 100%; }
   // reader (none of them look at it), recomputed whenever the week
   // changes (loadStoredPlan's own weekStart guard) or the user taps
   // this again.
+  // BUG FIX (reported) — this function used to return EARLY, without
+  // ever writing plan.rebalance at all, whenever there was no active
+  // plan / no checkpoint for this week — leaving the rendered section
+  // permanently blank (just its always-visible heading+button) with
+  // no explanation, even on a week with real, visible outstanding
+  // work on the progress bars above it. Every path through this
+  // function now ALWAYS writes an explicit plan.rebalance (sessions,
+  // an explicit can't-fit list, or a plain emptyReason string) so the
+  // renderer never has nothing to show.
   async function rebalanceRestOfWeek(manual) {
     const secret = getSecret();
     if (!secret) { if (manual) alert('Set your dashboard secret first (on the Cronometer page) to use AI features.'); return; }
@@ -6924,16 +7105,21 @@ img, video, canvas, svg { max-width: 100%; }
     try {
       const stored = loadStoredPlan();
       if (!stored || stored.weekStart !== thisWeekMondayKey() || !stored.plan) {
+        // Nothing to attach a result to at all -- the card's own
+        // "No objectives generated yet" empty state already covers
+        // this case, so there is genuinely nothing extra to persist.
         if (manual) alert('Generate this week’s objectives above first, then re-plan the rest of the week.');
         return;
       }
-      const raw = await fetchActiveWeekDisciplines();
-      if (!raw) {
-        // No active long-term plan -- byte-identical to before (#6):
-        // nothing to rebalance against, never invent one.
-        if (manual) alert('No active long-term plan to rebalance against.');
-        return;
+      function saveEmpty(emptyReason) {
+        stored.plan.rebalance = { computedForDateKey: DayLib.effectiveDateKey(), weekStart: thisWeekMondayKey(), outstanding: {}, rhythmExceedsNotes: [], isDeloadWeek: false, layout: [], cantFit: [], movedNote: '', emptyReason, todayPick: { priorityOrder: REBALANCE_TODAY_PRIORITY_ORDER, sessions: [], cantFit: [] } };
+        saveStoredPlan(stored);
+        renderWeeklyProgress();
+        if (manual) alert(emptyReason);
       }
+      const raw = await fetchActiveWeekDisciplines();
+      if (!raw) { saveEmpty('No active long-term plan to rebalance against.'); return; }
+      if (!raw.disciplines) { saveEmpty(buildWeekTransitionNote(raw.transition) || 'No checkpoint for this week.'); return; }
       const recommendableActivityTypes = (await fetchActivityTypes()).filter((t) => t.recommendable).map((t) => ({ id: t.id, name: t.name, unit: t.unit, unitKind: t.unitKind }));
       const activeWeekDisciplines = {};
       ['run', 'bike', 'swim'].forEach((disc) => {
@@ -6951,7 +7137,18 @@ img, video, canvas, svg { max-width: 100%; }
       const rhythmExceedsNotes = rhythmExceedsTargetNotes(activeWeekDisciplines, weeklyRhythm);
       const deload = isDeloadWeek(raw.note);
 
+      // Missed strength day-type(s) and today's own rhythm entries —
+      // computed regardless of outstanding/capacity/deload, since
+      // strength-rotation catch-up (Phase 3.3) is independent of the
+      // weekly cardio/capacity backlog machinery.
+      let state = {};
+      try { state = (window.PoCoach && window.PoCoach.getState()) || {}; } catch (e) {}
+      const missedDayTypes = missedDayTypesThisWeek(state, thisWeekMondayKey(), todayKeyStr, weeklyRhythm);
+      const todayWeekdayForRhythm = AVAIL_WEEKDAY_NAMES[DayLib.parseDateKey(todayKeyStr).getDay()];
+      const rhythmForDay = weeklyRhythm[todayWeekdayForRhythm] || [];
+
       let result = { layout: [], cantFit: [], movedNote: '', cap: { maxExtraMinPerDay: REBALANCE_MAX_EXTRA_MIN_PER_DAY, tomorrowMaxShare: REBALANCE_TOMORROW_MAX_SHARE, padelMaxExtraMin: REBALANCE_PADEL_MAX_EXTRA_MIN, minSessionKm: REBALANCE_MIN_SESSION_KM, minSessionSwim: 'one whole session' } };
+      let capacityConfigured = false;
       if (Object.keys(outstanding).length) {
         const ready = await waitForGatherTodayContext(3000);
         if (ready) {
@@ -6962,15 +7159,30 @@ img, video, canvas, svg { max-width: 100%; }
           // aggregate buildWeekCapacity also computes for the normal
           // "generate objectives" flow.
           const capacity = await buildWeekCapacity(ctx, null);
+          capacityConfigured = capacity.configured;
           if (capacity.configured) result = buildRebalanceLayout(outstanding, capacity, weeklyRhythm, restrictions, activeWeekDisciplines, deload);
         }
+      }
+
+      const todayLayoutEntry = result.layout.find((d) => d.dateKey === todayKeyStr) || null;
+      const todayPick = buildTodayRebalancePick(missedDayTypes, todayLayoutEntry, rhythmForDay);
+
+      let emptyReason = null;
+      const hasAnything = result.layout.length || result.cantFit.length || deload || todayPick.sessions.length || todayPick.cantFit.length;
+      if (!hasAnything) {
+        emptyReason = !Object.keys(outstanding).length
+          ? 'Nothing behind this week.'
+          : !capacityConfigured
+          ? 'Could not check your calendar or availability.'
+          : 'Nothing to rebalance.';
       }
 
       stored.plan.rebalance = {
         computedForDateKey: todayKeyStr,
         weekStart: thisWeekMondayKey(),
-        outstanding, rhythmExceedsNotes, isDeloadWeek: deload,
+        outstanding, rhythmExceedsNotes, isDeloadWeek: deload, emptyReason,
         layout: result.layout, cantFit: result.cantFit, movedNote: result.movedNote, cap: result.cap,
+        todayPick,
       };
       saveStoredPlan(stored);
       renderWeeklyProgress();
@@ -7018,6 +7230,7 @@ img, video, canvas, svg { max-width: 100%; }
     let recommendableActivityTypes = [];
     let activeWeekDisciplines = null;
     let swimNote = null;
+    let weekTransitionNote = null;
     try {
       // String-compare local "YYYY-MM-DD" keys (cutoffKey, dk, r.dateKey)
       // rather than reconstructing Date objects from them — new Date(dk)
@@ -7076,6 +7289,7 @@ img, video, canvas, svg { max-width: 100%; }
       const resolved = await resolveActiveWeekDisciplines(recommendableActivityTypes);
       activeWeekDisciplines = resolved && resolved.disciplines;
       swimNote = resolved && resolved.note;
+      weekTransitionNote = buildWeekTransitionNote(resolved && resolved.transition);
 
       // Phase 3.4 — capacity summary (needed vs available per
       // discipline, per-day budgets) for the SAME week the targets
@@ -7108,6 +7322,7 @@ img, video, canvas, svg { max-width: 100%; }
       // plan's real disciplines do, so it won't call the AI again.
       json.plan.disciplinesFingerprint = buildDisciplinesFingerprint(activeWeekDisciplines);
       json.plan.swimNote = swimNote || undefined;
+      json.plan.weekTransitionNote = weekTransitionNote || undefined;
       saveStoredPlan({ weekStart: thisWeekMondayKey(), plan: json.plan, generatedAt: new Date().toISOString() });
       renderWeeklyProgress();
       // Phase 4.1 (automatic trigger) — "...or the layout is computed
@@ -7138,6 +7353,7 @@ img, video, canvas, svg { max-width: 100%; }
         fallbackPlan.disciplinesFingerprint = buildDisciplinesFingerprint(activeWeekDisciplines);
         fallbackPlan.isFallback = true; // BUG FIX — lets the card show an honest "tap refresh to generate session details" hint instead of fabricated-looking legacy slot text
         fallbackPlan.swimNote = swimNote || undefined;
+        fallbackPlan.weekTransitionNote = weekTransitionNote || undefined;
         saveStoredPlan({ weekStart: thisWeekMondayKey(), plan: fallbackPlan, generatedAt: new Date().toISOString() });
         renderWeeklyProgress();
         if (!silent) alert('Built directly from your active plan — the AI description step failed: ' + (e.message || String(e)));
@@ -7219,6 +7435,36 @@ img, video, canvas, svg { max-width: 100%; }
       const recommendableActivityTypes = (await fetchActivityTypes()).filter((t) => t.recommendable).map((t) => ({ id: t.id, name: t.name, unit: t.unit, unitKind: t.unitKind }));
       const resolved = await resolveActiveWeekDisciplines(recommendableActivityTypes);
       if (!resolved) return; // genuinely no active-plan disciplines for this week — the legacy fallback IS the correct display
+      // BUG FIX (transition week, reported) — NEVER call the AI
+      // automatically here, regardless of which transition sub-case
+      // this is (a previous plan's checkpoint resolved real targets,
+      // or nothing resolved at all). When real targets WERE resolved
+      // from the previous plan, build the exact same deterministic
+      // (zero-AI) fallback plan the error path above already uses,
+      // tagged with the transition note, so the card still shows real
+      // progress bars — never an invented AI call just to describe a
+      // few days that are about to end anyway.
+      if (resolved.transition) {
+        const noteText = buildWeekTransitionNote(resolved.transition);
+        if (resolved.disciplines) {
+          const currentFingerprint = buildDisciplinesFingerprint(resolved.disciplines);
+          const alreadyCorrect = stored.plan.disciplinesFingerprint === currentFingerprint && stored.plan.weekTransitionNote === noteText && stored.plan.isFallback;
+          if (!alreadyCorrect) {
+            const fallbackPlan = buildFallbackPlanFromDisciplines(resolved.disciplines, recommendableActivityTypes);
+            fallbackPlan.disciplinesFingerprint = currentFingerprint;
+            fallbackPlan.isFallback = true;
+            fallbackPlan.swimNote = resolved.note || undefined;
+            fallbackPlan.weekTransitionNote = noteText;
+            saveStoredPlan({ weekStart: thisWeekMondayKey(), plan: fallbackPlan, generatedAt: new Date().toISOString() });
+            renderWeeklyProgress();
+          }
+        } else if (stored.plan.weekTransitionNote !== noteText) {
+          stored.plan.weekTransitionNote = noteText;
+          saveStoredPlan(stored);
+          renderWeeklyProgress();
+        }
+        return;
+      }
       const activeWeekDisciplines = resolved.disciplines;
       const currentFingerprint = buildDisciplinesFingerprint(activeWeekDisciplines);
       const fingerprintMatches = currentFingerprint === stored.plan.disciplinesFingerprint;
@@ -7839,14 +8085,19 @@ img, video, canvas, svg { max-width: 100%; }
       const isCurrentWeek = !!(stored && stored.weekStart === thisWeekMondayKey() && stored.plan);
       const plan = isCurrentWeek ? stored.plan : null;
       const progress = plan ? computeWeekProgress(plan) : null;
-      // Phase 4.1 — today's own slice of the rebalanced layout (if
-      // any), sent so the model can state the REAL reason in its one-
-      // line pick (e.g. "Run easy 6 km: 8.1 km behind this week")
-      // while every existing rule (rhythm default, restrictions, low-
-      // recovery downgrade) still decides the final answer -- this is
-      // additional CONTEXT only, never a new override path.
-      const rebalanceToday = (plan && plan.rebalance && Array.isArray(plan.rebalance.layout))
-        ? (plan.rebalance.layout.find((d) => d.dateKey === DayLib.effectiveDateKey()) || null)
+      // Phase 4.1 — today's own PRIORITIZED pick (missed strength day-
+      // type > run/cardio backlog chunk > today's rhythm entry, see
+      // buildTodayRebalancePick's own comment), sent so the model can
+      // state the REAL reason in its one-line pick (e.g. "Pull missed
+      // Wednesday this week") while every existing rule (restrictions,
+      // low-recovery downgrade) still decides the final answer. BUG
+      // FIX (reported contradiction) — this used to re-derive a plain
+      // cardio-only slice from plan.rebalance.layout directly, which
+      // never carried the missed-strength-day-type priority at all
+      // (that's a SEPARATE mechanism, missedDayTypesThisWeek, that
+      // rebalanceRestOfWeek now folds in explicitly via todayPick).
+      const rebalanceToday = (plan && plan.rebalance && plan.rebalance.todayPick && Array.isArray(plan.rebalance.todayPick.sessions) && plan.rebalance.todayPick.sessions.length)
+        ? { sessions: plan.rebalance.todayPick.sessions }
         : null;
 
       const whoopTrend = await fetchWhoopTrend(7);

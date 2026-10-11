@@ -486,6 +486,13 @@ function sanitizeRebalanceToday(raw) {
     unit: (s && typeof s.unit === 'string') ? s.unit.slice(0, 10) : '',
     estMinutes: (s && typeof s.estMinutes === 'number' && isFinite(s.estMinutes)) ? s.estMinutes : null,
     activityName: (s && typeof s.activityName === 'string') ? s.activityName.slice(0, 80) : '',
+    // Phase 4.1 fix (reported contradiction) — a missed STRENGTH
+    // day-type pick carries its own real day-type name + the weekday
+    // it was missed, so the no-contradiction backstop below can build
+    // a clean label ("Pull (missed Wednesday)") without parsing text
+    // out of the free-form `reason` string.
+    dayType: (s && typeof s.dayType === 'string') ? s.dayType.slice(0, 40) : '',
+    weekday: (s && typeof s.weekday === 'string') ? s.weekday.slice(0, 20) : '',
   })).filter((s) => s.discipline);
   if (!sessions.length) return null;
   return { sessions };
@@ -570,6 +577,31 @@ function describeRhythmEntryForToday(entry) {
   const disc = entry.discipline.charAt(0).toUpperCase() + entry.discipline.slice(1);
   return disc + (entry.kind ? ' ' + entry.kind : '');
 }
+// Phase 4.1 fix (reported contradiction) — matches the model's own
+// "Rest"/"nothing feasible" phrasing (buildTodaySystemPrompt's own
+// FORMAT examples: "Rest — recovery is low", "Rest — padel today",
+// applyFeasibilityBackstop's own canned "Rest — nothing in this
+// week's plan fits..."). Used to detect when the model is CLAIMING
+// nothing is feasible, so that claim can be checked against the same
+// code-provable reasons as everything else in this backstop, rather
+// than trusted blindly.
+const REST_TEXT_RE = /^rest\b|nothing (is )?feasible/i;
+// Builds the SAME short-label style the rest of this prompt already
+// uses (describeRhythmEntryForToday's own convention, e.g. "Push
+// (missed Monday)") from code's own already-validated rebalance pick
+// — never from free text, and never restating a conflicting "Rest"
+// claim alongside it.
+function describeRebalanceTodayPick(sessions) {
+  return sessions.map((s) => {
+    if (s.discipline === 'strength') {
+      const name = s.dayType ? (s.dayType.charAt(0).toUpperCase() + s.dayType.slice(1)) : 'Strength';
+      return name + (s.weekday ? ' (missed ' + s.weekday + ')' : '');
+    }
+    const name = s.activityName || (s.discipline.charAt(0).toUpperCase() + s.discipline.slice(1));
+    const amount = s.targetAmount ? (' ' + s.targetAmount + (s.unit || '')) : '';
+    return name + amount;
+  }).join(' + ');
+}
 // Phase 3.5 — the LAST-resort code check: the prompt already tells
 // the model today's rhythm entry is the default and to only deviate
 // for a short, specific list of checkable reasons (buildRhythm
@@ -580,7 +612,7 @@ function describeRhythmEntryForToday(entry) {
 // discipline+kind AND none of those reasons check out, the rhythm
 // entry wins outright — same "never trust the model's pick blindly"
 // discipline as applyFeasibilityBackstop above.
-function applyRhythmBackstop(recommendation, rhythmForDay, feasibility, restrictions, whoopToday, strengthContext) {
+function applyRhythmBackstop(recommendation, rhythmForDay, feasibility, restrictions, whoopToday, strengthContext, rebalanceToday) {
   if (!Array.isArray(rhythmForDay) || !rhythmForDay.length) return recommendation;
   const entry = rhythmForDay[0]; // a second same-day session, if any, is additive on top of the primary one this backstop concerns itself with
   if (entry.discipline === 'rest') return recommendation; // nothing to default to or compare against
@@ -605,6 +637,23 @@ function applyRhythmBackstop(recommendation, rhythmForDay, feasibility, restrict
   const recoveryLow = recoveryPct != null && recoveryPct < 34 && RHYTHM_HARD_KINDS.has(entry.kind);
   const hasMissedCatchUp = entry.discipline === 'strength' && !!(strengthContext && Array.isArray(strengthContext.missedDayTypes) && strengthContext.missedDayTypes.length);
   if (isRestricted || feasibilityKillsIt || recoveryLow || hasMissedCatchUp) return recommendation; // a real, code-checkable reason exists -- trust the model's own call
+
+  // Phase 4.1 fix (reported contradiction) — the model may answer
+  // "Rest"/"nothing feasible" only for one of the code-provable
+  // reasons just checked above. None of them actually applied here,
+  // so if the model STILL said Rest, trust CODE's own already-
+  // validated rebalance pick (missed strength day-type / backlog
+  // chunk, already capacity- and cap-checked by buildRebalanceLayout)
+  // instead of blindly restoring the raw rhythm entry — and never
+  // phrase the override as "X (today's rhythm) — was: Rest", which
+  // reads as self-contradictory (naming a real session right next to
+  // the model's own "nothing is feasible" claim).
+  if (REST_TEXT_RE.test(recommendation.trim())) {
+    if (rebalanceToday && Array.isArray(rebalanceToday.sessions) && rebalanceToday.sessions.length) {
+      return describeRebalanceTodayPick(rebalanceToday.sessions);
+    }
+    return describeRhythmEntryForToday(entry); // no contradictory "was: Rest" tail
+  }
 
   return describeRhythmEntryForToday(entry) + ' (today\'s rhythm) — was: ' + recommendation;
 }
@@ -1628,13 +1677,17 @@ function buildRebalanceTodayPromptSection(rebalanceToday) {
   if (!rebalanceToday || !Array.isArray(rebalanceToday.sessions) || !rebalanceToday.sessions.length) return '';
   return (
     'MISSED-SESSION REBALANCING (Phase 4.1) — rebalanceToday.sessions lists session(s) CODE has already ' +
-    'decided belong today specifically, to catch up real volume/sessions missed on an EARLIER day this ' +
-    'week (ground truth from logged activities vs the plan\'s own targets, not a guess). If you recommend ' +
-    'one of these (still subject to every rule above — the rhythm default, restrictions, WHOOP/padel ' +
-    'downgrades), state the real reason briefly using its own numbers, e.g. "Run easy 6 km: 8.1 km behind ' +
-    'this week" — never invent a different number. You may NOT add a session that isn\'t listed here, ' +
-    'resize one that is, or move one to a different day; this only tells you what catching up today would ' +
-    'look like, it does not force you to recommend it over everything else.\n\n'
+    'decided belong today specifically, already in PRIORITY order (a missed STRENGTH day-type — ' +
+    's.dayType/s.weekday — first, then a cardio backlog chunk, matching what you are told about this ' +
+    'week so far), to catch up real volume/sessions missed on an EARLIER day this week (ground truth from ' +
+    'logged activities vs the plan\'s own targets, not a guess). Prefer recommending these over today\'s ' +
+    'plain rhythm default when they exist — still subject to every rule above (restrictions, WHOOP/padel ' +
+    'downgrades) — and state the real reason briefly using the entry\'s own numbers/day-type, e.g. "Pull ' +
+    '(missed Wednesday)" or "Run easy 6 km: 8.1 km behind this week" — never invent a different number or ' +
+    'day. Do NOT answer "Rest" or "nothing feasible" when a session is listed here and none of the code-' +
+    'checkable reasons above (restriction, low recovery, no free time) actually applies — that combination ' +
+    'produces a contradictory answer. You may NOT add a session that isn\'t listed here, resize one that ' +
+    'is, or move one to a different day.\n\n'
   );
 }
 function buildTodaySystemPrompt(restrictions, feasibility, rebalanceToday) {
@@ -1886,7 +1939,7 @@ async function handleToday(req, res, apiKey, body) {
   // (Tomorrow's own prompt is told not to use it — see
   // buildTomorrowSystemPrompt's own comment), so forTomorrow passes
   // null there, same as the prompt's own recovery-blind framing.
-  recommendation = applyRhythmBackstop(recommendation, context.rhythmForDay, context.feasibility, restrictions, forTomorrow ? null : context.whoopToday, context.strengthContext);
+  recommendation = applyRhythmBackstop(recommendation, context.rhythmForDay, context.feasibility, restrictions, forTomorrow ? null : context.whoopToday, context.strengthContext, context.rebalanceToday);
 
   return res.status(200).json({ ok: true, recommendation });
 }
