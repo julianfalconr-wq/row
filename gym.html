@@ -6491,6 +6491,27 @@ img, video, canvas, svg { max-width: 100%; }
     } catch (e) { return []; }
   }
 
+  // BUG FIX (reported regression, 1bbee85) — hoisted up from its
+  // original spot near estimateSlotMinutes (search DEFAULT_SESSION_
+  // MINUTES below for that function's own comment on what each field
+  // means). That original position was AFTER several other top-level
+  // `const` statements that read DEFAULT_SESSION_MINUTES.strength
+  // eagerly at script-load time (REBALANCE_TODAY_BUDGET_MIN chief
+  // among them) — a `const` is in the temporal dead zone from the top
+  // of its scope until its own declaration line actually runs, so
+  // reading it at top level before that line threw "Cannot access
+  // 'DEFAULT_SESSION_MINUTES' before initialization" the instant the
+  // script executed, aborting the ENTIRE enclosing IIFE immediately —
+  // which silently skipped every click-handler wiring call below it
+  // in the file (tpGenerateBtn, tpRebalanceBtn, ttRefreshBtn all went
+  // unwired, not just Today's session). Every pre-existing usage
+  // elsewhere in this file is safely inside a FUNCTION BODY (only
+  // evaluated when later CALLED, well after the full script has
+  // finished loading), so moving the declaration earlier is the only
+  // change needed — no other usage depends on where exactly this
+  // sits, only on it existing before the first TOP-LEVEL read of it.
+  const DEFAULT_SESSION_MINUTES = { strength: 45, genericCount: 30 };
+
   // Full capacity summary sent to handlePlan. rawDisciplines is the
   // SAME object fetchActiveWeekDisciplines() resolved (3.1) — may be
   // null (no active-plan disciplines configured), in which case
@@ -7844,7 +7865,8 @@ img, video, canvas, svg { max-width: 100%; }
   //     sets — no time-per-unit relationship at all): no sane per-unit
   //     conversion exists, so DEFAULT_SESSION_MINUTES.genericCount (30)
   //     is used as a flat assumption, same spirit as strength's.
-  const DEFAULT_SESSION_MINUTES = { strength: 45, genericCount: 30 };
+  // (DEFAULT_SESSION_MINUTES itself is declared earlier now, near
+  // buildWeekCapacity — see that declaration's own comment.)
   function estimateSlotMinutes(kind, slot) {
     if (!slot) return null;
     if (kind === 'strength') return DEFAULT_SESSION_MINUTES.strength;
