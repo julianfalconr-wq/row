@@ -806,6 +806,30 @@ document.addEventListener('DOMContentLoaded', function () {
     delete copy.swim;
     return copy;
   }
+  // Field-by-field, key-order- and type-independent equality — NEVER
+  // JSON.stringify for comparing stored discipline data. A plan's
+  // `disciplines` blob round-trips through Supabase's jsonb column,
+  // which does not preserve object key insertion order (e.g. a stored
+  // swim sub-object can come back as {meters, sessions} even though
+  // it was written as {sessions, meters}), so a JSON.stringify string
+  // comparison silently and permanently reports "different" for
+  // values that are actually identical — this is what made the swim
+  // backfill button never become eligible for real stored data even
+  // though it displayed the correct old values. Coercing with Number()
+  // also tolerates a numeric field stored as a string.
+  function numEq(a, b) { return (Number(a) || 0) === (Number(b) || 0); }
+  function swimEqual(a, b) {
+    if (!a && !b) return true;
+    if (!a || !b) return false;
+    return numEq(a.sessions, b.sessions) && numEq(a.meters, b.meters);
+  }
+  function disciplinesEqualWithoutSwim(a, b) {
+    if (!a && !b) return true;
+    if (!a || !b) return false;
+    return numEq(a.run && a.run.km, b.run && b.run.km)
+      && numEq(a.bike && a.bike.km, b.bike && b.bike.km)
+      && numEq(a.strength && a.strength.sessions, b.strength && b.strength.sessions);
+  }
   // Cumulative run targetValue for weeks 4-34, continuing from week
   // 3's OWN stored targetValue (read live, never assumed/hardcoded —
   // weeks 1-3 are never touched by this backfill) plus each week's
@@ -858,7 +882,7 @@ document.addEventListener('DOMContentLoaded', function () {
       // Swim-blind — swim has its own protected comparison below, so
       // the whole-discipline overwrite check here never reacts to a
       // swim-only difference (and never clobbers swim as a side effect).
-      if (fill.overwrite && (JSON.stringify(disciplinesWithoutSwim(cp.disciplines)) !== JSON.stringify(disciplinesWithoutSwim(fill.disciplines)) || (cp.note || '') !== (fill.note || ''))) return true;
+      if (fill.overwrite && (!disciplinesEqualWithoutSwim(cp.disciplines, fill.disciplines) || (cp.note || '') !== (fill.note || ''))) return true;
       if (cp.weekNumber >= 4 && cumulativeByWeek[cp.weekNumber] != null && Number(cp.targetValue) !== cumulativeByWeek[cp.weekNumber]) return true;
       return false;
     });
@@ -872,8 +896,8 @@ document.addEventListener('DOMContentLoaded', function () {
       const baseline = PLAN_SWIM_UPDATE_BASELINE[cp.weekNumber];
       const fill = PLAN_BACKFILL_DISCIPLINES[cp.weekNumber];
       if (!baseline || !fill || !cp.disciplines) return false;
-      const matchesBaseline = JSON.stringify(cp.disciplines.swim) === JSON.stringify(baseline);
-      return matchesBaseline && JSON.stringify(cp.disciplines.swim) !== JSON.stringify(fill.disciplines.swim);
+      const matchesBaseline = swimEqual(cp.disciplines.swim, baseline);
+      return matchesBaseline && !swimEqual(cp.disciplines.swim, fill.disciplines.swim);
     });
     if (swimStale) return true;
     // Checkpoints already match — separately check the top-level
@@ -908,9 +932,8 @@ document.addEventListener('DOMContentLoaded', function () {
       let disciplines = cp.disciplines ? Object.assign({}, cp.disciplines) : null;
       const canWriteDisciplines = fill.overwrite || !cp.disciplines;
       if (canWriteDisciplines) {
-        const currentWithoutSwim = disciplinesWithoutSwim(cp.disciplines);
         const fillWithoutSwim = disciplinesWithoutSwim(fill.disciplines);
-        const sameAlready = cp.disciplines && JSON.stringify(currentWithoutSwim) === JSON.stringify(fillWithoutSwim) && (cp.note || '') === (fill.note || '');
+        const sameAlready = cp.disciplines && disciplinesEqualWithoutSwim(cp.disciplines, fill.disciplines) && (cp.note || '') === (fill.note || '');
         if (!sameAlready) {
           diffLines.push('Week ' + cp.weekNumber + ': ' + (cp.disciplines ? '~ ' : '+ ') + describeDisciplines(fillWithoutSwim) + (fill.note ? ' (' + fill.note + ')' : ''));
           // Swim is carried over from whatever it currently is (or,
@@ -933,8 +956,8 @@ document.addEventListener('DOMContentLoaded', function () {
       if (swimBaseline && disciplines) {
         const currentSwim = disciplines.swim;
         const targetSwim = fill.disciplines.swim;
-        if (JSON.stringify(currentSwim) !== JSON.stringify(targetSwim)) {
-          if (JSON.stringify(currentSwim) === JSON.stringify(swimBaseline)) {
+        if (!swimEqual(currentSwim, targetSwim)) {
+          if (swimEqual(currentSwim, swimBaseline)) {
             diffLines.push('Week ' + cp.weekNumber + ' swim: ' + currentSwim.sessions + '×' + currentSwim.meters + 'm -> ' + targetSwim.sessions + '×' + targetSwim.meters + 'm');
             disciplines = Object.assign({}, disciplines, { swim: targetSwim });
             changed = true;
