@@ -469,6 +469,27 @@ function sanitizeFeasibility(raw) {
     candidates,
   };
 }
+// Phase 4.1 — today's own slice of gym.html's client-computed
+// buildRebalanceLayout() result (one {weekday,dateKey,sessions:[...]}
+// entry, or absent/null when nothing is behind). This file never
+// recomputes or validates the sizing/placement itself — it was
+// already decided and capped in code client-side — only passes
+// through enough for the model to describe it in words (see
+// buildRebalanceTodayPromptSection). Anything malformed collapses to
+// null, same as every other optional context field here.
+function sanitizeRebalanceToday(raw) {
+  if (!raw || typeof raw !== 'object' || !Array.isArray(raw.sessions)) return null;
+  const sessions = raw.sessions.slice(0, 10).map((s) => ({
+    discipline: (s && typeof s.discipline === 'string') ? s.discipline.slice(0, 20) : '',
+    kind: (s && typeof s.kind === 'string') ? s.kind.slice(0, 20) : '',
+    targetAmount: (s && typeof s.targetAmount === 'number' && isFinite(s.targetAmount)) ? s.targetAmount : null,
+    unit: (s && typeof s.unit === 'string') ? s.unit.slice(0, 10) : '',
+    estMinutes: (s && typeof s.estMinutes === 'number' && isFinite(s.estMinutes)) ? s.estMinutes : null,
+    activityName: (s && typeof s.activityName === 'string') ? s.activityName.slice(0, 80) : '',
+  })).filter((s) => s.discipline);
+  if (!sessions.length) return null;
+  return { sessions };
+}
 
 // Lists ONLY the already-feasible candidates (computed client-side in
 // code, never asked of the model) and instructs the model to pick
@@ -1594,7 +1615,29 @@ function buildRhythmPromptSection(dayLabel, allowRecoveryDeviation) {
     'would otherwise.\n\n'
   );
 }
-function buildTodaySystemPrompt(restrictions, feasibility) {
+// Phase 4.1 — rebalanceToday is code-computed client-side (gym.html's
+// buildRebalanceLayout), never model-chosen: if real past-day volume/
+// sessions are behind this week's plan target, code already decided
+// WHICH session(s), sized and dated for today specifically, belong
+// today as catch-up. This section only tells the model to STATE the
+// real reason in its existing output format -- it never overrides
+// the rhythm default, restrictions, or the low-recovery downgrade
+// elsewhere in this prompt, all of which still decide the final
+// answer exactly as before.
+function buildRebalanceTodayPromptSection(rebalanceToday) {
+  if (!rebalanceToday || !Array.isArray(rebalanceToday.sessions) || !rebalanceToday.sessions.length) return '';
+  return (
+    'MISSED-SESSION REBALANCING (Phase 4.1) — rebalanceToday.sessions lists session(s) CODE has already ' +
+    'decided belong today specifically, to catch up real volume/sessions missed on an EARLIER day this ' +
+    'week (ground truth from logged activities vs the plan\'s own targets, not a guess). If you recommend ' +
+    'one of these (still subject to every rule above — the rhythm default, restrictions, WHOOP/padel ' +
+    'downgrades), state the real reason briefly using its own numbers, e.g. "Run easy 6 km: 8.1 km behind ' +
+    'this week" — never invent a different number. You may NOT add a session that isn\'t listed here, ' +
+    'resize one that is, or move one to a different day; this only tells you what catching up today would ' +
+    'look like, it does not force you to recommend it over everything else.\n\n'
+  );
+}
+function buildTodaySystemPrompt(restrictions, feasibility, rebalanceToday) {
   return (
     'You recommend today\'s training on a personal dashboard. This week\'s plan (weekPlan) always covers ' +
     'BOTH strength and cardio — evaluate the two independently, then combine whichever pieces are ' +
@@ -1662,6 +1705,7 @@ function buildTodaySystemPrompt(restrictions, feasibility) {
     'piece, do NOT recommend it if that piece\'s activityTypeId or activityName matches an entry in ' +
     'activeRestrictions below (checked by id or name) — a restriction can be added after the weekly plan ' +
     'was last generated, so this is a live, independent check, not just trusting weekPlan\'s own numbers.\n\n' +
+    buildRebalanceTodayPromptSection(rebalanceToday) +
     'PADEL — todayCalendar tells you whether the user has a real padel session on their Google Calendar ' +
     'today (todayCalendar.padelToday, with the actual matched event title in ' +
     'todayCalendar.padelEventTitle when true). Padel is a genuinely demanding session physically — treat a ' +
@@ -1806,6 +1850,10 @@ async function handleToday(req, res, apiKey, body) {
     // Phase 2 of the training-availability feature — TODAY only (see
     // this mode's own doc comment on the feasibility field above).
     context.feasibility = sanitizeFeasibility(body.feasibility);
+    // Phase 4.1 — TODAY only (see buildRebalanceTodayPromptSection's
+    // own comment); Tomorrow deliberately gets no missed-session
+    // signal, same spirit as it getting no padel/calendar input.
+    context.rebalanceToday = sanitizeRebalanceToday(body.rebalanceToday);
   }
 
   if (!context.weekPlan) {
@@ -1821,7 +1869,7 @@ async function handleToday(req, res, apiKey, body) {
   // this kind of simple, short-output, latency-sensitive task, and lets
   // the model skip thinking entirely on inputs this straightforward.
   const text = await callClaude(apiKey, {
-    system: forTomorrow ? buildTomorrowSystemPrompt(restrictions, context.feasibility) : buildTodaySystemPrompt(restrictions, context.feasibility),
+    system: forTomorrow ? buildTomorrowSystemPrompt(restrictions, context.feasibility) : buildTodaySystemPrompt(restrictions, context.feasibility, context.rebalanceToday),
     userContent: 'Context:\n' + JSON.stringify(context, null, 2),
     maxTokens: 800,
     effort: 'low',

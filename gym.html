@@ -330,6 +330,12 @@ img, video, canvas, svg { max-width: 100%; }
   font-size: 10.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
   color: var(--text-3); margin-bottom: 8px;
 }
+/* Phase 4.1 — the rebalance section's own title row needs its
+   "Re-plan" button alongside the label, same flex pattern as the
+   card-level .tp-card-head, but sized down (22px) to match this
+   sub-section rather than the card's own 32px header button. */
+#tpRebalanceTitle { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+#tpRebalanceBtn { width: 22px; height: 22px; }
 .tp-layout-day {
   display: flex; align-items: baseline; gap: 8px; padding: 6px 0; font-size: 12px;
   border-bottom: 1px solid var(--border); min-width: 0;
@@ -1811,6 +1817,26 @@ img, video, canvas, svg { max-width: 100%; }
         <div class="tp-layout-title">This week's layout</div>
         <div id="tpLayoutDays"></div>
         <div class="tp-layout-unplaced" id="tpLayoutUnplaced" style="display:none"></div>
+      </div>
+      <!-- Phase 4.1 — missed-session rebalancing. The "Re-plan" button
+           itself is ALWAYS available once a weekly plan exists (never
+           nested inside the results it produces — a hidden-until-
+           results button could never be clicked the first time).
+           Only the RESULTS below it are conditionally shown. -->
+      <div class="tp-layout-title" id="tpRebalanceTitle">
+        <span>Rest of week (rebalanced)</span>
+        <button type="button" class="tp-refresh-btn" id="tpRebalanceBtn" aria-label="Re-plan rest of week" title="Re-plan rest of week">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M20.49 15A9 9 0 1 1 5.64 5.64L23 10"/></svg>
+        </button>
+      </div>
+      <!-- Hidden entirely when nothing is behind
+           (computeOutstandingByDiscipline found nothing outstanding)
+           or no rebalance has run yet this week. -->
+      <div class="tp-layout" id="tpRebalanceSection" style="display:none">
+        <div id="tpRebalanceDays"></div>
+        <div class="tp-capacity-trim-note" id="tpRebalanceMoved" style="display:none"></div>
+        <div class="tp-layout-unplaced" id="tpRebalanceCantFit" style="display:none"></div>
+        <div class="tp-capacity-trim-note" id="tpRebalanceRhythmNotes" style="display:none"></div>
       </div>
       <div class="tp-rationale" id="tpRationale"></div>
     </div>
@@ -6050,6 +6076,33 @@ img, video, canvas, svg { max-width: 100%; }
 
     $$('tpRationale').textContent = plan.rationale || '';
 
+    // Phase 4.1 — missed-session rebalancing. plan.rebalance is
+    // entirely optional (absent on every plan generated before this
+    // phase, or a week with nothing outstanding) -- hides the whole
+    // section rather than rendering an empty one.
+    const rb = plan.rebalance;
+    if (rb && (rb.layout.length || rb.cantFit.length || rb.isDeloadWeek)) {
+      $$('tpRebalanceSection').style.display = 'block';
+      const WEEKDAY_SHORT = { sunday: 'Sun', monday: 'Mon', tuesday: 'Tue', wednesday: 'Wed', thursday: 'Thu', friday: 'Fri', saturday: 'Sat' };
+      $$('tpRebalanceDays').innerHTML = rb.layout.length
+        ? rb.layout.map((day) => {
+            const sessionsHtml = day.sessions.map((s) => {
+              const label = s.discipline === 'strength' ? 'Strength' : (s.activityName || s.discipline) + (s.targetAmount ? ' ' + s.targetAmount + s.unit : '');
+              return '<span class="tp-layout-session">' + escapeHtml(label) + ' (~' + s.estMinutes + 'min)</span>';
+            }).join('');
+            return '<div class="tp-layout-day"><span class="tp-layout-day-label">' + (WEEKDAY_SHORT[day.weekday] || day.weekday) + '</span><span class="tp-layout-day-sessions">' + sessionsHtml + '</span></div>';
+          }).join('')
+        : '<div class="tp-layout-day"><span class="tp-layout-day-sessions">Nothing moved.</span></div>';
+      $$('tpRebalanceMoved').style.display = rb.movedNote ? 'block' : 'none';
+      $$('tpRebalanceMoved').textContent = rb.movedNote || '';
+      $$('tpRebalanceCantFit').style.display = rb.cantFit.length ? 'block' : 'none';
+      $$('tpRebalanceCantFit').textContent = rb.cantFit.length ? ('Can’t fit this week: ' + rb.cantFit.map((c) => c.reason).join(' ')) : '';
+      $$('tpRebalanceRhythmNotes').style.display = (rb.rhythmExceedsNotes || []).length ? 'block' : 'none';
+      $$('tpRebalanceRhythmNotes').textContent = (rb.rhythmExceedsNotes || []).join(' ');
+    } else {
+      $$('tpRebalanceSection').style.display = 'none';
+    }
+
     return { plan, progress };
   }
 
@@ -6440,7 +6493,452 @@ img, video, canvas, svg { max-width: 100%; }
       preferredLongDay: availability.preferredLongDay || null,
       perDiscipline,
       perDay,
+      // Phase 4.1 — exposed so buildRebalanceLayout() below can detect
+      // padel on a FUTURE remaining day without a second calendar
+      // fetch (this already covers today through Sunday, the exact
+      // window rebalancing needs — see fetchExtraCalendarForCapacity's
+      // own comment on the tail-coverage fetch above).
+      allEvents,
     };
+  }
+
+  // ============================================================
+  // PHASE 4.1 — MISSED-SESSION REBALANCING
+  //
+  // Nothing below calls the AI model: every number (outstanding
+  // volume, which day gets what, what can't fit) is decided in code,
+  // deterministically, from real logged activities/capacity/rhythm —
+  // matching this phase's own global rule ("arithmetic in CODE... the
+  // model only picks among options code proved feasible"). Today's
+  // session (mode=today) is the one place a short extra line of
+  // CONTEXT is sent to the model, purely so it can state ITS OWN
+  // existing reasoning with the real "X behind this week" number —
+  // the model never decides placement here.
+  // ============================================================
+
+  // Same keyword convention as plan.html's own periodization checks
+  // (PLAN_BACKFILL_DISCIPLINES notes) — "Deload — lighter", "Taper
+  // (-30%)" etc. A deload/taper week is never turned into a catch-up
+  // week: computeOutstandingByDiscipline() below still runs (so the
+  // real shortfall can be reported honestly), but buildRebalanceLayout
+  // never attempts to PLACE any of it when this is true.
+  const REBALANCE_DELOAD_RE = /deload|taper|lighter/i;
+  function isDeloadWeek(checkpointNote) { return REBALANCE_DELOAD_RE.test(checkpointNote || ''); }
+
+  // Code-defined caps (never model-chosen, per this phase's own
+  // "arithmetic in CODE" rule) — bound how much a single remaining
+  // day's BACKLOG allocation can grow on top of its own normal
+  // (rhythm-driven) load, and specifically how much of the total
+  // outstanding backlog minutes "tomorrow" may absorb, so one bad
+  // Tuesday can never dump itself wholesale onto Wednesday. Printed
+  // in the saved rebalance report (plan.rebalance.cap) so the UI/
+  // verification can see exactly what was enforced.
+  const REBALANCE_MAX_EXTRA_MIN_PER_DAY = 45;
+  const REBALANCE_TOMORROW_MAX_SHARE = 0.5;
+  // A padel day is treated like the existing "padel is as demanding as
+  // low WHOOP recovery" prompt-level rule (buildTodaySystemPrompt's
+  // PADEL section) but enforced in CODE for backlog placement
+  // specifically, since no code-level equivalent existed before this
+  // phase: no HARD backlog session, and a much smaller spare-minutes
+  // allowance than a normal day.
+  const REBALANCE_PADEL_MAX_EXTRA_MIN = 20;
+
+  function dayHasPadel(allEvents, dateKeyStr) {
+    return (allEvents || []).some((ev) => {
+      if (ev.allDay || !ev.start) return false;
+      let evDk;
+      try { evDk = dateKey(new Date(ev.start)); } catch (e) { return false; }
+      return evDk === dateKeyStr && PADEL_RE.test(ev.title || '');
+    });
+  }
+
+  // Outstanding volume per discipline, computed STRICTLY against the
+  // active long-term plan's own targets (activeWeekDisciplines) --
+  // NEVER against the weekly rhythm's own session count (see
+  // rhythmExceedsTargetNotes below for that separate, informational-
+  // only check). Bike is ignored entirely here, the same way the rest
+  // of this file already ignores it, whenever it has no resolved
+  // activityTypeId (disabled). Logged volume is matched to a
+  // discipline the same strict, name-pattern way computeWeekProgress
+  // ByDiscipline already does (disciplineForActivityType) -- an
+  // activity whose type doesn't match any pattern counts toward NO
+  // discipline, exactly as elsewhere.
+  function computeOutstandingByDiscipline(activeWeekDisciplines, todayKeyStr) {
+    const monday = thisWeekMondayKey();
+    const soFar = activityEntries.filter((a) => a.dateKey >= monday && a.dateKey <= todayKeyStr);
+    function doneFor(disc) {
+      const matching = soFar.filter((a) => disciplineForActivityType(a.activityTypeId) === disc);
+      if (disc === 'swim') return { meters: Math.round(matching.reduce((s, a) => s + (Number(a.distanceKm) || 0), 0)), sessions: matching.length };
+      return { km: Math.round(matching.reduce((s, a) => s + (Number(a.distanceKm) || 0), 0) * 10) / 10, sessions: matching.length };
+    }
+    const d = activeWeekDisciplines || {};
+    const out = {};
+    ['run', 'bike'].forEach((disc) => {
+      const t = d[disc];
+      if (!t || !t.activityTypeId || !Number(t.km)) return; // disabled or no real target -- ignored everywhere, never backlog
+      const doneKm = doneFor(disc).km;
+      const outstandingKm = Math.max(0, Math.round((Number(t.km) - doneKm) * 10) / 10);
+      if (outstandingKm > 0) out[disc] = { targetKm: Number(t.km), doneKm, outstandingKm, activityTypeId: t.activityTypeId, activityName: t.activityName || '' };
+    });
+    if (d.swim && d.swim.activityTypeId && Number(d.swim.sessions) > 0) {
+      const done = doneFor('swim');
+      const outstandingSessions = Math.max(0, Number(d.swim.sessions) - done.sessions);
+      if (outstandingSessions > 0) {
+        out.swim = {
+          targetSessions: Number(d.swim.sessions), doneSessions: done.sessions, outstandingSessions,
+          perSessionMeters: Number(d.swim.meters) || 0, activityTypeId: d.swim.activityTypeId, activityName: d.swim.activityName || '',
+        };
+      }
+    }
+    if (d.strength && Number(d.strength.sessions) > 0) {
+      let doneDays = {};
+      try { doneDays = (window.PoCoach && window.PoCoach.getDoneDays()) || {}; } catch (e) {}
+      const doneSessions = Object.keys(doneDays).filter((dk) => dk >= monday && dk <= todayKeyStr && !!doneDays[dk]).length;
+      const outstandingSessions = Math.max(0, Number(d.strength.sessions) - doneSessions);
+      if (outstandingSessions > 0) out.strength = { targetSessions: Number(d.strength.sessions), doneSessions, outstandingSessions };
+    }
+    return out;
+  }
+
+  // Informational only (never affects computeOutstandingByDiscipline
+  // above, which never reads the rhythm at all) -- scoped to swim and
+  // strength specifically, the two disciplines actually counted in
+  // SESSIONS in this app (run/bike are km-based; a "4th run session"
+  // isn't a meaningful overage the same way "4 strength vs 3" is, per
+  // the task's own examples).
+  function rhythmExceedsTargetNotes(activeWeekDisciplines, weeklyRhythm) {
+    const notes = [];
+    const counts = { swim: 0, strength: 0 };
+    WEEK_DATES_WEEKDAY_ORDER.forEach((wd) => {
+      ((weeklyRhythm && weeklyRhythm[wd]) || []).forEach((e) => { if (counts[e.discipline] != null) counts[e.discipline]++; });
+    });
+    const d = activeWeekDisciplines || {};
+    [['swim', d.swim && Number(d.swim.sessions)], ['strength', d.strength && Number(d.strength.sessions)]].forEach(([disc, target]) => {
+      if (target != null && target > 0 && counts[disc] > target) {
+        notes.push('Your weekly rhythm has ' + counts[disc] + ' ' + disc + ' session' + (counts[disc] === 1 ? '' : 's') + ' set, more than this week’s plan target of ' + target + ' — the extra ' + (counts[disc] - target) + ' ' + (counts[disc] - target === 1 ? 'is' : 'are') + ' not counted as missed if skipped.');
+      }
+    });
+    return notes;
+  }
+
+  // Sums a day's own rhythm sessions' estimated minutes using the
+  // EXACT same formulas api/training.js uses server-side (run/bike:
+  // km*pace; swim: (meters/100)*paceMin100m; strength: flat 45) --
+  // this is the day's "normal load" that backlog must be layered ON
+  // TOP of, never silently replacing.
+  function rhythmMinutesForDay(weeklyRhythm, weekday, activeWeekDisciplines) {
+    const entries = (weeklyRhythm && weeklyRhythm[weekday]) || [];
+    let minutes = 0;
+    const hardKinds = [];
+    entries.forEach((e) => {
+      if (e.discipline === 'strength') { minutes += DEFAULT_SESSION_MINUTES.strength; if (REBALANCE_HARD_KINDS.has(e.kind)) hardKinds.push(e.kind); return; }
+      if (e.discipline === 'swim') {
+        const d = activeWeekDisciplines && activeWeekDisciplines.swim;
+        const meters = (d && Number(d.meters)) || 0;
+        const pace = recentAvgSwimPaceMinPer100m(d && d.activityTypeId) || BASIC_SWIMMER_PACE_MIN_PER_100M;
+        minutes += Math.round((meters / 100) * pace);
+        return;
+      }
+      if (e.discipline === 'run' || e.discipline === 'bike') {
+        const d = activeWeekDisciplines && activeWeekDisciplines[e.discipline];
+        if (!d || !Number(d.km)) return;
+        const pace = recentAvgPaceMinPerKm(d.activityTypeId) || GENERIC_FALLBACK_PACE_MIN_PER_KM;
+        // A rough per-entry share (this is only used to size the
+        // REMAINING backlog budget for the day, not to re-place the
+        // rhythm's own sessions, so an exact RHYTHM_KIND_WEIGHT split
+        // isn't needed here -- an equal share across that day's own
+        // same-discipline entries is close enough for a capacity cap).
+        const sameDisc = entries.filter((x) => x.discipline === e.discipline).length || 1;
+        minutes += Math.round((Number(d.km) / sameDisc) * pace);
+        if (REBALANCE_HARD_KINDS.has(e.kind)) hardKinds.push(e.kind);
+      }
+    });
+    return { minutes, hardKinds };
+  }
+  // Mirrors api/training.js/main.html's own RHYTHM_HARD_KINDS exactly
+  // (not previously duplicated in gym.html at all -- this phase is the
+  // first thing in this file that needs "is this kind hard" awareness).
+  const REBALANCE_HARD_KINDS = new Set(['interval', 'long', 'pace', 'legs', 'explosive']);
+
+  // Mirrors api/training.js's RHYTHM_DISCIPLINE_TO_RESTRICTION_SCOPE
+  // exactly -- restriction scopes are "running"/"strength"/"padel"
+  // (a different vocabulary from the discipline keys), and bike/swim
+  // have no scope of their own in that enum, so they can never be
+  // blocked by a restriction here, consistent with the restriction
+  // system's own real limitation.
+  function restrictionBlocksDiscipline(restrictions, disc) {
+    const scope = disc === 'run' ? 'running' : disc === 'strength' ? 'strength' : null;
+    if (!scope) return false;
+    return (restrictions || []).some((r) => r && r.scope === scope);
+  }
+
+  function describeOutstanding(disc, o) {
+    if (disc === 'run' || disc === 'bike') return o.outstandingKm + 'km';
+    if (disc === 'swim') return o.outstandingSessions + ' session' + (o.outstandingSessions === 1 ? '' : 's');
+    return o.outstandingSessions + ' session' + (o.outstandingSessions === 1 ? '' : 's');
+  }
+
+  // The placement engine itself. Deterministic, code-only (see this
+  // section's own header comment) -- every session placed here is
+  // backlog CATCH-UP volume layered on top of whatever the weekly
+  // rhythm already has for a remaining day (the rhythm itself is
+  // never read from here; it's the fixed base this adds to), never
+  // hard (run backlog is always 'easy', swim is never hard, generic
+  // strength catch-up is never typed as legs/explosive without a
+  // specific missed day-type to resolve) -- so the existing "no two
+  // hard sessions back to back" rule is satisfied by construction:
+  // backlog never introduces a new hard session, and the rhythm's own
+  // hard sessions are never touched or moved by this function.
+  function buildRebalanceLayout(outstanding, capacity, weeklyRhythm, restrictions, activeWeekDisciplines, isDeload) {
+    const cap = { maxExtraMinPerDay: REBALANCE_MAX_EXTRA_MIN_PER_DAY, tomorrowMaxShare: REBALANCE_TOMORROW_MAX_SHARE, padelMaxExtraMin: REBALANCE_PADEL_MAX_EXTRA_MIN };
+    const discKeys = Object.keys(outstanding);
+    if (!discKeys.length) return { layout: [], cantFit: [], movedNote: '', cap };
+    if (isDeload) {
+      return {
+        layout: [], movedNote: '', cap,
+        cantFit: discKeys.map((disc) => ({ discipline: disc, reason: 'Deload week — shortfall reported, not made up: ' + describeOutstanding(disc, outstanding[disc]) + ' behind.' })),
+      };
+    }
+    const perDay = (capacity.perDay || []).map((d) => {
+      const r = rhythmMinutesForDay(weeklyRhythm, d.weekday, activeWeekDisciplines);
+      const padel = dayHasPadel(capacity.allEvents, d.dateKey);
+      const extraCapForDay = padel ? REBALANCE_PADEL_MAX_EXTRA_MIN : REBALANCE_MAX_EXTRA_MIN_PER_DAY;
+      const backlogBudget = Math.max(0, Math.min(extraCapForDay, d.availableMin - r.minutes));
+      const hasRhythmStrength = ((weeklyRhythm && weeklyRhythm[d.weekday]) || []).some((e) => e.discipline === 'strength');
+      return Object.assign({}, d, {
+        rhythmMinutes: r.minutes, isPadel: padel, backlogBudget, backlogUsed: 0, totalBacklogUsed: 0, hasRhythmStrength, sessions: [],
+        hasRhythmFor(disc) { return ((weeklyRhythm && weeklyRhythm[this.weekday]) || []).some((e) => e.discipline === disc); },
+      });
+    });
+    const tomorrowDay = perDay[1] || null; // perDay[0] is always today itself (buildWeekCapacity starts there)
+
+    const runPace = (outstanding.run && (recentAvgPaceMinPerKm(outstanding.run.activityTypeId) || GENERIC_FALLBACK_PACE_MIN_PER_KM)) || GENERIC_FALLBACK_PACE_MIN_PER_KM;
+    const swimPace = (outstanding.swim && (recentAvgSwimPaceMinPer100m(outstanding.swim.activityTypeId) || BASIC_SWIMMER_PACE_MIN_PER_100M)) || BASIC_SWIMMER_PACE_MIN_PER_100M;
+    const swimSessionMin = outstanding.swim ? Math.round((outstanding.swim.perSessionMeters / 100) * swimPace) : 0;
+    let totalBacklogMin = 0;
+    if (outstanding.run) totalBacklogMin += Math.round(outstanding.run.outstandingKm * runPace);
+    if (outstanding.swim) totalBacklogMin += outstanding.swim.outstandingSessions * swimSessionMin;
+    if (outstanding.strength) totalBacklogMin += outstanding.strength.outstandingSessions * DEFAULT_SESSION_MINUTES.strength;
+    // THE CODE-DEFINED CAP (see REBALANCE_TOMORROW_MAX_SHARE's own
+    // comment) -- tomorrow may never absorb more than this share of
+    // the TOTAL backlog (cardio AND strength together), regardless of
+    // how much spare budget it has.
+    const tomorrowCapMin = Math.round(totalBacklogMin * REBALANCE_TOMORROW_MAX_SHARE);
+    // day.backlogUsed tracks CARDIO (run/bike/swim) minutes only,
+    // bounded by day.backlogBudget (the REBALANCE_MAX_EXTRA_MIN_PER_DAY
+    // ceiling) -- this is the "no day piles up unlimited easy/swim
+    // volume" guard. day.totalBacklogUsed tracks EVERY backlog minute
+    // placed (cardio + strength combined) and is what the tomorrow-
+    // share cap and strength's own room check read from. Strength
+    // deliberately has NO flat per-day ceiling of its own beyond
+    // these: a single session is already a bounded, discrete, at-
+    // most-one-per-day unit (see the STRENGTH block below), so
+    // forcing it through the SAME small cardio cap would make it
+    // impossible for a day to ever hold both a strength session and
+    // any cardio catch-up at once, which is not what "bounded
+    // increase" was meant to prevent.
+    function cardioRoomOnDay(day) {
+      let room = day.backlogBudget - day.backlogUsed;
+      if (tomorrowDay && day.dateKey === tomorrowDay.dateKey) room = Math.min(room, tomorrowCapMin - day.totalBacklogUsed);
+      return Math.max(0, room);
+    }
+    function strengthRoomOnDay(day) {
+      let room = day.availableMin - day.rhythmMinutes - day.totalBacklogUsed;
+      if (tomorrowDay && day.dateKey === tomorrowDay.dateKey) room = Math.min(room, tomorrowCapMin - day.totalBacklogUsed);
+      return Math.max(0, room);
+    }
+
+    const cantFit = [];
+    const movedParts = [];
+
+    // --- RUN: one continuous pool, split across however many
+    // remaining days it takes. Prefers capacity.preferredLongDay
+    // first (the one existing precedent for "long" sessions), then a
+    // day the rhythm already runs on, then earliest date. ---
+    if (outstanding.run) {
+      let remainingKm = outstanding.run.outstandingKm;
+      if (restrictionBlocksDiscipline(restrictions, 'run')) {
+        cantFit.push({ discipline: 'run', reason: 'Running is currently restricted — ' + remainingKm + 'km could not be rescheduled.' });
+      } else {
+        const preferredDay = capacity.preferredLongDay;
+        const candidates = perDay.filter((d) => d.allowedDisciplines.run !== false).sort((a, b) => {
+          const aPref = a.weekday === preferredDay ? 1 : 0, bPref = b.weekday === preferredDay ? 1 : 0;
+          if (aPref !== bPref) return bPref - aPref;
+          const aRhy = a.hasRhythmFor('run') ? 1 : 0, bRhy = b.hasRhythmFor('run') ? 1 : 0;
+          if (aRhy !== bRhy) return bRhy - aRhy;
+          return a.dateKey < b.dateKey ? -1 : 1;
+        });
+        const movedDays = [];
+        candidates.forEach((day) => {
+          if (remainingKm <= 0) return;
+          const roomMin = cardioRoomOnDay(day);
+          if (roomMin <= 0) return;
+          const roomKm = Math.round((roomMin / runPace) * 10) / 10;
+          const takeKm = Math.min(remainingKm, roomKm);
+          if (takeKm < 0.5) return; // not worth a near-zero session
+          const estMinutes = Math.round(takeKm * runPace);
+          day.sessions.push({ discipline: 'run', kind: 'easy', targetAmount: takeKm, unit: 'km', estMinutes, activityTypeId: outstanding.run.activityTypeId, activityName: outstanding.run.activityName, isBacklog: true });
+          day.backlogUsed += estMinutes;
+          day.totalBacklogUsed += estMinutes;
+          remainingKm = Math.round((remainingKm - takeKm) * 10) / 10;
+          movedDays.push(day.weekday);
+        });
+        const placedKm = Math.round((outstanding.run.outstandingKm - remainingKm) * 10) / 10;
+        if (placedKm > 0) movedParts.push(placedKm + 'km of run moved to ' + movedDays.join('/'));
+        if (remainingKm > 0) cantFit.push({ discipline: 'run', reason: remainingKm + 'km could not fit this week’s remaining days/budget.' });
+      }
+    }
+
+    // --- SWIM: discrete sessions, at most one placed per candidate
+    // day per pass (guarantees spreading rather than stacking),
+    // preferring a day the rhythm already swims on. Swim has no
+    // restriction scope of its own (see restrictionBlocksDiscipline). ---
+    if (outstanding.swim) {
+      let remaining = outstanding.swim.outstandingSessions;
+      const candidates = perDay.filter((d) => d.allowedDisciplines.swim !== false).sort((a, b) => {
+        const aRhy = a.hasRhythmFor('swim') ? 1 : 0, bRhy = b.hasRhythmFor('swim') ? 1 : 0;
+        if (aRhy !== bRhy) return bRhy - aRhy;
+        return a.dateKey < b.dateKey ? -1 : 1;
+      });
+      const movedDays = [];
+      candidates.forEach((day) => {
+        if (remaining <= 0) return;
+        if (cardioRoomOnDay(day) < swimSessionMin) return;
+        day.sessions.push({ discipline: 'swim', kind: 'session', targetAmount: outstanding.swim.perSessionMeters, unit: 'm', estMinutes: swimSessionMin, activityTypeId: outstanding.swim.activityTypeId, activityName: outstanding.swim.activityName, isBacklog: true });
+        day.backlogUsed += swimSessionMin;
+        day.totalBacklogUsed += swimSessionMin;
+        remaining--;
+        movedDays.push(day.weekday);
+      });
+      const placedCount = outstanding.swim.outstandingSessions - remaining;
+      if (placedCount > 0) movedParts.push(placedCount + ' swim session' + (placedCount === 1 ? '' : 's') + ' moved to ' + movedDays.join('/'));
+      if (remaining > 0) cantFit.push({ discipline: 'swim', reason: placedCount + ' of ' + outstanding.swim.outstandingSessions + ' can fit this week.' });
+    }
+
+    // --- STRENGTH: discrete sessions, at most ONE per day overall
+    // (never on a day the rhythm already has strength -- that would
+    // stack two strength sessions the same day), generic/untyped
+    // (never resolved to a specific missed day-type here -- see
+    // missedDayTypesThisWeek for that separate, informational list),
+    // so never counted as hard/leg-load. ---
+    if (outstanding.strength) {
+      let remaining = outstanding.strength.outstandingSessions;
+      if (restrictionBlocksDiscipline(restrictions, 'strength')) {
+        cantFit.push({ discipline: 'strength', reason: 'Strength is currently restricted — ' + remaining + ' session' + (remaining === 1 ? '' : 's') + ' could not be rescheduled.' });
+      } else {
+        const candidates = perDay.filter((d) => d.allowedDisciplines.strength !== false && !d.hasRhythmStrength).sort((a, b) => (a.dateKey < b.dateKey ? -1 : 1));
+        const movedDays = [];
+        candidates.forEach((day) => {
+          if (remaining <= 0) return;
+          if (day.sessions.some((s) => s.discipline === 'strength')) return; // already took one this pass
+          if (strengthRoomOnDay(day) < DEFAULT_SESSION_MINUTES.strength) return;
+          day.sessions.push({ discipline: 'strength', kind: 'auto', targetAmount: null, unit: '', estMinutes: DEFAULT_SESSION_MINUTES.strength, isBacklog: true });
+          day.totalBacklogUsed += DEFAULT_SESSION_MINUTES.strength;
+          remaining--;
+          movedDays.push(day.weekday);
+        });
+        const placedCount = outstanding.strength.outstandingSessions - remaining;
+        if (placedCount > 0) movedParts.push(placedCount + ' strength session' + (placedCount === 1 ? '' : 's') + ' moved to ' + movedDays.join('/'));
+        if (remaining > 0) cantFit.push({ discipline: 'strength', reason: placedCount + ' of ' + outstanding.strength.outstandingSessions + ' can fit this week.' });
+      }
+    }
+
+    const layout = perDay.filter((d) => d.sessions.length).map((d) => ({ weekday: d.weekday, dateKey: d.dateKey, sessions: d.sessions }));
+    return { layout, cantFit, movedNote: movedParts.join('; '), cap };
+  }
+
+  // Entry point for BOTH triggers (manual button + automatic, see
+  // autoRebalanceIfNeeded below) — manual=true shows the loading
+  // state and alerts on failure (same established pattern as
+  // generateWeeklyPlan's own silent param, just inverted in sense so
+  // the common/manual case reads naturally at the call site).
+  // Persists into the SAME po_coach_weekly_plan_v1 storage (already
+  // synced across devices via PC_SYNCED_KEYS) as new, optional
+  // `plan.rebalance` keys — tolerated when absent by every existing
+  // reader (none of them look at it), recomputed whenever the week
+  // changes (loadStoredPlan's own weekStart guard) or the user taps
+  // this again.
+  async function rebalanceRestOfWeek(manual) {
+    const secret = getSecret();
+    if (!secret) { if (manual) alert('Set your dashboard secret first (on the Cronometer page) to use AI features.'); return; }
+    const btn = $$('tpRebalanceBtn');
+    if (manual && btn) { btn.disabled = true; btn.classList.add('is-spinning'); }
+    try {
+      const stored = loadStoredPlan();
+      if (!stored || stored.weekStart !== thisWeekMondayKey() || !stored.plan) {
+        if (manual) alert('Generate this week’s objectives above first, then re-plan the rest of the week.');
+        return;
+      }
+      const raw = await fetchActiveWeekDisciplines();
+      if (!raw) {
+        // No active long-term plan -- byte-identical to before (#6):
+        // nothing to rebalance against, never invent one.
+        if (manual) alert('No active long-term plan to rebalance against.');
+        return;
+      }
+      const recommendableActivityTypes = (await fetchActivityTypes()).filter((t) => t.recommendable).map((t) => ({ id: t.id, name: t.name, unit: t.unit, unitKind: t.unitKind }));
+      const activeWeekDisciplines = {};
+      ['run', 'bike', 'swim'].forEach((disc) => {
+        const d = raw.disciplines[disc];
+        if (!d) return;
+        const type = resolveActivityTypeForDiscipline(disc, recommendableActivityTypes);
+        activeWeekDisciplines[disc] = Object.assign({}, d, { activityTypeId: type ? type.id : null, activityName: type ? type.name : '' });
+      });
+      if (raw.disciplines.strength) activeWeekDisciplines.strength = raw.disciplines.strength;
+
+      const todayKeyStr = DayLib.effectiveDateKey();
+      const outstanding = computeOutstandingByDiscipline(activeWeekDisciplines, todayKeyStr);
+      const weeklyRhythm = await fetchWeeklyRhythm();
+      const restrictions = await fetchActiveRestrictions();
+      const rhythmExceedsNotes = rhythmExceedsTargetNotes(activeWeekDisciplines, weeklyRhythm);
+      const deload = isDeloadWeek(raw.note);
+
+      let result = { layout: [], cantFit: [], movedNote: '', cap: { maxExtraMinPerDay: REBALANCE_MAX_EXTRA_MIN_PER_DAY, tomorrowMaxShare: REBALANCE_TOMORROW_MAX_SHARE, padelMaxExtraMin: REBALANCE_PADEL_MAX_EXTRA_MIN } };
+      if (Object.keys(outstanding).length) {
+        const ready = await waitForGatherTodayContext(3000);
+        if (ready) {
+          const ctx = await window.gatherTodayContext();
+          // rawDisciplines passed as null -- this call only needs
+          // capacity.perDay/allEvents (today through Sunday, real
+          // calendar gaps), not the whole-week needed-vs-available
+          // aggregate buildWeekCapacity also computes for the normal
+          // "generate objectives" flow.
+          const capacity = await buildWeekCapacity(ctx, null);
+          if (capacity.configured) result = buildRebalanceLayout(outstanding, capacity, weeklyRhythm, restrictions, activeWeekDisciplines, deload);
+        }
+      }
+
+      stored.plan.rebalance = {
+        computedForDateKey: todayKeyStr,
+        weekStart: thisWeekMondayKey(),
+        outstanding, rhythmExceedsNotes, isDeloadWeek: deload,
+        layout: result.layout, cantFit: result.cantFit, movedNote: result.movedNote, cap: result.cap,
+      };
+      saveStoredPlan(stored);
+      renderWeeklyProgress();
+    } catch (e) {
+      console.error('[rebalance] rebalanceRestOfWeek failed:', e && (e.message || String(e)));
+      if (manual) alert('Could not re-plan the rest of the week: ' + (e.message || String(e)));
+    } finally {
+      if (manual && btn) { btn.disabled = false; btn.classList.remove('is-spinning'); }
+    }
+  }
+  // Automatic trigger (silent=false semantics match generateWeeklyPlan's
+  // own silent param) -- recomputes at most once per real day (guarded
+  // by computedForDateKey, not a fixed cooldown timer, since
+  // "outstanding" only ever changes meaning when the day itself
+  // changes) regardless of how many times Today's session is
+  // refreshed that same day. Manual re-plan (rebalanceRestOfWeek(true))
+  // always bypasses this guard entirely, per the task's own rule.
+  async function autoRebalanceIfNeeded() {
+    try {
+      const stored = loadStoredPlan();
+      if (!stored || stored.weekStart !== thisWeekMondayKey() || !stored.plan) return;
+      const todayKeyStr = DayLib.effectiveDateKey();
+      const rb = stored.plan.rebalance;
+      if (rb && rb.computedForDateKey === todayKeyStr) return; // already fresh for today
+      await rebalanceRestOfWeek(false);
+    } catch (e) { console.error('[rebalance] autoRebalanceIfNeeded failed:', e && (e.message || String(e))); }
   }
 
   // silent (BUG FIX — see autoRebuildStaleWeeklyPlan's own comment):
@@ -6554,6 +7052,14 @@ img, video, canvas, svg { max-width: 100%; }
       json.plan.swimNote = swimNote || undefined;
       saveStoredPlan({ weekStart: thisWeekMondayKey(), plan: json.plan, generatedAt: new Date().toISOString() });
       renderWeeklyProgress();
+      // Phase 4.1 (automatic trigger) — "...or the layout is computed
+      // on a day with outstanding past-day sessions." A freshly
+      // (re)generated weekly layout has no rebalance info of its own
+      // yet; check once, silently, right after — guarded the same
+      // once-per-day way as the Today's-session trigger, so
+      // regenerating objectives repeatedly in one sitting doesn't
+      // refetch calendar/rhythm/restrictions every time.
+      autoRebalanceIfNeeded();
     } catch (e) {
       // BUG FIX — deterministic fallback: this week's real target
       // NUMBERS are already known (resolved above from the active
@@ -6596,6 +7102,13 @@ img, video, canvas, svg { max-width: 100%; }
   // rationale left in place. Wrapped so a manual click always calls
   // generateWeeklyPlan() with no arguments (silent === undefined).
   $$('tpGenerateBtn').addEventListener('click', () => generateWeeklyPlan());
+  // Phase 4.1 — same MouseEvent-as-first-arg trap as tpGenerateBtn
+  // above: wrapped so a manual click always calls
+  // rebalanceRestOfWeek(true), never the click Event itself as
+  // `manual`. "Manual always runs (bypass any cooldown)" — calling
+  // rebalanceRestOfWeek directly here, not autoRebalanceIfNeeded,
+  // is exactly that bypass.
+  $$('tpRebalanceBtn').addEventListener('click', () => rebalanceRestOfWeek(true));
   renderWeeklyProgress();
 
   // BUG FIX (reported, round 3 — confirmed via the round-2 debug box
@@ -7257,10 +7770,26 @@ img, video, canvas, svg { max-width: 100%; }
     $$('ttText').textContent = 'Thinking…';
     $$('ttSub').textContent = '';
     try {
+      // Phase 4.1 (automatic trigger) — "whenever Today's session...
+      // is computed on a day with outstanding past-day sessions."
+      // Silent (manual=false): never alerts, never spins a second
+      // button, recomputes at most once per real day (see its own
+      // cooldown comment) so this never adds a visible delay here
+      // beyond the first load of a new day.
+      await autoRebalanceIfNeeded();
       const stored = loadStoredPlan();
       const isCurrentWeek = !!(stored && stored.weekStart === thisWeekMondayKey() && stored.plan);
       const plan = isCurrentWeek ? stored.plan : null;
       const progress = plan ? computeWeekProgress(plan) : null;
+      // Phase 4.1 — today's own slice of the rebalanced layout (if
+      // any), sent so the model can state the REAL reason in its one-
+      // line pick (e.g. "Run easy 6 km: 8.1 km behind this week")
+      // while every existing rule (rhythm default, restrictions, low-
+      // recovery downgrade) still decides the final answer -- this is
+      // additional CONTEXT only, never a new override path.
+      const rebalanceToday = (plan && plan.rebalance && Array.isArray(plan.rebalance.layout))
+        ? (plan.rebalance.layout.find((d) => d.dateKey === DayLib.effectiveDateKey()) || null)
+        : null;
 
       const whoopTrend = await fetchWhoopTrend(7);
       const whoopToday = whoopTrend.connected ? whoopTrend.today : null;
@@ -7308,6 +7837,7 @@ img, video, canvas, svg { max-width: 100%; }
           restrictions,
           feasibility,
           rhythmForDay,
+          rebalanceToday,
         }),
       });
       const json = await res.json();
