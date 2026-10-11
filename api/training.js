@@ -1763,7 +1763,13 @@ function buildTomorrowSystemPrompt(restrictions, feasibility) {
 }
 
 async function handleToday(req, res, apiKey, body) {
-  const restrictions = sanitizeRestrictions(body.restrictions);
+  // Accept both key names: the client is expected to send
+  // `restrictions` (matching mode=plan's own body key), but a client
+  // sending the context object's own internal field name
+  // (`activeRestrictions`, used further below once sanitized) is
+  // tolerated too, rather than silently dropping restrictions for
+  // whichever caller gets the name wrong.
+  const restrictions = sanitizeRestrictions(Array.isArray(body.restrictions) ? body.restrictions : body.activeRestrictions);
   const forTomorrow = !!body.forTomorrow;
   const context = {
     weekPlan: body.weekPlan && typeof body.weekPlan === 'object' ? body.weekPlan : null,

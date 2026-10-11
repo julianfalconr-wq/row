@@ -3699,7 +3699,7 @@ document.addEventListener('DOMContentLoaded', function () {
         body: JSON.stringify({
           weekPlan: plan, progress, strengthContext,
           whoopToday: whoopToday ? { recoveryPct: whoopToday.recoveryPct } : null,
-          activeRestrictions: restrictions,
+          restrictions,
           forTomorrow: true,
           todayRecommendation,
           feasibility,
@@ -4321,10 +4321,22 @@ document.addEventListener('DOMContentLoaded', function () {
     titleEl.textContent = active.goalDescription;
     const todayK = (typeof DayLib !== 'undefined') ? DayLib.effectiveDateKey() : new Date().toISOString().slice(0, 10);
     const total = (active.weeklyCheckpoints || []).length;
+    // BUG FIX (Phase 4.0b) — same canonical (Mon-Sun) median-day
+    // mapping as plan.html/gym.html's own checkpointCanonicalRange: a
+    // checkpoint's raw weekStartDate is anchored to whatever weekday
+    // the plan started on (e.g. a Tuesday), not Monday, so comparing
+    // todayK directly against that raw 7-day window disagreed with
+    // plan.html's own "Week N" on the Monday/Sunday boundary days.
     const currentCp = (active.weeklyCheckpoints || []).find((cp) => {
-      const start = cp.weekStartDate;
-      const d = new Date(start); d.setDate(d.getDate() + 6);
-      const end = d.toISOString().slice(0, 10);
+      if (!cp.weekStartDate || typeof DayLib === 'undefined') return false;
+      const mid = DayLib.parseDateKey(cp.weekStartDate);
+      mid.setDate(mid.getDate() + 3);
+      const day = mid.getDay();
+      const diff = (day === 0 ? -6 : 1) - day;
+      mid.setDate(mid.getDate() + diff);
+      const start = DayLib.plainDateKey(mid);
+      const d = DayLib.parseDateKey(start); d.setDate(d.getDate() + 6);
+      const end = DayLib.plainDateKey(d);
       return todayK >= start && todayK <= end;
     });
     if (currentCp) subEl.textContent = 'Week ' + currentCp.weekNumber + ' of ' + total;
@@ -5367,7 +5379,20 @@ document.addEventListener('DOMContentLoaded', function () {
         if (p.status !== 'active' || !Array.isArray(p.weeklyCheckpoints)) continue;
         const cp = p.weeklyCheckpoints.find((c) => {
           if (!c.weekStartDate) return false;
-          const start = rhythmCanonicalWeekStart(c.weekStartDate);
+          // BUG FIX (Phase 4.0b) — the comment above promised the
+          // checkpointCanonicalRange median-day technique, but this
+          // called rhythmCanonicalWeekStart on the RAW weekStartDate
+          // directly, skipping the +3-day median-day step. That
+          // coincidentally matched the real plan's Tuesday anchor
+          // (Mon/Tue/Wed/Thu anchors land in the same calendar week
+          // either way) but would silently misresolve a plan anchored
+          // on Fri/Sat/Sun, and still disagreed with plan.html on
+          // this week's exact Monday/Sunday boundary. Mirror
+          // checkpointCanonicalRange exactly: take the checkpoint's
+          // own middle day (offset 3 of its 7) before mapping to Monday.
+          const mid = window.DayLib.parseDateKey(c.weekStartDate);
+          mid.setDate(mid.getDate() + 3);
+          const start = rhythmCanonicalWeekStart(window.DayLib.plainDateKey(mid));
           const end = (() => { const d = window.DayLib.parseDateKey(start); d.setDate(d.getDate() + 6); return window.DayLib.plainDateKey ? window.DayLib.plainDateKey(d) : d.toISOString().slice(0, 10); })();
           return todayK >= start && todayK <= end;
         });

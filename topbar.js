@@ -1355,36 +1355,53 @@ body {
       dt.setDate(dt.getDate() + n);
       return dt.getFullYear() + '-' + String(dt.getMonth() + 1).padStart(2, '0') + '-' + String(dt.getDate()).padStart(2, '0');
     }
-    function planMostRecentCheckpointWeekStart(checkpoints, asOfKey) {
-      let best = null;
-      (checkpoints || []).forEach((cp) => { if (cp.weekStartDate <= asOfKey) { if (!best || cp.weekStartDate > best) best = cp.weekStartDate; } });
-      return best;
-    }
-    function planRunningTotalForWeek(activitiesArr, activityTypeId, weekStartKey, weekEndKey) {
-      let total = 0, any = false;
-      activitiesArr.forEach((a) => {
-        if (!a || !a.dateKey || a.distanceKm == null) return;
-        if (a.dateKey < weekStartKey || a.dateKey > weekEndKey) return;
-        if (activityTypeId && a.activityTypeId !== activityTypeId) return;
-        total += a.distanceKm; any = true;
-      });
-      return any ? Math.round(total * 100) / 100 : null;
+    // BUG FIX (Phase 4.0b) — same canonical (Mon-Sun) median-day
+    // mapping as plan.html/gym.html's own checkpointCanonicalRange,
+    // written DayLib-free (pure JS, matching planAddDaysKey above)
+    // since this file also loads on pages without daylib.js. A
+    // checkpoint's raw weekStartDate is anchored to whatever weekday
+    // the plan started on (e.g. a Tuesday), not Monday, so comparing
+    // todayK directly against that raw window disagreed with
+    // plan.html's own "current" week on the Monday/Sunday boundary.
+    function planCheckpointCanonicalRange(cp) {
+      const [y, m, d] = cp.weekStartDate.split('-').map(Number);
+      const mid = new Date(y, m - 1, d); mid.setDate(mid.getDate() + 3);
+      const day = mid.getDay();
+      const diff = (day === 0 ? -6 : 1) - day;
+      mid.setDate(mid.getDate() + diff);
+      const start = mid.getFullYear() + '-' + String(mid.getMonth() + 1).padStart(2, '0') + '-' + String(mid.getDate()).padStart(2, '0');
+      return { start, end: planAddDaysKey(start, 6) };
     }
     function planActualAsOf(planObj, sources, asOfKey) {
       if (planObj.goalType === 'weight_gain' || planObj.goalType === 'weight_loss') return planWeightAsOf(sources.weights, asOfKey);
       if (planObj.goalType === 'strength_pr') return planStrengthBestAsOf(sources.gymState, sources.matchedExercise, asOfKey);
       if (planObj.goalType === 'running_distance') {
-        const weekStart = planMostRecentCheckpointWeekStart(planObj.weeklyCheckpoints, asOfKey);
-        if (!weekStart) return null;
-        return planRunningTotalForWeek(sources.activitiesArr, planObj.goalActivityTypeId, weekStart, planAddDaysKey(weekStart, 6));
+        // BUG FIX (Phase 4.0b) — this used to sum only the ONE WEEK
+        // whose raw (non-canonical) checkpoint window happened to
+        // contain asOfKey, then compare that single-week total
+        // against cp.targetValue, which is CUMULATIVE from the
+        // plan's own start (see plan.html's own runningCumulativeAsOf
+        // and its "comparing a single week's own total against a
+        // multi-week cumulative target" bug-fix comment — the exact
+        // same bug, independently present here). Sum cumulatively
+        // from the plan's own startDate instead, matching plan.html
+        // exactly, so "hit"/"missed" below means what it says.
+        let total = 0;
+        (sources.activitiesArr || []).forEach((a) => {
+          if (!a || !a.dateKey || a.distanceKm == null) return;
+          if (a.dateKey < planObj.startDate || a.dateKey > asOfKey) return;
+          if (planObj.goalActivityTypeId && a.activityTypeId !== planObj.goalActivityTypeId) return;
+          total += a.distanceKm;
+        });
+        return Math.round(total * 100) / 100;
       }
       return null; // "other" — no auto-tracked series, same as plan.html
     }
     function planIsIncreasingGoal(goalType) { return goalType !== 'weight_loss'; }
     function planCheckpointStatus(planObj, cp, current, todayK) {
-      const weekEnd = planAddDaysKey(cp.weekStartDate, 6);
-      if (todayK >= cp.weekStartDate && todayK <= weekEnd) return 'current';
-      if (todayK < cp.weekStartDate) return 'upcoming';
+      const range = planCheckpointCanonicalRange(cp);
+      if (todayK >= range.start && todayK <= range.end) return 'current';
+      if (todayK < range.start) return 'upcoming';
       if (current == null) return 'missed';
       const hit = planIsIncreasingGoal(planObj.goalType) ? current >= cp.targetValue : current <= cp.targetValue;
       return hit ? 'hit' : 'missed';
@@ -1410,7 +1427,7 @@ body {
           const sources = { weights: bodyWeights, gymState: pcState || { exercises: [], logs: {} }, activitiesArr: allActivities, matchedExercise };
           const currentValue = planActualAsOf(activePlan, sources, planTodayKey);
           const checkpoints = (activePlan.weeklyCheckpoints || []).map((cp) => {
-            const weekEnd = planAddDaysKey(cp.weekStartDate, 6);
+            const weekEnd = planCheckpointCanonicalRange(cp).end;
             const asOf = weekEnd < planTodayKey ? weekEnd : planTodayKey;
             const actualAtWeekEnd = planActualAsOf(activePlan, sources, asOf);
             return {
