@@ -219,13 +219,14 @@ body {
    behavior for the common case); this surfaces every OTHER one so
    they're never just silently invisible. */
 .plan-multi-warning { margin-top: 18px; }
-.plan-multi-warning-title { font-size: 13px; font-weight: 700; color: var(--warning); margin-bottom: 8px; }
+.plan-multi-warning-title { font-size: 13px; font-weight: 700; color: var(--warning); margin-bottom: 4px; }
+.plan-multi-warning-sub { font-size: 11.5px; color: var(--text-tertiary); margin-bottom: 8px; line-height: 1.4; }
 .plan-multi-row {
-  display: flex; align-items: center; gap: 10px;
   padding: 10px 12px; border-radius: var(--radius-sm);
   background: rgba(255, 201, 60, 0.08); border: 1px solid rgba(255, 201, 60, 0.3);
   margin-bottom: 6px; font-size: 12.5px;
 }
+.plan-multi-row-head { display: flex; align-items: center; gap: 10px; }
 .plan-multi-desc { flex: 1; min-width: 0; color: var(--text-primary); }
 .plan-multi-actions { display: flex; gap: 6px; flex-shrink: 0; }
 .plan-multi-btn {
@@ -235,6 +236,18 @@ body {
   cursor: pointer; -webkit-tap-highlight-color: transparent; white-space: nowrap;
 }
 .plan-multi-btn:hover { background: var(--line-soft); color: var(--text-primary); }
+/* Collapsed by default (read-only) — "Previous plan" is informational
+   context, not something to act on inline besides Mark completed/
+   Abandon, so its checkpoint detail starts hidden rather than
+   competing with the real active plan's own checkpoint list above. */
+.plan-multi-toggle {
+  margin-top: 8px; padding: 0; border: none; background: none; color: var(--text-tertiary);
+  font-family: inherit; font-size: 11px; font-weight: 600; cursor: pointer;
+  text-decoration: underline; -webkit-tap-highlight-color: transparent;
+}
+.plan-multi-detail { display: none; margin-top: 8px; }
+.plan-multi-detail.show { display: block; }
+.plan-multi-detail-row { display: flex; justify-content: space-between; gap: 8px; font-size: 11.5px; color: var(--text-tertiary); padding: 3px 0; }
 
 .plan-past-section { margin-top: 22px; }
 .plan-past-row {
@@ -370,7 +383,8 @@ body {
   </div>
 
   <div id="planMultiWarning" class="plan-multi-warning" style="display:none">
-    <div class="plan-multi-warning-title">You have more than one active plan — only one shows above</div>
+    <div class="plan-multi-warning-title">Previous plan — still active, not shown above</div>
+    <div class="plan-multi-warning-sub">The plan above is the one with the most recent start date. This one is also marked active; nothing has been deleted. Mark it completed or abandon it when you're ready — until then it stays exactly as it is.</div>
     <div id="planMultiList"></div>
   </div>
 
@@ -781,6 +795,32 @@ document.addEventListener('DOMContentLoaded', function () {
     33: { disciplines: { run: { km: 12 }, swim: { sessions: 2, meters: 1000 }, bike: { km: 20 }, strength: { sessions: 2 } }, note: 'Taper (-50%), light strength' },
     34: { disciplines: { run: { km: 5 }, swim: { sessions: 1, meters: 800 }, bike: { km: 15 }, strength: { sessions: 0 } }, note: 'Race week — easy sessions only' },
   };
+  // PLAN RESTART PREP — PLAN_BACKFILL_DISCIPLINES above is keyed by
+  // WEEK NUMBER (1-34), which only ever meant anything relative to
+  // the ORIGINAL plan's own numbering. A restarted plan renumbers its
+  // checkpoints from 1 (its new week 1 = this table's old week 4), so
+  // a weekNumber-keyed lookup would hand the restarted plan's week 1
+  // the OLD week 1's targets — wrong by 3 weeks. Re-keyed here by the
+  // actual Monday calendar date each week numbered 1-34 under the
+  // ORIGINAL plan fell on (PLAN_WEEK1_MONDAY + 7*(weekNumber-1),
+  // computed, never hand-typed, so this can't silently drift from the
+  // table above) — every consumer below now matches a checkpoint to
+  // its table row by that checkpoint's OWN canonical Monday
+  // (checkpointCanonicalRange(cp).start), independent of which plan
+  // it belongs to or what week number that plan calls it. A
+  // checkpoint whose canonical Monday isn't one of these 34 dates
+  // gets nothing, exactly as a checkpoint with no matching weekNumber
+  // used to get nothing.
+  const PLAN_WEEK1_MONDAY = '2026-09-21';
+  function addWeeksKey(mondayKeyStr, n) {
+    const d = DayLib.parseDateKey(mondayKeyStr);
+    d.setDate(d.getDate() + n * 7);
+    return DayLib.plainDateKey(d);
+  }
+  const PLAN_BACKFILL_BY_WEEK_START = {};
+  Object.keys(PLAN_BACKFILL_DISCIPLINES).map(Number).forEach((wn) => {
+    PLAN_BACKFILL_BY_WEEK_START[addWeeksKey(PLAN_WEEK1_MONDAY, wn - 1)] = PLAN_BACKFILL_DISCIPLINES[wn];
+  });
   // Swim has now changed twice for weeks 4-23 (2 sessions -> 3
   // sessions -> 3 sessions at higher per-session meters).
   // PLAN_BACKFILL_DISCIPLINES above already holds the LATEST target;
@@ -815,14 +855,25 @@ document.addEventListener('DOMContentLoaded', function () {
       22: { sessions: 3, meters: 1400 }, 23: { sessions: 3, meters: 1100 },
     },
   };
-  function swimMatchesAnyAcceptedBaseline(weekNumber, swim) {
-    return Object.keys(PLAN_SWIM_ACCEPTED_BASELINES).some((key) => {
-      const baseline = PLAN_SWIM_ACCEPTED_BASELINES[key][weekNumber];
+  // Re-keyed by date for the same PLAN RESTART PREP reason as
+  // PLAN_BACKFILL_BY_WEEK_START above — both derived from the exact
+  // same PLAN_WEEK1_MONDAY anchor, so a checkpoint's own canonical
+  // Monday resolves to the same calendar week in every one of these
+  // tables consistently.
+  const PLAN_SWIM_ACCEPTED_BASELINES_BY_WEEK_START = { original: {}, intermediate: {} };
+  ['original', 'intermediate'].forEach((variant) => {
+    Object.keys(PLAN_SWIM_ACCEPTED_BASELINES[variant]).map(Number).forEach((wn) => {
+      PLAN_SWIM_ACCEPTED_BASELINES_BY_WEEK_START[variant][addWeeksKey(PLAN_WEEK1_MONDAY, wn - 1)] = PLAN_SWIM_ACCEPTED_BASELINES[variant][wn];
+    });
+  });
+  function swimMatchesAnyAcceptedBaseline(weekStartKey, swim) {
+    return Object.keys(PLAN_SWIM_ACCEPTED_BASELINES_BY_WEEK_START).some((key) => {
+      const baseline = PLAN_SWIM_ACCEPTED_BASELINES_BY_WEEK_START[key][weekStartKey];
       return !!baseline && swimEqual(swim, baseline);
     });
   }
-  function hasAnyAcceptedSwimBaseline(weekNumber) {
-    return Object.keys(PLAN_SWIM_ACCEPTED_BASELINES).some((key) => !!PLAN_SWIM_ACCEPTED_BASELINES[key][weekNumber]);
+  function hasAnyAcceptedSwimBaseline(weekStartKey) {
+    return Object.keys(PLAN_SWIM_ACCEPTED_BASELINES_BY_WEEK_START).some((key) => !!PLAN_SWIM_ACCEPTED_BASELINES_BY_WEEK_START[key][weekStartKey]);
   }
   function disciplinesWithoutSwim(d) {
     if (!d) return d;
@@ -854,19 +905,29 @@ document.addEventListener('DOMContentLoaded', function () {
       && numEq(a.bike && a.bike.km, b.bike && b.bike.km)
       && numEq(a.strength && a.strength.sessions, b.strength && b.strength.sessions);
   }
-  // Cumulative run targetValue for weeks 4-34, continuing from week
-  // 3's OWN stored targetValue (read live, never assumed/hardcoded —
-  // weeks 1-3 are never touched by this backfill) plus each week's
-  // table run.km in order. Deterministic given the table + week 3's
-  // current value, so re-running always produces the identical map —
-  // the one thing that makes the targetValue side of this idempotent.
+  // PLAN RESTART PREP — cumulative run targetValue, recomputed from
+  // THIS plan's own first checkpoint (by date, not weekNumber), so a
+  // restarted plan begins at 0 and its header goal is exactly the sum
+  // of its own weekly run targets. Previously anchored to "week 3's
+  // own stored targetValue" specifically, which only made sense for
+  // the ONE plan whose own weeks 1-3 happened to precede this table's
+  // reach — that value is provably identical to summing the table's
+  // own weeks 1-3 run.km from 0 (18, 38, 58), so dropping the special
+  // case changes nothing for that plan while correctly generalizing
+  // to any other plan's own checkpoints, restarted or not. Keyed by
+  // each checkpoint's own canonical Monday (date, not weekNumber) —
+  // a checkpoint whose canonical Monday has no matching table row
+  // gets nothing, and the chain simply does not advance for it.
   function computeRunCumulativeTargets(plan) {
-    const week3 = (plan.weeklyCheckpoints || []).find((cp) => cp.weekNumber === 3);
-    let cumulative = week3 ? Number(week3.targetValue) || 0 : 0;
+    const checkpoints = (plan.weeklyCheckpoints || []).slice().sort((a, b) => (a.weekStartDate < b.weekStartDate ? -1 : a.weekStartDate > b.weekStartDate ? 1 : 0));
+    let cumulative = 0;
     const map = {};
-    Object.keys(PLAN_BACKFILL_DISCIPLINES).map(Number).filter((wn) => wn >= 4).sort((a, b) => a - b).forEach((wn) => {
-      cumulative += Number(PLAN_BACKFILL_DISCIPLINES[wn].disciplines.run.km) || 0;
-      map[wn] = Math.round(cumulative * 10) / 10;
+    checkpoints.forEach((cp) => {
+      const key = checkpointCanonicalRange(cp).start;
+      const fill = PLAN_BACKFILL_BY_WEEK_START[key];
+      if (!fill) return;
+      cumulative += Number(fill.disciplines.run.km) || 0;
+      map[key] = Math.round(cumulative * 10) / 10;
     });
     return map;
   }
@@ -900,14 +961,15 @@ document.addEventListener('DOMContentLoaded', function () {
     if (!plan || plan.goalType !== 'running_distance' || !Array.isArray(plan.weeklyCheckpoints)) return false;
     const cumulativeByWeek = computeRunCumulativeTargets(plan);
     const disciplineOrCheckpointStale = plan.weeklyCheckpoints.some((cp) => {
-      const fill = PLAN_BACKFILL_DISCIPLINES[cp.weekNumber];
+      const weekKey = checkpointCanonicalRange(cp).start;
+      const fill = PLAN_BACKFILL_BY_WEEK_START[weekKey];
       if (!fill) return false;
       if (!cp.disciplines) return true;
       // Swim-blind — swim has its own protected comparison below, so
       // the whole-discipline overwrite check here never reacts to a
       // swim-only difference (and never clobbers swim as a side effect).
       if (fill.overwrite && (!disciplinesEqualWithoutSwim(cp.disciplines, fill.disciplines) || (cp.note || '') !== (fill.note || ''))) return true;
-      if (cp.weekNumber >= 4 && cumulativeByWeek[cp.weekNumber] != null && Number(cp.targetValue) !== cumulativeByWeek[cp.weekNumber]) return true;
+      if (cumulativeByWeek[weekKey] != null && Number(cp.targetValue) !== cumulativeByWeek[weekKey]) return true;
       return false;
     });
     if (disciplineOrCheckpointStale) return true;
@@ -918,9 +980,10 @@ document.addEventListener('DOMContentLoaded', function () {
     // matches NEITHER accepted baseline was user-edited and is never
     // eligible here, by design.
     const swimStale = plan.weeklyCheckpoints.some((cp) => {
-      const fill = PLAN_BACKFILL_DISCIPLINES[cp.weekNumber];
-      if (!fill || !cp.disciplines || !hasAnyAcceptedSwimBaseline(cp.weekNumber)) return false;
-      const matchesBaseline = swimMatchesAnyAcceptedBaseline(cp.weekNumber, cp.disciplines.swim);
+      const weekKey = checkpointCanonicalRange(cp).start;
+      const fill = PLAN_BACKFILL_BY_WEEK_START[weekKey];
+      if (!fill || !cp.disciplines || !hasAnyAcceptedSwimBaseline(weekKey)) return false;
+      const matchesBaseline = swimMatchesAnyAcceptedBaseline(weekKey, cp.disciplines.swim);
       return matchesBaseline && !swimEqual(cp.disciplines.swim, fill.disciplines.swim);
     });
     if (swimStale) return true;
@@ -929,11 +992,10 @@ document.addEventListener('DOMContentLoaded', function () {
     // checkpoint says, so a plan whose checkpoints were backfilled
     // before this fix existed still shows the button once to correct
     // just the header.
-    const projected = plan.weeklyCheckpoints.map((cp) => (
-      cp.weekNumber >= 4 && cumulativeByWeek[cp.weekNumber] != null
-        ? Object.assign({}, cp, { targetValue: cumulativeByWeek[cp.weekNumber] })
-        : cp
-    ));
+    const projected = plan.weeklyCheckpoints.map((cp) => {
+      const weekKey = checkpointCanonicalRange(cp).start;
+      return cumulativeByWeek[weekKey] != null ? Object.assign({}, cp, { targetValue: cumulativeByWeek[weekKey] }) : cp;
+    });
     const lastTarget = lastCheckpointTargetValue(projected);
     return lastTarget != null && Number(plan.targetValue) !== lastTarget;
   }
@@ -946,8 +1008,9 @@ document.addEventListener('DOMContentLoaded', function () {
     // overwritten.
     const skippedSwimWeeks = [];
     const newCheckpoints = plan.weeklyCheckpoints.map((cp) => {
-      const fill = PLAN_BACKFILL_DISCIPLINES[cp.weekNumber];
-      if (!fill) return cp; // no table data for this week — leave byte-for-byte as-is
+      const weekKey = checkpointCanonicalRange(cp).start;
+      const fill = PLAN_BACKFILL_BY_WEEK_START[weekKey];
+      if (!fill) return cp; // no table row for this checkpoint's canonical week — leave byte-for-byte as-is
       const next = Object.assign({}, cp);
       let changed = false;
       // Run/bike/strength/note — swim-blind (disciplinesWithoutSwim),
@@ -968,7 +1031,11 @@ document.addEventListener('DOMContentLoaded', function () {
           disciplines = Object.assign({}, fillWithoutSwim, { swim: (cp.disciplines && cp.disciplines.swim) || fill.disciplines.swim });
           // Overwrite weeks replace the note outright (per the task);
           // a fill-only week keeps any pre-existing freeform note if
-          // the table itself doesn't specify one.
+          // the table itself doesn't specify one. Notes follow the
+          // checkpoint's own DATE (via weekKey's table row above),
+          // never a week number, so a restarted plan's checkpoints
+          // pick up the deload/continuous-swim/decision-point notes
+          // that belong to their real calendar week automatically.
           next.note = fill.overwrite ? fill.note : (fill.note || cp.note);
           changed = true;
         }
@@ -976,11 +1043,11 @@ document.addEventListener('DOMContentLoaded', function () {
       // Swim — protected, surgical update. Only ever touches the swim
       // field, only for weeks with an accepted baseline, only when the
       // current value still matches one of those baselines exactly.
-      if (hasAnyAcceptedSwimBaseline(cp.weekNumber) && disciplines) {
+      if (hasAnyAcceptedSwimBaseline(weekKey) && disciplines) {
         const currentSwim = disciplines.swim;
         const targetSwim = fill.disciplines.swim;
         if (!swimEqual(currentSwim, targetSwim)) {
-          if (swimMatchesAnyAcceptedBaseline(cp.weekNumber, currentSwim)) {
+          if (swimMatchesAnyAcceptedBaseline(weekKey, currentSwim)) {
             diffLines.push('Week ' + cp.weekNumber + ' swim: ' + currentSwim.sessions + '×' + currentSwim.meters + 'm -> ' + targetSwim.sessions + '×' + targetSwim.meters + 'm');
             disciplines = Object.assign({}, disciplines, { swim: targetSwim });
             changed = true;
@@ -990,8 +1057,8 @@ document.addEventListener('DOMContentLoaded', function () {
         }
       }
       if (changed) next.disciplines = disciplines;
-      if (cp.weekNumber >= 4 && cumulativeByWeek[cp.weekNumber] != null) {
-        const newTarget = cumulativeByWeek[cp.weekNumber];
+      if (cumulativeByWeek[weekKey] != null) {
+        const newTarget = cumulativeByWeek[weekKey];
         if (Number(cp.targetValue) !== newTarget) {
           diffLines.push('Week ' + cp.weekNumber + ' cumulative target: ' + cp.targetValue + ' -> ' + newTarget + ' km');
           next.targetValue = newTarget;
@@ -1324,15 +1391,28 @@ document.addEventListener('DOMContentLoaded', function () {
   // for a state the chat now actively tries to prevent, not the
   // primary fix. `others` excludes whichever plan is already showing
   // as THE active one above.
+  // "Previous plan" — read-only, collapsed by default (PLAN RESTART
+  // PREP): a plan still marked active but NOT the one resolveActivePlan
+  // picked (older startDate). Shown so it's never silently invisible,
+  // but nothing here is editable except the two status actions —
+  // checkpoint detail is opt-in via the toggle, never auto-expanded.
   function renderMultiActiveWarning(others) {
     if (!others.length) { $('planMultiWarning').style.display = 'none'; return; }
     $('planMultiWarning').style.display = 'block';
     $('planMultiList').innerHTML = others.map((p) => (
       '<div class="plan-multi-row">' +
-        '<span class="plan-multi-desc">' + escapeHtml(p.goalDescription) + '</span>' +
-        '<div class="plan-multi-actions">' +
-          '<button type="button" class="plan-multi-btn" data-id="' + escapeHtml(p.id) + '" data-status="completed">Mark completed</button>' +
-          '<button type="button" class="plan-multi-btn" data-id="' + escapeHtml(p.id) + '" data-status="abandoned">Abandon</button>' +
+        '<div class="plan-multi-row-head">' +
+          '<span class="plan-multi-desc">' + escapeHtml(p.goalDescription) + ' <span style="color:var(--text-tertiary)">· started ' + escapeHtml(p.startDate || '—') + '</span></span>' +
+          '<div class="plan-multi-actions">' +
+            '<button type="button" class="plan-multi-btn" data-id="' + escapeHtml(p.id) + '" data-status="completed">Mark completed</button>' +
+            '<button type="button" class="plan-multi-btn" data-id="' + escapeHtml(p.id) + '" data-status="abandoned">Abandon</button>' +
+          '</div>' +
+        '</div>' +
+        '<button type="button" class="plan-multi-toggle" data-id="' + escapeHtml(p.id) + '">Show checkpoints (read-only)</button>' +
+        '<div class="plan-multi-detail" id="planMultiDetail_' + escapeHtml(p.id) + '">' +
+          (Array.isArray(p.weeklyCheckpoints) ? p.weeklyCheckpoints.map((cp) => (
+            '<div class="plan-multi-detail-row"><span>Week ' + cp.weekNumber + ' — ' + escapeHtml(cp.weekStartDate || '') + '</span><span>' + formatValue(cp.targetValue, p.targetUnit) + '</span></div>'
+          )).join('') : '') +
         '</div>' +
       '</div>'
     )).join('');
@@ -1342,6 +1422,13 @@ document.addEventListener('DOMContentLoaded', function () {
         const status = btn.getAttribute('data-status');
         if (!confirm((status === 'completed' ? 'Mark' : 'Abandon') + ' this plan?')) return;
         if (await updatePlanStatus(id, status)) location.reload();
+      });
+    });
+    $('planMultiList').querySelectorAll('.plan-multi-toggle').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const detail = $('planMultiDetail_' + btn.getAttribute('data-id'));
+        const nowShown = detail.classList.toggle('show');
+        btn.textContent = nowShown ? 'Hide checkpoints' : 'Show checkpoints (read-only)';
       });
     });
   }
@@ -1446,8 +1533,17 @@ document.addEventListener('DOMContentLoaded', function () {
       return; // never touch planEmpty/planMultiWarning/planPastSection on a failed read — there's nothing authoritative to show for them
     }
 
+    // PLAN RESTART PREP — more than one plan can have status:'active'
+    // at once (nothing server-side prevents it, e.g. right after the
+    // user confirms a brand-new plan without first ending the old
+    // one). Resolve the SAME single plan every other consumer
+    // (gym.html, main.html, topbar.js) resolves: the one with the
+    // latest startDate — not just whichever happened to come first
+    // from the server. Every other currently-active plan is shown
+    // below as "Previous plan" instead of silently disappearing.
     const activePlans = result.plans.filter((p) => p.status === 'active');
-    const active = activePlans[0] || null;
+    const active = activePlans.length ? activePlans.reduce((a, b) => (b.startDate > a.startDate ? b : a)) : null;
+    const otherActivePlans = active ? activePlans.filter((p) => p.id !== active.id) : activePlans;
     saveCachedPlan(active); // matches the server exactly, including clearing the cache when the server confirms there's genuinely no active plan
     currentActivePlan = active;
     if (active) {
@@ -1456,7 +1552,7 @@ document.addEventListener('DOMContentLoaded', function () {
     } else {
       $('planEmpty').style.display = 'block'; // the ONLY path that can show this — a confirmed-successful response with zero active plans
     }
-    renderMultiActiveWarning(activePlans.slice(1));
+    renderMultiActiveWarning(otherActivePlans);
     renderPastPlans(result.plans);
   }
 

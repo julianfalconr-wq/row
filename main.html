@@ -3256,6 +3256,18 @@ document.addEventListener('DOMContentLoaded', function () {
   // timezone or format mismatch to worry about. Returns the active
   // plan object (or null) alongside the boolean, since the dashboard
   // card also wants plan.goalDescription for its subtitle.
+  // PLAN RESTART PREP — more than one plan can have status:'active'
+  // at once (nothing server-side prevents it, e.g. right after the
+  // user confirms a brand-new plan without first ending the old
+  // one), so every consumer must resolve the SAME single plan: the
+  // one with the latest startDate. Duplicated per-file per this
+  // project's own small-duplication convention (see
+  // checkpointCanonicalRange elsewhere).
+  function resolveActivePlan(plans) {
+    const activePlans = (plans || []).filter((p) => p && p.status === 'active');
+    if (!activePlans.length) return null;
+    return activePlans.reduce((a, b) => (b.startDate > a.startDate ? b : a));
+  }
   async function fetchActivePlanForRaceCheck() {
     const secret = getSecret();
     if (!secret) return null;
@@ -3263,7 +3275,7 @@ document.addEventListener('DOMContentLoaded', function () {
       const r = await fetch('/api/sync-state?secret=' + encodeURIComponent(secret) + '&resource=plans');
       const j = await r.json();
       const plans = (j && j.ok && Array.isArray(j.plans)) ? j.plans : [];
-      return plans.find((p) => p.status === 'active') || null;
+      return resolveActivePlan(plans);
     } catch (e) { return null; }
   }
   function isRaceDayFor(dateKey, activePlan) {
@@ -4301,6 +4313,15 @@ document.addEventListener('DOMContentLoaded', function () {
     renderRaceDayChecklist(items, checkedIds);
   }
 
+  // PLAN RESTART PREP — see main.html's own fetchActivePlanForRaceCheck
+  // comment (different <script> closure, duplicated here) — more than
+  // one plan can be status:'active' at once; every consumer must
+  // resolve the SAME single plan: the one with the latest startDate.
+  function resolveActivePlan(plans) {
+    const activePlans = (plans || []).filter((p) => p && p.status === 'active');
+    if (!activePlans.length) return null;
+    return activePlans.reduce((a, b) => (b.startDate > a.startDate ? b : a));
+  }
   async function load() {
     const secret = getSecret();
     if (!secret) { titleEl.textContent = 'Plan'; subEl.textContent = 'Set your dashboard secret to use this'; return; }
@@ -4310,7 +4331,7 @@ document.addEventListener('DOMContentLoaded', function () {
       const j = await r.json();
       if (j && j.ok && Array.isArray(j.plans)) plans = j.plans;
     } catch (e) {}
-    const active = plans.find((p) => p.status === 'active');
+    const active = resolveActivePlan(plans);
     renderRaceBadge(active);
     renderRaceDayCard(active);
     if (!active) {
@@ -5367,6 +5388,15 @@ document.addEventListener('DOMContentLoaded', function () {
     d.setDate(d.getDate() + diff);
     return window.DayLib.plainDateKey ? window.DayLib.plainDateKey(d) : d.toISOString().slice(0, 10);
   }
+  // PLAN RESTART PREP — see main.html's own fetchActivePlanForRaceCheck
+  // comment (different <script> closure, duplicated here) — more than
+  // one plan can be status:'active' at once; every consumer must
+  // resolve the SAME single plan: the one with the latest startDate.
+  function resolveActivePlan(plans) {
+    const activePlans = (plans || []).filter((p) => p && p.status === 'active');
+    if (!activePlans.length) return null;
+    return activePlans.reduce((a, b) => (b.startDate > a.startDate ? b : a));
+  }
   async function fetchCurrentWeekPlanDisciplines() {
     const secret = getSecret();
     if (!secret) return null;
@@ -5374,30 +5404,29 @@ document.addEventListener('DOMContentLoaded', function () {
       const r = await fetch('/api/sync-state?secret=' + encodeURIComponent(secret) + '&resource=plans');
       const j = await r.json();
       const plans = (j && j.ok && Array.isArray(j.plans)) ? j.plans : [];
+      const p = resolveActivePlan(plans);
+      if (!p || !Array.isArray(p.weeklyCheckpoints)) return null;
       const todayK = window.DayLib.effectiveDateKey();
-      for (const p of plans) {
-        if (p.status !== 'active' || !Array.isArray(p.weeklyCheckpoints)) continue;
-        const cp = p.weeklyCheckpoints.find((c) => {
-          if (!c.weekStartDate) return false;
-          // BUG FIX (Phase 4.0b) — the comment above promised the
-          // checkpointCanonicalRange median-day technique, but this
-          // called rhythmCanonicalWeekStart on the RAW weekStartDate
-          // directly, skipping the +3-day median-day step. That
-          // coincidentally matched the real plan's Tuesday anchor
-          // (Mon/Tue/Wed/Thu anchors land in the same calendar week
-          // either way) but would silently misresolve a plan anchored
-          // on Fri/Sat/Sun, and still disagreed with plan.html on
-          // this week's exact Monday/Sunday boundary. Mirror
-          // checkpointCanonicalRange exactly: take the checkpoint's
-          // own middle day (offset 3 of its 7) before mapping to Monday.
-          const mid = window.DayLib.parseDateKey(c.weekStartDate);
-          mid.setDate(mid.getDate() + 3);
-          const start = rhythmCanonicalWeekStart(window.DayLib.plainDateKey(mid));
-          const end = (() => { const d = window.DayLib.parseDateKey(start); d.setDate(d.getDate() + 6); return window.DayLib.plainDateKey ? window.DayLib.plainDateKey(d) : d.toISOString().slice(0, 10); })();
-          return todayK >= start && todayK <= end;
-        });
-        if (cp && cp.disciplines) return cp.disciplines;
-      }
+      const cp = p.weeklyCheckpoints.find((c) => {
+        if (!c.weekStartDate) return false;
+        // BUG FIX (Phase 4.0b) — the comment above promised the
+        // checkpointCanonicalRange median-day technique, but this
+        // called rhythmCanonicalWeekStart on the RAW weekStartDate
+        // directly, skipping the +3-day median-day step. That
+        // coincidentally matched the real plan's Tuesday anchor
+        // (Mon/Tue/Wed/Thu anchors land in the same calendar week
+        // either way) but would silently misresolve a plan anchored
+        // on Fri/Sat/Sun, and still disagreed with plan.html on
+        // this week's exact Monday/Sunday boundary. Mirror
+        // checkpointCanonicalRange exactly: take the checkpoint's
+        // own middle day (offset 3 of its 7) before mapping to Monday.
+        const mid = window.DayLib.parseDateKey(c.weekStartDate);
+        mid.setDate(mid.getDate() + 3);
+        const start = rhythmCanonicalWeekStart(window.DayLib.plainDateKey(mid));
+        const end = (() => { const d = window.DayLib.parseDateKey(start); d.setDate(d.getDate() + 6); return window.DayLib.plainDateKey ? window.DayLib.plainDateKey(d) : d.toISOString().slice(0, 10); })();
+        return todayK >= start && todayK <= end;
+      });
+      if (cp && cp.disciplines) return cp.disciplines;
     } catch (e) {}
     return null;
   }

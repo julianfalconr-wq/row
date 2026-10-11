@@ -1398,6 +1398,17 @@ body {
       return null; // "other" — no auto-tracked series, same as plan.html
     }
     function planIsIncreasingGoal(goalType) { return goalType !== 'weight_loss'; }
+    // PLAN RESTART PREP — more than one plan can have status:'active'
+    // at once (nothing server-side prevents it, e.g. right after the
+    // user confirms a brand-new plan without first ending the old
+    // one), so every consumer must resolve the SAME single plan: the
+    // one with the latest startDate. Duplicated per-file per this
+    // project's own small-duplication convention.
+    function planResolveActivePlan(plans) {
+      const activePlans = (plans || []).filter((p) => p && p.status === 'active');
+      if (!activePlans.length) return null;
+      return activePlans.reduce((a, b) => (b.startDate > a.startDate ? b : a));
+    }
     function planCheckpointStatus(planObj, cp, current, todayK) {
       const range = planCheckpointCanonicalRange(cp);
       if (todayK >= range.start && todayK <= range.end) return 'current';
@@ -1420,7 +1431,7 @@ body {
         const r = await fetch('/api/sync-state?secret=' + encodeURIComponent(activitiesSecret) + '&resource=plans');
         const j = await r.json();
         const allPlans = (j && j.ok && Array.isArray(j.plans)) ? j.plans : [];
-        const activePlan = allPlans.find((p) => p.status === 'active') || null;
+        const activePlan = planResolveActivePlan(allPlans);
         plan.pastPlanCount = allPlans.filter((p) => p.status !== 'active').length;
         if (activePlan) {
           const matchedExercise = activePlan.goalType === 'strength_pr' ? planFindExercise(pcState || {}, activePlan.goalExerciseName) : null;

@@ -6069,6 +6069,16 @@ img, video, canvas, svg { max-width: 100%; }
   // can show something real from the user's own plan when the model's
   // own description is missing (see buildFallbackPlanFromDisciplines'
   // own comment) — never invented, only ever this exact stored text.
+  // PLAN RESTART PREP — more than one plan can have status:'active'
+  // at once (nothing server-side prevents it, e.g. right after the
+  // user confirms a brand-new plan without first ending the old
+  // one), so every consumer must resolve the SAME single plan: the
+  // one with the latest startDate.
+  function resolveActivePlan(plans) {
+    const activePlans = (plans || []).filter((p) => p && p.status === 'active');
+    if (!activePlans.length) return null;
+    return activePlans.reduce((a, b) => (b.startDate > a.startDate ? b : a));
+  }
   async function fetchActiveWeekDisciplines() {
     const secret = getSecret();
     if (!secret) return null;
@@ -6076,18 +6086,17 @@ img, video, canvas, svg { max-width: 100%; }
       const r = await fetch('/api/sync-state?resource=plans&secret=' + encodeURIComponent(secret));
       const j = await r.json();
       const plans = (j && j.ok && Array.isArray(j.plans)) ? j.plans : [];
+      const p = resolveActivePlan(plans);
+      if (!p || !Array.isArray(p.weeklyCheckpoints)) return null;
       const todayK = DayLib.effectiveDateKey();
-      for (const p of plans) {
-        if (p.status !== 'active' || !Array.isArray(p.weeklyCheckpoints)) continue;
-        // BUG FIX: canonical (Mon-Sun) week match, not the checkpoint's
-        // raw stored window — see checkpointCanonicalRange's own comment.
-        const cp = p.weeklyCheckpoints.find((c) => {
-          if (!c.weekStartDate) return false;
-          const range = checkpointCanonicalRange(c);
-          return todayK >= range.start && todayK <= range.end;
-        });
-        if (cp && cp.disciplines) return { disciplines: cp.disciplines, note: typeof cp.note === 'string' ? cp.note : null };
-      }
+      // BUG FIX: canonical (Mon-Sun) week match, not the checkpoint's
+      // raw stored window — see checkpointCanonicalRange's own comment.
+      const cp = p.weeklyCheckpoints.find((c) => {
+        if (!c.weekStartDate) return false;
+        const range = checkpointCanonicalRange(c);
+        return todayK >= range.start && todayK <= range.end;
+      });
+      if (cp && cp.disciplines) return { disciplines: cp.disciplines, note: typeof cp.note === 'string' ? cp.note : null };
       return null;
     } catch (e) { return null; }
   }
