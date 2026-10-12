@@ -4,6 +4,7 @@
 #   - tests/smoke-refresh-buttons.cjs (real-page click-through smoke test, gym.html)
 #   - tests/smoke-main-todo.cjs       (real-page click-through smoke test, main.html's To Do list)
 #   - tests/smoke-weekly-plan-card.cjs (real-page render check, gym.html's weekly objectives card)
+#   - tests/smoke-fresh-week-rebalance.cjs (real-page rebalancer check, gym.html's rest-of-week + Today's session)
 #
 # Installed via `git config core.hooksPath .githooks` — see this
 # repo's package.json "prepare" script (runs automatically on
@@ -63,6 +64,17 @@ if ! node tests/smoke-weekly-plan-card.cjs; then
   echo "pre-push: BLOCKED — tests/smoke-weekly-plan-card.cjs failed (see output above)."
   echo "pre-push: fix the reported issue(s), or run it by hand to iterate:"
   echo "pre-push:   node tests/smoke-weekly-plan-card.cjs"
+  echo ""
+  exit 1
+fi
+
+echo ""
+echo "pre-push: running tests/smoke-fresh-week-rebalance.cjs ..."
+if ! node tests/smoke-fresh-week-rebalance.cjs; then
+  echo ""
+  echo "pre-push: BLOCKED — tests/smoke-fresh-week-rebalance.cjs failed (see output above)."
+  echo "pre-push: fix the reported issue(s), or run it by hand to iterate:"
+  echo "pre-push:   node tests/smoke-fresh-week-rebalance.cjs"
   echo ""
   exit 1
 fi

@@ -7133,7 +7133,114 @@ img, video, canvas, svg { max-width: 100%; }
   // ByDiscipline already does (disciplineForActivityType) -- an
   // activity whose type doesn't match any pattern counts toward NO
   // discipline, exactly as elsewhere.
-  function computeOutstandingByDiscipline(activeWeekDisciplines, todayKeyStr) {
+  //
+  // BUG FIX (reported) — this "whole week's target minus logged so
+  // far" definition is wrong whenever a weekly rhythm exists: the
+  // rhythm already SCHEDULES the remaining amount across the week's
+  // remaining days, so treating the full weekly target as "backlog"
+  // on, say, a fresh Monday double-counts everything the rhythm
+  // already plans for Tue/Wed/Fri/Sun — the rebalancer then placed a
+  // SECOND ~20km on top of the real layout, producing nonsense like
+  // "20km of run moved to..." on a week where NOTHING is actually
+  // behind yet.
+  //
+  // Corrected definition, used only when a real weekly rhythm exists
+  // (computeOutstandingByDisciplineLegacy below is the exact
+  // untouched old behavior, kept for a user with no rhythm at all):
+  // BACKLOG = this week's rhythm sessions (sized straight from
+  // planLayout — the already-generated, already-sized "this week's
+  // layout" — never re-derived from pace guesses here) placed on a
+  // day strictly BEFORE today (or including today once today's own
+  // wake/sleep window, resolveTodayBedtimeMs, has actually passed)
+  // that logged volume hasn't covered yet. Matched by DISCIPLINE
+  // ONLY, never by exact date — a run logged Thursday instead of its
+  // rhythm's Tuesday still counts, consumed in chronological order
+  // (oldest rhythm session first) against the week's total logged
+  // pool for that discipline. Today's OWN rhythm entry is never
+  // backlog — it's today's plan, not something already missed.
+  function computeOutstandingByDiscipline(activeWeekDisciplines, todayKeyStr, weeklyRhythm, planLayout, missedStrengthDayTypes) {
+    const hasRealRhythm = !!(weeklyRhythm && Object.keys(weeklyRhythm).some((wd) => Array.isArray(weeklyRhythm[wd]) && weeklyRhythm[wd].length));
+    if (!hasRealRhythm || !Array.isArray(planLayout) || !planLayout.length) {
+      return computeOutstandingByDisciplineLegacy(activeWeekDisciplines, todayKeyStr);
+    }
+    const monday = thisWeekMondayKey();
+    const soFar = activityEntries.filter((a) => a.dateKey >= monday && a.dateKey <= todayKeyStr);
+    const todayWindowOver = Date.now() >= resolveTodayBedtimeMs();
+    const pastCutoffKey = todayWindowOver ? todayKeyStr : addDaysKey(todayKeyStr, -1);
+    function loggedTotalFor(disc) {
+      return soFar.filter((a) => disciplineForActivityType(a.activityTypeId) === disc)
+        .reduce((s, a) => s + (Number(a.distanceKm) || 0), 0);
+    }
+    // Past rhythm sessions for a discipline, sized straight from the
+    // layout, oldest first — the exact pool this discipline's logged
+    // total is consumed against below.
+    function pastRhythmSessions(disc) {
+      return planLayout
+        .filter((day) => day.dateKey <= pastCutoffKey)
+        .flatMap((day) => (day.sessions || []).filter((s) => s.discipline === disc).map((s) => ({ dateKey: day.dateKey, amount: Number(s.targetAmount) || 0 })))
+        .sort((a, b) => (a.dateKey < b.dateKey ? -1 : 1));
+    }
+    const d = activeWeekDisciplines || {};
+    const out = {};
+    ['run', 'bike'].forEach((disc) => {
+      const t = d[disc];
+      if (!t || !t.activityTypeId || !Number(t.km)) return; // disabled or no real target -- ignored everywhere, never backlog
+      const sessions = pastRhythmSessions(disc);
+      if (!sessions.length) return; // the rhythm hasn't placed anything on a past day yet -- nothing can be behind
+      let pool = loggedTotalFor(disc);
+      let backlogKm = 0;
+      sessions.forEach((sess) => {
+        if (pool >= sess.amount) { pool -= sess.amount; return; }
+        backlogKm += sess.amount - pool;
+        pool = 0;
+      });
+      backlogKm = Math.round(backlogKm * 10) / 10;
+      if (backlogKm > 0) {
+        out[disc] = { targetKm: Number(t.km), doneKm: Math.round(loggedTotalFor(disc) * 10) / 10, outstandingKm: backlogKm, activityTypeId: t.activityTypeId, activityName: t.activityName || '' };
+      }
+    });
+    if (d.swim && d.swim.activityTypeId && Number(d.swim.sessions) > 0) {
+      // Swim's own unit is a discrete SESSION, not a km pool — each
+      // past rhythm swim session consumes exactly one logged swim
+      // session (by discipline, not exact date), same chronological
+      // oldest-first order.
+      const sessions = pastRhythmSessions('swim');
+      if (sessions.length) {
+        let loggedSessions = soFar.filter((a) => disciplineForActivityType(a.activityTypeId) === 'swim').length;
+        let backlogSessions = 0;
+        sessions.forEach(() => { if (loggedSessions > 0) loggedSessions--; else backlogSessions++; });
+        if (backlogSessions > 0) {
+          out.swim = {
+            targetSessions: Number(d.swim.sessions), doneSessions: soFar.filter((a) => disciplineForActivityType(a.activityTypeId) === 'swim').length,
+            outstandingSessions: backlogSessions, perSessionMeters: Number(d.swim.meters) || 0, activityTypeId: d.swim.activityTypeId, activityName: d.swim.activityName || '',
+          };
+        }
+      }
+    }
+    if (d.strength && Number(d.strength.sessions) > 0) {
+      // Strength already has its own correct, rhythm-aware, type-
+      // matched-not-date-matched backlog mechanism (missedDayTypes
+      // ThisWeek, Phase 3.3/3.3-fix) used for Today's own pick —
+      // reused here as the count, rather than recomputing a second,
+      // rhythm-UNAWARE "target minus doneSessions" number that would
+      // have the exact same double-counting bug this whole fix is
+      // about. rebalanceRestOfWeek passes this in; see its own call.
+      const missedCount = (missedStrengthDayTypes || []).length;
+      if (missedCount > 0) {
+        let doneDays = {};
+        try { doneDays = (window.PoCoach && window.PoCoach.getDoneDays()) || {}; } catch (e) {}
+        const doneSessions = Object.keys(doneDays).filter((dk) => dk >= monday && dk <= todayKeyStr && !!doneDays[dk]).length;
+        out.strength = { targetSessions: Number(d.strength.sessions), doneSessions, outstandingSessions: missedCount };
+      }
+    }
+    return out;
+  }
+  // The exact, untouched pre-fix behavior — still correct and used
+  // as-is whenever the user has no weekly rhythm configured at all
+  // (in which case there's no per-day schedule to be "ahead of" in
+  // the first place, so a plain week-to-date target-minus-logged
+  // number is the only sane definition).
+  function computeOutstandingByDisciplineLegacy(activeWeekDisciplines, todayKeyStr) {
     const monday = thisWeekMondayKey();
     const soFar = activityEntries.filter((a) => a.dateKey >= monday && a.dateKey <= todayKeyStr);
     function doneFor(disc) {
@@ -7515,7 +7622,7 @@ img, video, canvas, svg { max-width: 100%; }
   // LOWEST priority tier by design. Such a rhythm entry is now routed
   // to a separate `extras` list instead — reported, never the main
   // pick, never silently dropped either.
-  function buildTodayRebalancePick(missedDayTypes, todayLayoutEntry, rhythmForDay, outstanding) {
+  function buildTodayRebalancePick(missedDayTypes, todayLayoutEntry, rhythmForDay, targetsNotYetMet) {
     const sessions = [];
     const cantFit = [];
     const extras = [];
@@ -7564,13 +7671,18 @@ img, video, canvas, svg { max-width: 100%; }
     // "can't fit" instead of silently vanishing.
     (rhythmForDay || []).forEach((entry) => {
       if (satisfied.has(entry.discipline) || entry.discipline === 'rest') return;
-      // BUG FIX (reported) — a rhythm entry for a discipline with
-      // nothing outstanding (no key in `outstanding` at all — its
-      // weekly plan target is already met, or it was never part of
-      // the plan) never joins the MAIN pick: it's optional extra
-      // volume, not catch-up, so outstanding plan work (tiers 1/2)
-      // always outranks it regardless of budget room.
-      if (outstanding && !outstanding[entry.discipline]) {
+      // BUG FIX (reported) — a rhythm entry for a discipline whose
+      // WHOLE-WEEK target is already fully met (no key in
+      // `targetsNotYetMet` — the plain legacy week-to-date aggregate,
+      // deliberately NOT the rhythm-aware backlog computation above:
+      // "nothing missed yet" and "target already met" are different
+      // questions, and conflating them would wrongly demote TODAY's
+      // own not-yet-done rhythm entry to an "extra" on a day with no
+      // backlog at all, e.g. a fresh Monday) never joins the MAIN
+      // pick: it's optional extra volume, not catch-up, so outstanding
+      // plan work (tiers 1/2) always outranks it regardless of budget
+      // room.
+      if (targetsNotYetMet && !targetsNotYetMet[entry.discipline]) {
         extras.push({ discipline: entry.discipline, kind: entry.kind, reason: 'extra — plan target already met this week', priority: 'extra' });
         return;
       }
@@ -7644,7 +7756,13 @@ img, video, canvas, svg { max-width: 100%; }
       if (raw.disciplines.strength) activeWeekDisciplines.strength = raw.disciplines.strength;
 
       const todayKeyStr = DayLib.effectiveDateKey();
-      const outstanding = computeOutstandingByDiscipline(activeWeekDisciplines, todayKeyStr);
+      // BUG FIX (reported) — weeklyRhythm/missedDayTypes now computed
+      // BEFORE outstanding, since the corrected, rhythm-aware
+      // computeOutstandingByDiscipline needs both (the rhythm itself,
+      // to know which days/sessions are already planned; the missed
+      // day-types, to size strength's backlog from the SAME already-
+      // correct mechanism Today's own pick uses, instead of a second
+      // rhythm-unaware count).
       const weeklyRhythm = await fetchWeeklyRhythm();
       const restrictions = await fetchActiveRestrictions();
       const rhythmExceedsNotes = rhythmExceedsTargetNotes(activeWeekDisciplines, weeklyRhythm);
@@ -7659,6 +7777,18 @@ img, video, canvas, svg { max-width: 100%; }
       const missedDayTypes = missedDayTypesThisWeek(state, thisWeekMondayKey(), todayKeyStr, weeklyRhythm);
       const todayWeekdayForRhythm = AVAIL_WEEKDAY_NAMES[DayLib.parseDateKey(todayKeyStr).getDay()];
       const rhythmForDay = weeklyRhythm[todayWeekdayForRhythm] || [];
+
+      const outstanding = computeOutstandingByDiscipline(activeWeekDisciplines, todayKeyStr, weeklyRhythm, stored.plan.layout, missedDayTypes);
+      // BUG FIX (reported) — a SEPARATE, rhythm-INDEPENDENT "is the
+      // week's target already fully met" check (the plain legacy
+      // week-to-date aggregate), used only to decide whether TODAY's
+      // own rhythm entry (tier 3 of buildTodayRebalancePick) is
+      // optional "extra" — never the backlog-aware `outstanding`
+      // above, which is correctly EMPTY on a day with nothing missed
+      // yet even though the week's target is nowhere near met (e.g. a
+      // fresh Monday) and would otherwise wrongly demote today's own
+      // not-yet-done rhythm entry.
+      const targetsNotYetMet = computeOutstandingByDisciplineLegacy(activeWeekDisciplines, todayKeyStr);
 
       let result = { layout: [], cantFit: [], movedNote: '', cap: { maxExtraMinPerDay: REBALANCE_MAX_EXTRA_MIN_PER_DAY, tomorrowMaxShare: REBALANCE_TOMORROW_MAX_SHARE, padelMaxExtraMin: REBALANCE_PADEL_MAX_EXTRA_MIN, minSessionKm: REBALANCE_MIN_SESSION_KM, minSessionSwim: 'one whole session' } };
       let capacityConfigured = false;
@@ -7678,10 +7808,19 @@ img, video, canvas, svg { max-width: 100%; }
       }
 
       const todayLayoutEntry = result.layout.find((d) => d.dateKey === todayKeyStr) || null;
-      const todayPick = buildTodayRebalancePick(missedDayTypes, todayLayoutEntry, rhythmForDay, outstanding);
+      const todayPick = buildTodayRebalancePick(missedDayTypes, todayLayoutEntry, rhythmForDay, targetsNotYetMet);
 
       let emptyReason = null;
-      const hasAnything = result.layout.length || result.cantFit.length || deload || todayPick.sessions.length || todayPick.cantFit.length;
+      // BUG FIX (reported) — todayPick.sessions ALWAYS includes
+      // today's own plain rhythm entry whenever nothing higher-
+      // priority claims it (tier 3, priority:'rhythmEntry') — that's
+      // today's NORMAL plan, not a rebalancer addition, and must never
+      // by itself make the Rebalance section look like it has
+      // something to show. Only a genuine catch-up pick (tiers 1/2,
+      // missedStrengthDayType/runBacklogChunk) or an explicit can't-
+      // fit counts as "something happened here".
+      const hasTodayRebalanceAddition = todayPick.sessions.some((s) => s.priority !== 'rhythmEntry');
+      const hasAnything = result.layout.length || result.cantFit.length || deload || hasTodayRebalanceAddition || todayPick.cantFit.length;
       if (!hasAnything) {
         // BUG FIX (reported) — exact wording requested for the "nothing
         // outstanding" case, so the Rebalance section never reads as
