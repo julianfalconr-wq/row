@@ -5198,19 +5198,27 @@ img, video, canvas, svg { max-width: 100%; }
     if (entry.durationMin != null) parts.push(entry.durationMin + ' min');
     return parts.join(', ');
   }
-  // Merge (BUG FIX, reported duplicate-counting) — keeps the MANUAL
-  // entry's own id/dateKey/activityTypeId/distanceKm/count/notes/
-  // effort untouched (the task's own "keep the manual distance, notes
-  // and effort" requirement) and overlays WHOOP's duration/heart
-  // rate/strain on top, so weekly totals/capacity/rebalancing/score —
-  // all of which read activityEntries directly, completely unchanged
-  // by this feature — see exactly ONE entry counting ONE time instead
-  // of two. Never called automatically; only from an explicit user
-  // choice (Merge, in the import review list, the manual-save prompt,
-  // or the History banner).
+  // Merge (BUG FIX, reported duplicate-counting; corrected again —
+  // reported — after shipping with the exact bug it was meant to
+  // prevent) — keeps the MANUAL entry's own id/dateKey/activityTypeId/
+  // notes/effort untouched. duration and distance follow the SAME
+  // rule: the manual entry's own value wins whenever it has one (the
+  // user may have corrected it by hand against WHOOP's own
+  // measurement, e.g. a swim WHOOP measured too long); WHOOP's real
+  // number is kept ONLY in a separate whoopDurationMin/whoopDistanceKm
+  // field that pace/capacity/rebalancing/score never read, and fills
+  // the real durationMin/distanceKm in ONLY when the manual entry
+  // genuinely has none. whoopId/heart rate/strain have no manual
+  // equivalent to defer to, so they're always attached from WHOOP.
+  // Never called automatically; only from an explicit user choice
+  // (Merge, in the import review list, the manual-save prompt, or the
+  // History banner).
   function mergeActivityEntries(manualEntry, whoopEntry) {
     return Object.assign({}, manualEntry, {
-      durationMin: whoopEntry.durationMin != null ? whoopEntry.durationMin : manualEntry.durationMin,
+      durationMin: manualEntry.durationMin != null ? manualEntry.durationMin : whoopEntry.durationMin,
+      distanceKm: manualEntry.distanceKm != null ? manualEntry.distanceKm : whoopEntry.distanceKm,
+      whoopDurationMin: whoopEntry.durationMin != null ? whoopEntry.durationMin : manualEntry.whoopDurationMin,
+      whoopDistanceKm: whoopEntry.distanceKm != null ? whoopEntry.distanceKm : manualEntry.whoopDistanceKm,
       whoopId: whoopEntry.whoopId,
       whoopHeartRate: whoopEntry.whoopHeartRate != null ? whoopEntry.whoopHeartRate : manualEntry.whoopHeartRate,
       whoopStrain: whoopEntry.whoopStrain != null ? whoopEntry.whoopStrain : manualEntry.whoopStrain,
@@ -5554,7 +5562,7 @@ img, video, canvas, svg { max-width: 100%; }
         if (d.duplicateAction === 'merge' && d.duplicateOf) {
           const idx = activityEntries.findIndex((a) => a.id === d.duplicateOf.id);
           if (idx !== -1) {
-            activityEntries[idx] = mergeActivityEntries(activityEntries[idx], { whoopId: d.whoopId, durationMin: d.durationMin, whoopHeartRate: d.heartRate, whoopStrain: d.strain });
+            activityEntries[idx] = mergeActivityEntries(activityEntries[idx], { whoopId: d.whoopId, durationMin: d.durationMin, distanceKm: d.distanceKm, whoopHeartRate: d.heartRate, whoopStrain: d.strain });
             mergedCount++;
           }
           return;
