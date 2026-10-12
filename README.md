@@ -43,4 +43,5 @@ Or individually:
 node tests/lint-gym-html.cjs          # top-level-TDZ lint — gym.html, plan.html, main.html, sync.js
 node tests/smoke-refresh-buttons.cjs  # real-page click-through smoke test — gym.html's 3 refresh buttons
 node tests/smoke-main-todo.cjs        # real-page click-through smoke test — main.html's To Do list (add/check/uncheck/delete/push)
+node tests/smoke-weekly-plan-card.cjs # real-page render check — gym.html's weekly objectives card (layout naming, no phantom interval card, rationale placement, capacity line)
 ```

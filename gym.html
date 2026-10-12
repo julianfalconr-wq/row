@@ -1855,6 +1855,13 @@ img, video, canvas, svg { max-width: 100%; }
         <div id="tpLayoutDays"></div>
         <div class="tp-layout-unplaced" id="tpLayoutUnplaced" style="display:none"></div>
       </div>
+      <!-- BUG FIX (reported) — the plan's own rationale belongs HERE,
+           with the rest of the weekly plan's own content (targets,
+           layout) — it used to sit AFTER the Rebalance section below
+           with no heading/divider of its own, reading as if it were
+           part of "Rest of week (rebalanced)" when it describes the
+           whole week's plan instead. -->
+      <div class="tp-rationale" id="tpRationale"></div>
       <!-- Phase 4.1 — missed-session rebalancing. The "Re-plan" button
            itself is ALWAYS available once a weekly plan exists (never
            nested inside the results it produces — a hidden-until-
@@ -1875,7 +1882,6 @@ img, video, canvas, svg { max-width: 100%; }
         <div class="tp-layout-unplaced" id="tpRebalanceCantFit" style="display:none"></div>
         <div class="tp-capacity-trim-note" id="tpRebalanceRhythmNotes" style="display:none"></div>
       </div>
-      <div class="tp-rationale" id="tpRationale"></div>
     </div>
   </div>
 
@@ -6258,11 +6264,23 @@ img, video, canvas, svg { max-width: 100%; }
   // stale). Async/fire-and-forget on purpose: renderWeeklyProgress
   // itself stays synchronous (many call sites, none awaited) and
   // simply hides the line until this resolves.
-  async function refreshCapacityLineLive(plan) {
+  //
+  // BUG FIX (reported, "missing from the card") — a single attempt
+  // gives up permanently if window.gatherTodayContext isn't ready
+  // within the first 3s (topbar.js can still be finishing its own
+  // async setup on a slower load) — one retry after a short pause
+  // gives that a real second chance instead of leaving the line
+  // hidden for the rest of this render pass; renderWeeklyProgress's
+  // own later calls (e.g. after fetchActivityTypes resolves) are a
+  // separate, existing safety net on top of this.
+  async function refreshCapacityLineLive(plan, isRetry) {
     if (!plan) return;
     try {
       const ready = await waitForGatherTodayContext(3000);
-      if (!ready) return;
+      if (!ready) {
+        if (!isRetry) setTimeout(() => refreshCapacityLineLive(plan, true), 1000);
+        return;
+      }
       const ctx = await window.gatherTodayContext();
       const capacity = await buildWeekCapacity(ctx, null);
       if (!capacity.configured) { $$('tpCapacityLine').style.display = 'none'; return; }
@@ -6278,6 +6296,56 @@ img, video, canvas, svg { max-width: 100%; }
       $$('tpCapacityTrimNote').style.display = hasTrim ? 'inline' : 'none';
       $$('tpCapacityTrimNote').textContent = hasTrim ? plan.capacityNote : '';
     } catch (e) {}
+  }
+
+  // BUG FIX (reported) — "THIS WEEK'S LAYOUT" used to label every
+  // non-strength session as just its discipline + amount (e.g. "Run
+  // 4.6km"), never its real kind (easy/pace/long/interval, or
+  // technique for swim), and every strength session as the bare word
+  // "Strength", never its real day-type (Push/Pull/Legs/Explosive) —
+  // even though buildRhythmSessionsForDiscipline (api/training.js)
+  // already attaches the real kind to every session, strength
+  // included (that session's own `kind` is the rhythm's raw
+  // push/pull/legs/explosive/auto string). Shared by the layout
+  // section and the per-discipline plan-item card descriptions below
+  // (BUG FIX point 2/5) so "Mon Push" reads identically everywhere.
+  const SESSION_KIND_LABELS = { easy: 'Easy', pace: 'Pace', long: 'Long', interval: 'Interval', technique: 'Technique', brick: 'Brick' };
+  function buildLayoutSessionLabel(s, days) {
+    if (s.discipline === 'strength') {
+      const dayType = resolveRhythmStrengthDayType(days || [], s.kind);
+      if (dayType) return dayType;
+      return (s.kind && s.kind !== 'auto') ? (s.kind.charAt(0).toUpperCase() + s.kind.slice(1)) : 'Strength';
+    }
+    const disc = s.activityName || (s.discipline.charAt(0).toUpperCase() + s.discipline.slice(1));
+    const kindLabel = SESSION_KIND_LABELS[s.kind] || '';
+    const amount = s.targetAmount ? ' ' + s.targetAmount + (s.unit || '') : '';
+    return disc + (kindLabel ? ' ' + kindLabel : '') + amount;
+  }
+  // Groups plan.layout's own ALREADY-PLACED sessions by discipline —
+  // BUG FIX (reported) point 2's own "the model may only describe
+  // sessions code already placed": a card's description is built from
+  // these REAL placements, never from the model's separate free-text
+  // interval/longSession/easyVolume fields (which could describe a
+  // session that doesn't match what was actually placed, or one the
+  // rhythm doesn't even have, e.g. a phantom "Interval / VO2 max"
+  // card with no rhythm interval behind it at all).
+  function layoutSessionsForDiscipline(layout, disc) {
+    const out = [];
+    (layout || []).forEach((day) => {
+      (day.sessions || []).forEach((s) => { if (s.discipline === disc) out.push(Object.assign({ weekday: day.weekday, dateKey: day.dateKey }, s)); });
+    });
+    return out;
+  }
+  const PLAN_CARD_WEEKDAY_SHORT = { sunday: 'Sun', monday: 'Mon', tuesday: 'Tue', wednesday: 'Wed', thursday: 'Thu', friday: 'Fri', saturday: 'Sat' };
+  function describeLayoutSessionsForCard(sessions, days) {
+    if (!sessions.length) return '';
+    // Sorted by the session's own real dateKey (not the weekday NAME,
+    // which alphabetizes wrong — "friday" < "thursday" — for a
+    // Monday-Sunday week) so the summary reads in chronological order.
+    return sessions
+      .slice().sort((a, b) => (a.dateKey < b.dateKey ? -1 : 1))
+      .map((s) => (PLAN_CARD_WEEKDAY_SHORT[s.weekday] || s.weekday) + ' ' + buildLayoutSessionLabel(s, days))
+      .join(', ');
   }
 
   function renderWeeklyProgress() {
@@ -6330,14 +6398,27 @@ img, video, canvas, svg { max-width: 100%; }
       // figure IS the whole picture for that discipline, so it's
       // presented as exactly that rather than implying a specific
       // single long run.
+      // BUG FIX (reported) — a card's description is now built from
+      // plan.layout's own REAL placed sessions for that discipline
+      // first (e.g. "Mon Easy 3.9km, Wed Long 6.9km") — the model's
+      // free-text legacySlot.description/plan.swimNote/strength.focus
+      // is only a fallback for when there's no layout to derive one
+      // from (a legacy/pre-rhythm plan). This is also what retires
+      // the standalone "Interval / VO2 max" card below entirely: an
+      // interval session, if the rhythm actually has one, now shows
+      // up as part of run/bike's own description instead of a
+      // separate card that used to appear from plan.cardio.interval
+      // (a legacy generator slot never tied to the rhythm at all) —
+      // see layoutSessionsForDiscipline's own comment.
       ['run', 'bike'].forEach((disc) => {
         const t = plan.targets[disc];
         if (!t || !t.km) return;
         const legacySlot = [plan.cardio.longSession, plan.cardio.easyVolume].find((s) => s && s.activityTypeId === t.activityTypeId) || {};
+        const layoutDesc = describeLayoutSessionsForCard(layoutSessionsForDiscipline(plan.layout, disc), []);
         planItems.push({
           label: (t.activityName || (disc === 'run' ? 'Run' : 'Bike')),
           value: t.km + ' km this week',
-          desc: legacySlot.description || fallbackHint,
+          desc: layoutDesc || legacySlot.description || fallbackHint,
         });
       });
       const swimT = plan.targets.swim;
@@ -6346,10 +6427,13 @@ img, video, canvas, svg { max-width: 100%; }
         // slot of its own at all (unlike run/bike, which can inherit
         // one from the legacy longSession/easyVolume mirror) — it
         // used to always show either the fallback hint or nothing.
+        // Now derived from the rhythm's own layout first (e.g. "Wed
+        // Long, Sat Technique, Sun Pace"), falling back to
         // plan.swimNote (the active plan's own checkpoint note, e.g.
         // "Swim: 300-400m continuous blocks" from plan.html's
-        // backfill) is real text taken directly from the user's own
-        // plan, never invented, and takes priority over the fallback hint.
+        // backfill) — real text taken directly from the user's own
+        // plan, never invented — then the fallback hint.
+        const swimLayoutDesc = describeLayoutSessionsForCard(layoutSessionsForDiscipline(plan.layout, 'swim'), []);
         planItems.push({
           label: swimT.activityName || 'Swim',
           // BUG FIX (reported): swimT.meters is PER SESSION — the card
@@ -6358,24 +6442,20 @@ img, video, canvas, svg { max-width: 100%; }
           // 1400m per session, but read like the weekly amount). Now
           // states both explicitly: "2 sessions × ~1400 m (~2800 m)".
           value: swimT.sessions + ' session' + (swimT.sessions === 1 ? '' : 's') + (swimT.meters ? ' × ~' + swimT.meters + ' m (~' + (swimT.sessions * swimT.meters) + ' m)' : ''),
-          desc: plan.swimNote || fallbackHint,
+          desc: swimLayoutDesc || plan.swimNote || fallbackHint,
         });
       }
       if (plan.strength.targetSessions) {
-        planItems.push({ label: 'Strength', value: plan.strength.targetSessions + ' sessions/wk', desc: plan.strength.focus || fallbackHint });
+        let strengthDays = [];
+        try { strengthDays = ((window.PoCoach && window.PoCoach.getState()) || {}).days || []; } catch (e) {}
+        const strengthLayoutDesc = describeLayoutSessionsForCard(layoutSessionsForDiscipline(plan.layout, 'strength'), strengthDays);
+        planItems.push({ label: 'Strength', value: plan.strength.targetSessions + ' sessions/wk', desc: strengthLayoutDesc || plan.strength.focus || fallbackHint });
       }
-      // The interval/VO2-max piece is a real, separate judgment call
-      // (not tied to any one discipline's weekly volume target) — only
-      // shown when it genuinely has something to say, never as a bare
-      // "0× · 0 min".
-      const interval = plan.cardio.interval;
-      if (interval && interval.targetSessions > 0 && interval.targetMinutes > 0) {
-        planItems.push({
-          label: 'Interval / VO2 max' + (interval.activityName ? ' — ' + interval.activityName : ''),
-          value: interval.targetSessions + '× · ' + interval.targetMinutes + ' min',
-          desc: interval.description || fallbackHint,
-        });
-      }
+      // BUG FIX (reported) — the standalone "Interval / VO2 max" card
+      // (plan.cardio.interval — a legacy generator slot never tied to
+      // the user's actual rhythm or plan) is gone: an interval session
+      // only ever shows now as part of run/bike's own rhythm-derived
+      // description above, and only when the rhythm genuinely has one.
     } else {
       // True legacy plan (no plan.targets at all, predates Phase 3.1)
       // — unchanged 4-card layout, since this is all the real data
@@ -6426,7 +6506,12 @@ img, video, canvas, svg { max-width: 100%; }
     if (Array.isArray(plan.layout) && plan.layout.length) {
       $$('tpLayoutSection').style.display = 'block';
       let doneDaysMap = {};
-      try { doneDaysMap = (window.PoCoach && window.PoCoach.getDoneDays()) || {}; } catch (e) {}
+      let pcDays = [];
+      try {
+        const pcState = (window.PoCoach && window.PoCoach.getState()) || {};
+        doneDaysMap = (window.PoCoach && window.PoCoach.getDoneDays()) || {};
+        pcDays = Array.isArray(pcState.days) ? pcState.days : [];
+      } catch (e) {}
       const WEEKDAY_SHORT = { sunday: 'Sun', monday: 'Mon', tuesday: 'Tue', wednesday: 'Wed', thursday: 'Thu', friday: 'Fri', saturday: 'Sat' };
       $$('tpLayoutDays').innerHTML = plan.layout.map((day) => {
         const sessionsHtml = day.sessions.map((s) => {
@@ -6436,7 +6521,11 @@ img, video, canvas, svg { max-width: 100%; }
           } else {
             isDone = activityEntries.some((a) => a.dateKey === day.dateKey && disciplineForActivityType(a.activityTypeId) === s.discipline);
           }
-          const label = s.discipline === 'strength' ? 'Strength' : (s.activityName || s.discipline) + (s.targetAmount ? ' ' + s.targetAmount + s.unit : '');
+          // BUG FIX (reported) — names the real kind (easy/pace/long/
+          // interval/technique) and, for strength, the real day-type
+          // (Push/Pull/Legs/Explosive) instead of a bare "Run 4.6km" /
+          // "Strength" — see buildLayoutSessionLabel's own comment.
+          const label = buildLayoutSessionLabel(s, pcDays);
           return '<span class="tp-layout-session' + (isDone ? ' is-done' : '') + '">' + escapeHtml(label) + '</span>';
         }).join('');
         return '<div class="tp-layout-day"><span class="tp-layout-day-label">' + (WEEKDAY_SHORT[day.weekday] || day.weekday) + '</span><span class="tp-layout-day-sessions">' + sessionsHtml + '</span></div>';
@@ -6483,6 +6572,11 @@ img, video, canvas, svg { max-width: 100%; }
 
     return { plan, progress };
   }
+  // Exposed so an external trigger (a relevant config change, or a
+  // live/smoke test) can force a fresh render after something this
+  // function reads changes out from under it — same spirit as
+  // main.html's own window.__refreshDayRing.
+  window.__refreshWeeklyPlanCard = renderWeeklyProgress;
 
   // Phase 3.1 — the active long-term plan (plan.html's po_coach
   // "plans" resource, a DIFFERENT thing from po_coach_weekly_plan_v1)
@@ -7589,11 +7683,14 @@ img, video, canvas, svg { max-width: 100%; }
       let emptyReason = null;
       const hasAnything = result.layout.length || result.cantFit.length || deload || todayPick.sessions.length || todayPick.cantFit.length;
       if (!hasAnything) {
+        // BUG FIX (reported) — exact wording requested for the "nothing
+        // outstanding" case, so the Rebalance section never reads as
+        // if it's missing data versus genuinely having nothing to do.
         emptyReason = !Object.keys(outstanding).length
-          ? 'Nothing behind this week.'
+          ? 'Nothing to rebalance yet this week.'
           : !capacityConfigured
           ? 'Could not check your calendar or availability.'
-          : 'Nothing to rebalance.';
+          : 'Nothing to rebalance yet this week.';
       }
 
       stored.plan.rebalance = {
