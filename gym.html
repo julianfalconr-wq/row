@@ -6218,6 +6218,19 @@ img, video, canvas, svg { max-width: 100%; }
       });
       const cp = findCpForWeek(p);
       if (cp && cp.disciplines) return { disciplines: cp.disciplines, note: typeof cp.note === 'string' ? cp.note : null };
+      // BUG FIX (reported) — the plan's own startDate is the day it was
+      // CREATED/saved (e.g. Sat 10 Oct, whatever weekday that happens
+      // to be), never necessarily a Monday — showing it directly as
+      // "new plan starts Sat 10 Oct" was wrong; the actual first week
+      // the plan's own numbers apply from is its FIRST checkpoint's
+      // canonical Monday (checkpointCanonicalRange, same median-day
+      // mapping used everywhere else in this file), e.g. Mon 12 Oct.
+      // Falls back to the raw startDate only if the plan genuinely has
+      // no checkpoints at all to anchor on (defensive; shouldn't
+      // happen given the !Array.isArray(p.weeklyCheckpoints) guard
+      // above already returned null for that case).
+      const firstCp = p.weeklyCheckpoints.reduce((a, b) => (!a || (b.weekStartDate && b.weekStartDate < a.weekStartDate) ? b : a), null);
+      const newPlanMonday = (firstCp && firstCp.weekStartDate) ? checkpointCanonicalRange(firstCp).start : p.startDate;
       // BUG FIX (transition week, reported) — the resolved ACTIVE plan
       // (latest startDate) genuinely has no checkpoint covering the
       // CURRENT canonical week, e.g. the week between a restarted
@@ -6238,10 +6251,10 @@ img, video, canvas, svg { max-width: 100%; }
         return {
           disciplines: prevCp.disciplines,
           note: typeof prevCp.note === 'string' ? prevCp.note : null,
-          transition: { fromPreviousPlan: true, newPlanStartDate: p.startDate },
+          transition: { fromPreviousPlan: true, newPlanStartDate: newPlanMonday },
         };
       }
-      return { disciplines: null, note: null, transition: { fromPreviousPlan: false, newPlanStartDate: p.startDate } };
+      return { disciplines: null, note: null, transition: { fromPreviousPlan: false, newPlanStartDate: newPlanMonday } };
     } catch (e) { return null; }
   }
   // Inverse of disciplineForActivityType() (Phase 2) — given a
@@ -6962,7 +6975,18 @@ img, video, canvas, svg { max-width: 100%; }
           const tooSmallKm = Math.round(tooSmallKmParts.reduce((s, k) => s + k, 0) * 10) / 10;
           cantFit.push({ discipline: 'run', reason: tooSmallKm + 'km too small to schedule on its own.' });
         }
-        if (remainingKm > 0) cantFit.push({ discipline: 'run', reason: remainingKm + 'km could not fit this week’s remaining days/budget.' });
+        // BUG FIX (reported) — "Xkm could not fit this week's remaining
+        // days/budget" reads like a capacity/scheduling failure even
+        // when the REAL reason is that the user's own availability
+        // template simply doesn't allow running on any day still left
+        // this week (candidates is empty) — a config fact, not a bug.
+        // Distinguished here so the card never misrepresents one as
+        // the other.
+        if (remainingKm > 0) {
+          cantFit.push(candidates.length
+            ? { discipline: 'run', reason: remainingKm + 'km could not fit this week’s remaining days/budget.' }
+            : { discipline: 'run', reason: remainingKm + 'km could not be rescheduled — running isn’t allowed on any remaining day this week per your availability template.' });
+        }
       }
     }
 
@@ -6989,7 +7013,14 @@ img, video, canvas, svg { max-width: 100%; }
       });
       const placedCount = outstanding.swim.outstandingSessions - remaining;
       if (placedCount > 0) movedParts.push(placedCount + ' swim session' + (placedCount === 1 ? '' : 's') + ' moved to ' + movedDays.join('/'));
-      if (remaining > 0) cantFit.push({ discipline: 'swim', reason: placedCount + ' of ' + outstanding.swim.outstandingSessions + ' can fit this week.' });
+      // BUG FIX (reported) — same distinction as run above: no day
+      // left this week allowing swim per the availability template is
+      // a config fact, not a scheduling/capacity bug.
+      if (remaining > 0) {
+        cantFit.push(candidates.length
+          ? { discipline: 'swim', reason: placedCount + ' of ' + outstanding.swim.outstandingSessions + ' can fit this week.' }
+          : { discipline: 'swim', reason: placedCount + ' of ' + outstanding.swim.outstandingSessions + ' can fit — swim isn’t allowed on any remaining day this week per your availability template.' });
+      }
     }
 
     // --- STRENGTH: discrete sessions, at most ONE per day overall
@@ -7047,9 +7078,22 @@ img, video, canvas, svg { max-width: 100%; }
   // one cardio chunk's worth, capped at REBALANCE_MAX_EXTRA_MIN_PER_DAY)
   // rather than inventing a new number.
   const REBALANCE_TODAY_BUDGET_MIN = DEFAULT_SESSION_MINUTES.strength + REBALANCE_MAX_EXTRA_MIN_PER_DAY;
-  function buildTodayRebalancePick(missedDayTypes, todayLayoutEntry, rhythmForDay) {
+  // outstanding (BUG FIX, reported priority inversion) — the SAME
+  // computeOutstandingByDiscipline() object rebalanceRestOfWeek
+  // already has in scope: a discipline key is present here ONLY when
+  // real plan volume is still outstanding for it. Tier 3 (today's
+  // plain rhythm entry) used to join `sessions` — the MAIN pick —
+  // unconditionally whenever there was room, even for a discipline
+  // whose weekly target was ALREADY MET (e.g. a 3rd rhythm swim in a
+  // 2-swim week that's already done 2800/2800m) — outranking tier 1/2
+  // real catch-up work for the user's attention despite being the
+  // LOWEST priority tier by design. Such a rhythm entry is now routed
+  // to a separate `extras` list instead — reported, never the main
+  // pick, never silently dropped either.
+  function buildTodayRebalancePick(missedDayTypes, todayLayoutEntry, rhythmForDay, outstanding) {
     const sessions = [];
     const cantFit = [];
+    const extras = [];
     let usedMin = 0;
     const satisfied = new Set();
 
@@ -7082,6 +7126,16 @@ img, video, canvas, svg { max-width: 100%; }
     // "can't fit" instead of silently vanishing.
     (rhythmForDay || []).forEach((entry) => {
       if (satisfied.has(entry.discipline) || entry.discipline === 'rest') return;
+      // BUG FIX (reported) — a rhythm entry for a discipline with
+      // nothing outstanding (no key in `outstanding` at all — its
+      // weekly plan target is already met, or it was never part of
+      // the plan) never joins the MAIN pick: it's optional extra
+      // volume, not catch-up, so outstanding plan work (tiers 1/2)
+      // always outranks it regardless of budget room.
+      if (outstanding && !outstanding[entry.discipline]) {
+        extras.push({ discipline: entry.discipline, kind: entry.kind, reason: 'extra — plan target already met this week', priority: 'extra' });
+        return;
+      }
       // A plain rhythm entry carries no sizing info of its own here —
       // a flat, documented placeholder (same spirit as
       // DEFAULT_SESSION_MINUTES.genericCount) just for this budget check.
@@ -7095,7 +7149,7 @@ img, video, canvas, svg { max-width: 100%; }
       }
     });
 
-    return { priorityOrder: REBALANCE_TODAY_PRIORITY_ORDER, sessions, cantFit };
+    return { priorityOrder: REBALANCE_TODAY_PRIORITY_ORDER, sessions, cantFit, extras };
   }
 
   // Entry point for BOTH triggers (manual button + automatic, see
@@ -7133,7 +7187,7 @@ img, video, canvas, svg { max-width: 100%; }
         return;
       }
       function saveEmpty(emptyReason) {
-        stored.plan.rebalance = { computedForDateKey: DayLib.effectiveDateKey(), weekStart: thisWeekMondayKey(), outstanding: {}, rhythmExceedsNotes: [], isDeloadWeek: false, layout: [], cantFit: [], movedNote: '', emptyReason, todayPick: { priorityOrder: REBALANCE_TODAY_PRIORITY_ORDER, sessions: [], cantFit: [] } };
+        stored.plan.rebalance = { computedForDateKey: DayLib.effectiveDateKey(), weekStart: thisWeekMondayKey(), outstanding: {}, rhythmExceedsNotes: [], isDeloadWeek: false, layout: [], cantFit: [], movedNote: '', emptyReason, todayPick: { priorityOrder: REBALANCE_TODAY_PRIORITY_ORDER, sessions: [], cantFit: [], extras: [] } };
         saveStoredPlan(stored);
         renderWeeklyProgress();
         if (manual) alert(emptyReason);
@@ -7186,7 +7240,7 @@ img, video, canvas, svg { max-width: 100%; }
       }
 
       const todayLayoutEntry = result.layout.find((d) => d.dateKey === todayKeyStr) || null;
-      const todayPick = buildTodayRebalancePick(missedDayTypes, todayLayoutEntry, rhythmForDay);
+      const todayPick = buildTodayRebalancePick(missedDayTypes, todayLayoutEntry, rhythmForDay, outstanding);
 
       let emptyReason = null;
       const hasAnything = result.layout.length || result.cantFit.length || deload || todayPick.sessions.length || todayPick.cantFit.length;
@@ -7594,17 +7648,29 @@ img, video, canvas, svg { max-width: 100%; }
     days.forEach((d) => { dayNameById[d.id] = d.name; });
     const exDayById = {};
     (state.exercises || []).forEach((ex) => { exDayById[ex.id] = ex.day; });
-    const loggedDayNamesByDate = {}; // 'YYYY-MM-DD' -> Set(dayName)
+    // BUG FIX (reported) — "missed" is a per-TYPE question across the
+    // whole week, not a per-exact-date one: a Push logged on Saturday
+    // satisfies Monday's own assigned Push too, so it must never show
+    // as "Push (missed Monday)" once any Push has been logged this
+    // week. The old loggedDayNamesByDate map kept logs bucketed by
+    // their OWN exact date and only checked that day's own bucket,
+    // which is why it kept flagging Monday's Push as missed even
+    // though the user had already done a Push this week (just later).
+    // Also reads each log's date via DayLib.effectiveDateKey (the
+    // same pattern every other log-date read in this file uses, e.g.
+    // strengthSessions above) instead of a raw UTC string slice, so a
+    // late-evening log's date reflects the user's own day-boundary
+    // rules, not UTC's.
+    const loggedTypesThisWeek = new Set();
     const logs = state.logs || {};
     Object.keys(logs).forEach((exId) => {
       const dayId = exDayById[exId];
       const dayName = dayId != null ? dayNameById[dayId] : null;
       if (!dayName) return;
       (logs[exId] || []).forEach((log) => {
-        const dk = String(log.date || '').slice(0, 10);
-        if (!dk) return;
-        if (!loggedDayNamesByDate[dk]) loggedDayNamesByDate[dk] = new Set();
-        loggedDayNamesByDate[dk].add(dayName);
+        if (!log.date) return;
+        const dk = DayLib.effectiveDateKey(new Date(log.date));
+        if (dk >= weekMondayKey && dk <= todayKeyStr) loggedTypesThisWeek.add(dayName);
       });
     });
     const missed = [];
@@ -7622,8 +7688,7 @@ img, video, canvas, svg { max-width: 100%; }
         dayType = split && split.name;
       }
       if (dayType && dayType !== '—' && !/^rest\b/i.test(dayType)) {
-        const loggedSet = loggedDayNamesByDate[dk];
-        if (!loggedSet || !loggedSet.has(dayType)) {
+        if (!loggedTypesThisWeek.has(dayType)) {
           missed.push({ dayType, weekday: WEEKDAY_LABELS_FULL[cursor.getDay()] });
         }
       }

@@ -557,6 +557,22 @@ document.addEventListener('DOMContentLoaded', function () {
       return todayK >= range.start && todayK <= range.end;
     }) || null;
   }
+  // BUG FIX (reported) — the cumulative sum below used to start from
+  // plan.startDate, the day the plan RECORD was created/saved (e.g. a
+  // Saturday, whatever weekday the user happened to restart it on),
+  // not the Monday its own first checkpoint's numbers actually apply
+  // from. A run logged on that creation Saturday — BEFORE the plan's
+  // real first week (Mon) even begins — was silently counted toward
+  // the new plan's cumulative total, same root cause as gym.html's
+  // own "new plan starts Sat 10 Oct" note bug (both read plan.startDate
+  // directly instead of the first checkpoint's canonical Monday).
+  // Never rewrites the stored checkpoint — purely changes where the
+  // cumulative SUM starts counting from when it's computed here.
+  function planCumulativeStartKey(plan) {
+    const checkpoints = plan.weeklyCheckpoints || [];
+    const firstCp = checkpoints.reduce((a, b) => (!a || (b.weekStartDate && b.weekStartDate < a.weekStartDate) ? b : a), null);
+    return (firstCp && firstCp.weekStartDate) ? checkpointCanonicalRange(firstCp).start : plan.startDate;
+  }
 
   // =============================================================
   // Progress engine — one actual-value-as-of-a-date function per
@@ -575,7 +591,7 @@ document.addEventListener('DOMContentLoaded', function () {
       return strengthBestAsOf(dataSources.gymState, dataSources.matchedExercise, asOfKey);
     }
     if (plan.goalType === 'running_distance') {
-      return runningCumulativeAsOf(dataSources.activities, plan.goalActivityTypeId, plan.startDate, asOfKey);
+      return runningCumulativeAsOf(dataSources.activities, plan.goalActivityTypeId, planCumulativeStartKey(plan), asOfKey);
     }
     return null; // "other" — no auto-tracked series
   }
