@@ -32,11 +32,15 @@ const ROW_DIR = path.join(__dirname, '..');
 const noTopLevelTdz = require('./eslint-rules/no-top-level-tdz.cjs');
 
 // Every file this check covers, run before any push that touches any
-// of them. Each is checked independently for whether it has inline
-// <script> content at all (a file with none is skipped, not an
-// error) — add a new file here, not a separate script, if another
-// page later needs the same check.
-const TARGET_FILES = ['gym.html', 'plan.html', 'main.html'];
+// of them. An .html file has its inline <script> blocks extracted and
+// linted one at a time; a .js file is linted whole, as a single block
+// (sync.js — a SHARED module several pages load, same IIFE-per-file,
+// const-heavy structure and risk as the .html files, and the one this
+// script's own fix touched directly). A file with no inline <script>
+// content (an .html file with only external <script src> tags) is
+// skipped, not an error — add a new file here, not a separate script,
+// if another page/module later needs the same check.
+const TARGET_FILES = ['gym.html', 'plan.html', 'main.html', 'sync.js'];
 
 // Real external globals these files' inline scripts reference,
 // defined in a DIFFERENT <script> tag (daylib.js, lock.js, topbar.js)
@@ -88,8 +92,8 @@ async function main() {
   for (const fileName of TARGET_FILES) {
     const filePath = path.join(ROW_DIR, fileName);
     if (!fs.existsSync(filePath)) { console.log('SKIP: ' + fileName + ' does not exist'); continue; }
-    const html = fs.readFileSync(filePath, 'utf8');
-    const scripts = extractInlineScripts(html);
+    const content = fs.readFileSync(filePath, 'utf8');
+    const scripts = fileName.endsWith('.js') ? [{ code: content, index: 0 }] : extractInlineScripts(content);
     if (!scripts.length) { console.log('SKIP: ' + fileName + ' has no inline <script> content'); continue; }
 
     console.log('--- ' + fileName + ' (' + scripts.length + ' inline <script> block(s)) ---');

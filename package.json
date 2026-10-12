@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "prepare": "git config core.hooksPath .githooks || true",
-    "check": "node tests/lint-gym-html.cjs && node tests/smoke-refresh-buttons.cjs"
+    "check": "node tests/lint-gym-html.cjs && node tests/smoke-refresh-buttons.cjs && node tests/smoke-main-todo.cjs"
   },
   "dependencies": {
     "web-push": "^3.6.7"

@@ -1,15 +1,16 @@
 #!/bin/sh
-# Pre-push hook — blocks a push if either check fails:
-#   - tests/lint-gym-html.cjs   (top-level-TDZ lint, gym.html/plan.html/main.html)
+# Pre-push hook — blocks a push if any check fails:
+#   - tests/lint-gym-html.cjs         (top-level-TDZ lint, gym.html/plan.html/main.html/sync.js)
 #   - tests/smoke-refresh-buttons.cjs (real-page click-through smoke test, gym.html)
+#   - tests/smoke-main-todo.cjs       (real-page click-through smoke test, main.html's To Do list)
 #
 # Installed via `git config core.hooksPath .githooks` — see this
 # repo's package.json "prepare" script (runs automatically on
 # `npm install`) or README for the one-line manual install step.
 # Runs unconditionally on every push, regardless of which files
-# changed — both checks finish in well under a minute, and scoping
-# this to "did gym.html/plan.html/main.html change in this push" adds
-# a diff edge case for no real savings.
+# changed — all three checks finish in well under a minute, and
+# scoping this to "did gym.html/plan.html/main.html/sync.js change in
+# this push" adds a diff edge case for no real savings.
 
 set -e
 cd "$(git rev-parse --show-toplevel)"
@@ -39,6 +40,17 @@ if ! node tests/smoke-refresh-buttons.cjs; then
   echo "pre-push: BLOCKED — tests/smoke-refresh-buttons.cjs failed (see output above)."
   echo "pre-push: fix the reported issue(s), or run it by hand to iterate:"
   echo "pre-push:   node tests/smoke-refresh-buttons.cjs"
+  echo ""
+  exit 1
+fi
+
+echo ""
+echo "pre-push: running tests/smoke-main-todo.cjs ..."
+if ! node tests/smoke-main-todo.cjs; then
+  echo ""
+  echo "pre-push: BLOCKED — tests/smoke-main-todo.cjs failed (see output above)."
+  echo "pre-push: fix the reported issue(s), or run it by hand to iterate:"
+  echo "pre-push:   node tests/smoke-main-todo.cjs"
   echo ""
   exit 1
 fi

@@ -29,9 +29,9 @@ Each app stores its own state in browser `localStorage`. No accounts, no server.
 
 ## Development checks
 
-Run `npm install` once — this also wires up a git pre-push hook (via the `prepare` script, `git config core.hooksPath .githooks`) that automatically blocks a push if either check below fails, with a message naming which one.
+Run `npm install` once — this also wires up a git pre-push hook (via the `prepare` script, `git config core.hooksPath .githooks`) that automatically blocks a push if any check below fails, with a message naming which one.
 
-To run both checks by hand:
+To run all checks by hand:
 
 ```
 npm run check
@@ -40,6 +40,7 @@ npm run check
 Or individually:
 
 ```
-node tests/lint-gym-html.cjs          # top-level-TDZ lint — gym.html, plan.html, main.html
+node tests/lint-gym-html.cjs          # top-level-TDZ lint — gym.html, plan.html, main.html, sync.js
 node tests/smoke-refresh-buttons.cjs  # real-page click-through smoke test — gym.html's 3 refresh buttons
+node tests/smoke-main-todo.cjs        # real-page click-through smoke test — main.html's To Do list (add/check/uncheck/delete/push)
 ```
