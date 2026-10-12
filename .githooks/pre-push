@@ -1,0 +1,48 @@
+#!/bin/sh
+# Pre-push hook — blocks a push if either check fails:
+#   - tests/lint-gym-html.cjs   (top-level-TDZ lint, gym.html/plan.html/main.html)
+#   - tests/smoke-refresh-buttons.cjs (real-page click-through smoke test, gym.html)
+#
+# Installed via `git config core.hooksPath .githooks` — see this
+# repo's package.json "prepare" script (runs automatically on
+# `npm install`) or README for the one-line manual install step.
+# Runs unconditionally on every push, regardless of which files
+# changed — both checks finish in well under a minute, and scoping
+# this to "did gym.html/plan.html/main.html change in this push" adds
+# a diff edge case for no real savings.
+
+set -e
+cd "$(git rev-parse --show-toplevel)"
+
+if [ ! -d node_modules/jsdom ] || [ ! -d node_modules/eslint ]; then
+  echo ""
+  echo "pre-push: node_modules/jsdom or node_modules/eslint is missing."
+  echo "pre-push: run \`npm install\` first, then push again."
+  echo ""
+  exit 1
+fi
+
+echo "pre-push: running tests/lint-gym-html.cjs ..."
+if ! node tests/lint-gym-html.cjs; then
+  echo ""
+  echo "pre-push: BLOCKED — tests/lint-gym-html.cjs failed (see output above)."
+  echo "pre-push: fix the reported issue(s), or run it by hand to iterate:"
+  echo "pre-push:   node tests/lint-gym-html.cjs"
+  echo ""
+  exit 1
+fi
+
+echo ""
+echo "pre-push: running tests/smoke-refresh-buttons.cjs ..."
+if ! node tests/smoke-refresh-buttons.cjs; then
+  echo ""
+  echo "pre-push: BLOCKED — tests/smoke-refresh-buttons.cjs failed (see output above)."
+  echo "pre-push: fix the reported issue(s), or run it by hand to iterate:"
+  echo "pre-push:   node tests/smoke-refresh-buttons.cjs"
+  echo ""
+  exit 1
+fi
+
+echo ""
+echo "pre-push: all checks passed."
+exit 0

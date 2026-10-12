@@ -26,3 +26,20 @@ Each app stores its own state in browser `localStorage`. No accounts, no server.
 ## Building from scratch
 
 [BUILD_DASHBOARD.md](BUILD_DASHBOARD.md) is the prompt I gave Claude to generate `index.html` — paste it into Claude if you want to rebuild that page yourself.
+
+## Development checks
+
+Run `npm install` once — this also wires up a git pre-push hook (via the `prepare` script, `git config core.hooksPath .githooks`) that automatically blocks a push if either check below fails, with a message naming which one.
+
+To run both checks by hand:
+
+```
+npm run check
+```
+
+Or individually:
+
+```
+node tests/lint-gym-html.cjs          # top-level-TDZ lint — gym.html, plan.html, main.html
+node tests/smoke-refresh-buttons.cjs  # real-page click-through smoke test — gym.html's 3 refresh buttons
+```

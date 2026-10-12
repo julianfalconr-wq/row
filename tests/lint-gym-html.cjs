@@ -1,22 +1,26 @@
-// Lint check — run this before every push touching gym.html.
+// Lint check — run this before every push touching gym.html, plan.html
+// or main.html.
 //
 //   node tests/lint-gym-html.cjs
 //
-// Extracts each inline <script> block from gym.html (skipping any
-// <script src="..."> that loads an external file — those are a
-// separate top-level scope, out of scope for this check) and runs
-// ESLint against each one with:
+// Extracts each inline <script> block from every file in TARGET_FILES
+// below (skipping any <script src="..."> that loads an external file
+// — those are a separate top-level scope, out of scope for this
+// check) and runs ESLint against each one with:
 //   - the stock `no-undef` rule (parse-time-ish sanity: catches an
 //     obviously misspelled/removed identifier), and
 //   - the custom local/no-top-level-tdz rule (tests/eslint-rules/
 //     no-top-level-tdz.cjs) — the actual point of this script: a
 //     top-level const/let read eagerly before its own declaration,
-//     the exact shape behind 3 real regressions this session (each
-//     one threw "Cannot access 'X' before initialization" at
-//     page-load time and silently unwired every click handler below
-//     it in the file, with no visible error).
+//     the exact shape behind 3 real regressions in gym.html this
+//     session (each one threw "Cannot access 'X' before
+//     initialization" at page-load time and silently unwired every
+//     click handler below it in the file, with no visible error).
+//     plan.html and main.html share the same "big IIFE per <script>
+//     block, const-heavy" structure and the same risk, even though
+//     neither has hit this specific bug yet.
 //
-// `no-undef` needs a rough picture of this file's real globals
+// `no-undef` needs a rough picture of these files' real globals
 // (DayLib, window.*, etc.) to avoid drowning the real signal in
 // "X is not defined" noise for things that ARE defined, just not
 // visible to a bare per-block lint pass — see GLOBALS below.
@@ -27,13 +31,21 @@ const { ESLint } = require('eslint');
 const ROW_DIR = path.join(__dirname, '..');
 const noTopLevelTdz = require('./eslint-rules/no-top-level-tdz.cjs');
 
-// Real external globals gym.html's inline scripts reference, defined
-// in a DIFFERENT <script> tag (daylib.js, lock.js, topbar.js) or by
-// the browser itself — not exhaustive, just enough that `no-undef`
-// stays useful instead of noisy. Each inline <script> block is linted
-// in isolation, so a symbol one block defines and a LATER block reads
-// via `window.X` also needs listing here (cross-block/window access
-// is a legitimate, different pattern this script doesn't check).
+// Every file this check covers, run before any push that touches any
+// of them. Each is checked independently for whether it has inline
+// <script> content at all (a file with none is skipped, not an
+// error) — add a new file here, not a separate script, if another
+// page later needs the same check.
+const TARGET_FILES = ['gym.html', 'plan.html', 'main.html'];
+
+// Real external globals these files' inline scripts reference,
+// defined in a DIFFERENT <script> tag (daylib.js, lock.js, topbar.js)
+// or by the browser itself — not exhaustive, just enough that
+// `no-undef` stays useful instead of noisy. Each inline <script>
+// block is linted in isolation, so a symbol one block defines and a
+// LATER block in the SAME file reads via `window.X` also needs
+// listing here (cross-block/window access is a legitimate, different
+// pattern this script doesn't check).
 const GLOBALS = [
   'window', 'document', 'localStorage', 'sessionStorage', 'fetch', 'console',
   'alert', 'confirm', 'prompt', 'navigator', 'location', 'history',
@@ -56,9 +68,6 @@ function extractInlineScripts(html) {
 }
 
 async function main() {
-  const html = fs.readFileSync(path.join(ROW_DIR, 'gym.html'), 'utf8');
-  const scripts = extractInlineScripts(html);
-
   const globalsConfig = {};
   GLOBALS.forEach((g) => { globalsConfig[g] = 'readonly'; });
 
@@ -76,20 +85,29 @@ async function main() {
   });
 
   let failures = 0;
-  for (const { code, index } of scripts) {
-    const results = await eslint.lintText(code, { filePath: 'gym-inline-script-' + index + '.js' });
-    const messages = results[0].messages;
-    const errors = messages.filter((m) => m.severity === 2);
-    const warnings = messages.filter((m) => m.severity === 1);
-    if (errors.length) {
-      failures += errors.length;
-      console.log('FAIL: <script> block ' + index + ' — ' + errors.length + ' error(s):');
-      errors.forEach((e) => console.log('   line ' + e.line + ': ' + e.message));
-    } else {
-      console.log('PASS: <script> block ' + index + ' — no top-level-TDZ issues');
-    }
-    if (warnings.length) {
-      console.log('  (' + warnings.length + ' no-undef warning(s), informational — cross-block window.* access is expected)');
+  for (const fileName of TARGET_FILES) {
+    const filePath = path.join(ROW_DIR, fileName);
+    if (!fs.existsSync(filePath)) { console.log('SKIP: ' + fileName + ' does not exist'); continue; }
+    const html = fs.readFileSync(filePath, 'utf8');
+    const scripts = extractInlineScripts(html);
+    if (!scripts.length) { console.log('SKIP: ' + fileName + ' has no inline <script> content'); continue; }
+
+    console.log('--- ' + fileName + ' (' + scripts.length + ' inline <script> block(s)) ---');
+    for (const { code, index } of scripts) {
+      const results = await eslint.lintText(code, { filePath: fileName + '-inline-script-' + index + '.js' });
+      const messages = results[0].messages;
+      const errors = messages.filter((m) => m.severity === 2);
+      const warnings = messages.filter((m) => m.severity === 1);
+      if (errors.length) {
+        failures += errors.length;
+        console.log('FAIL: ' + fileName + ' <script> block ' + index + ' — ' + errors.length + ' error(s):');
+        errors.forEach((e) => console.log('   line ' + e.line + ': ' + e.message));
+      } else {
+        console.log('PASS: ' + fileName + ' <script> block ' + index + ' — no top-level-TDZ issues');
+      }
+      if (warnings.length) {
+        console.log('  (' + warnings.length + ' no-undef warning(s), informational — cross-block window.* access is expected)');
+      }
     }
   }
 
