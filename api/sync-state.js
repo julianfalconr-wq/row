@@ -296,7 +296,8 @@
 //                       'technique'|'pace'|'brick';
 //                       for strength: 'auto'|'push'|'pull'|'legs'|
 //                       'explosive';
-//                note?: String }],
+//                note?: String,
+//                km?: Number }], // run/bike only — see below
 //     // 'pace' = a continuous fast effort at goal/race pace (run,
 //     // bike, or swim) — renamed from 'endurance'; a stored
 //     // 'endurance' entry (from before this rename) is read back as
@@ -308,6 +309,14 @@
 //     // push/pull/legs/explosive are matched by NAME (case-
 //     // insensitively) against the user's own configured day types in
 //     // gym.html's state.days, never by a fixed id.
+//     // km (FEATURE, reported): optional, run/bike only — the session
+//     // size the user wants in a reference week (e.g. "Tue interval
+//     // 3km"). Lets api/training.js derive FIXED percentage shares of
+//     // the weekly target from the user's own sizes instead of the
+//     // flat kind-weight heuristic (splitRhythmSessionsByShares) —
+//     // see that function's own header comment. Absent/empty on any
+//     // entry (the usual case) falls back to the heuristic, byte-for-
+//     // byte unchanged.
 //     tuesday: [...], ... sunday: [...],
 //     // any weekday key MAY be absent entirely (tolerated, not an
 //     // error) — absence means "nothing scheduled that day", same as
@@ -502,6 +511,20 @@ function sanitizeWeeklyRhythmEntry(raw) {
     out.kind = kind;
   }
   if (typeof raw.note === 'string' && raw.note.trim()) out.note = raw.note.trim().slice(0, 140);
+  // FEATURE (reported) — optional per-session size for a run/bike
+  // entry (e.g. "Tue interval 3km"), used server-side (api/
+  // training.js's splitRhythmSessionsByShares) to derive FIXED
+  // percentage shares of the weekly target instead of the flat
+  // kind-weight heuristic. Gated to run/bike only (swim is already
+  // per-session via its own meters target; strength has no distance
+  // at all) — a km on any other discipline is silently dropped, same
+  // "never misrepresent what's actually usable" rule as everywhere
+  // else in this function. Capped at 200 — generous above any real
+  // single run/bike session, defensive against a malformed payload.
+  if ((raw.discipline === 'run' || raw.discipline === 'bike') && raw.km != null) {
+    const km = Number(raw.km);
+    if (Number.isFinite(km) && km > 0 && km <= 200) out.km = Math.round(km * 10) / 10;
+  }
   return out;
 }
 // Read-time counterpart to normalizeRhythmKindForCompat — a row saved

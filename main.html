@@ -5430,6 +5430,29 @@ document.addEventListener('DOMContentLoaded', function () {
     } catch (e) {}
     return null;
   }
+  // FEATURE (reported) — the active plan's FIRST checkpoint's own
+  // run/bike target: the fixed "reference week" a km-aware rhythm
+  // split derives its percentage shares against (mirrors api/
+  // training.js's own firstWeekTargets resolution and
+  // gym.html's fetchFirstWeekDisciplines — same "earliest
+  // weekStartDate" checkpoint, same reasoning: this never changes
+  // week to week the way fetchCurrentWeekPlanDisciplines's result
+  // does). null whenever there's no active plan or it has no
+  // checkpoints — the km-aware split then never triggers.
+  async function fetchFirstWeekPlanDisciplines() {
+    const secret = getSecret();
+    if (!secret) return null;
+    try {
+      const r = await fetch('/api/sync-state?secret=' + encodeURIComponent(secret) + '&resource=plans');
+      const j = await r.json();
+      const plans = (j && j.ok && Array.isArray(j.plans)) ? j.plans : [];
+      const p = resolveActivePlan(plans);
+      if (!p || !Array.isArray(p.weeklyCheckpoints) || !p.weeklyCheckpoints.length) return null;
+      const firstCp = p.weeklyCheckpoints.reduce((a, b) => (!a || (b.weekStartDate && b.weekStartDate < a.weekStartDate) ? b : a), null);
+      if (firstCp && firstCp.disciplines) return firstCp.disciplines;
+    } catch (e) {}
+    return null;
+  }
   // Flags are informational only — never block saving (the task spec
   // says "inline flags (not silent)", not "reject the entry"). Each
   // day's entries are checked against: (1) that discipline not allowed
@@ -5523,7 +5546,52 @@ document.addEventListener('DOMContentLoaded', function () {
     const weightSum = weights.reduce((s, w) => s + w, 0);
     return Math.round(entries.reduce((sum, e, i) => sum + Math.max(0, Math.round((weeklyKm * (weights[i] / weightSum)) * 10) / 10), 0) * 10) / 10;
   }
-  function rhythmSummaryLine(rhythm, planDisciplines, enabled) {
+  // FEATURE (reported) — mirrors api/training.js's own
+  // splitRhythmSessionsByShares exactly (same algorithm, duplicated
+  // per this project's per-file convention — this preview must show
+  // the SAME number the server will actually assign). Used only when
+  // at least one entry has an explicit km AND a real first-week
+  // reference exists; computeRhythmPlannedKm above remains the
+  // fallback (backward compatible, unchanged) otherwise.
+  const RHYTHM_SPLIT_MIN_SESSION_KM_MAIN = 3;
+  function splitRhythmSessionsByKmSharesMain(entries, firstWeekKm, weekKm, minSessionKm) {
+    if (!entries || !entries.length || !(firstWeekKm > 0) || !(weekKm > 0)) return null;
+    const explicit = entries.map((e) => (e.km != null && Number(e.km) > 0) ? Number(e.km) : null);
+    const explicitSum = explicit.reduce((s, v) => s + (v || 0), 0);
+    const implicitCount = explicit.filter((v) => v == null).length;
+    const remainder = Math.max(0, firstWeekKm - explicitSum);
+    const perImplicitKm = implicitCount ? remainder / implicitCount : 0;
+    let items = entries.map((e, i) => ({
+      kind: e.kind,
+      share: (explicit[i] != null ? explicit[i] : perImplicitKm) / firstWeekKm,
+    }));
+    function sizesFor(list, total) {
+      const raw = list.map((it) => it.share * total);
+      const rounded = raw.map((v) => Math.round(v * 2) / 2);
+      const sum = Math.round(rounded.reduce((s, v) => s + v, 0) * 2) / 2;
+      const drift = Math.round((total - sum) * 2) / 2;
+      if (drift !== 0 && rounded.length) {
+        let bi = 0;
+        rounded.forEach((v, i) => { if (v > rounded[bi]) bi = i; });
+        rounded[bi] = Math.round((rounded[bi] + drift) * 2) / 2;
+      }
+      return rounded;
+    }
+    const dropped = [];
+    const floor = minSessionKm > 0 ? minSessionKm : 3;
+    while (items.length > 1 && weekKm < items.length * floor) {
+      let mi = 0;
+      items.forEach((it, i) => { if (it.share < items[mi].share) mi = i; });
+      dropped.push(items[mi].kind);
+      const droppedShare = items[mi].share;
+      items.splice(mi, 1);
+      const remSum = items.reduce((s, it) => s + it.share, 0) || 1;
+      items = items.map((it) => Object.assign({}, it, { share: it.share + droppedShare * (it.share / remSum) }));
+    }
+    const finalSizes = sizesFor(items, weekKm);
+    return { sessions: items.map((it, i) => ({ kind: it.kind, km: finalSizes[i] })), dropped };
+  }
+  function rhythmSummaryLine(rhythm, planDisciplines, enabled, firstWeekDisciplines) {
     const byDiscipline = { run: [], bike: [], swim: [], strength: [] };
     GS_WEEKDAY_KEYS.forEach((day) => { (rhythm[day] || []).forEach((e) => { if (byDiscipline[e.discipline]) byDiscipline[e.discipline].push(e); }); });
     const parts = [];
@@ -5539,9 +5607,17 @@ document.addEventListener('DOMContentLoaded', function () {
       const weeklyKm = planDisciplines && planDisciplines[disc] && Number(planDisciplines[disc].km);
       let line = label + ' ' + entries.length + ' session' + (entries.length === 1 ? '' : 's');
       if (weeklyKm) {
-        const planned = computeRhythmPlannedKm(entries, weeklyKm);
-        line += ' - ' + planned + ' km planned of ' + weeklyKm + ' km';
+        // FEATURE (reported) — same km-aware split as api/training.js
+        // when at least one entry has an explicit size and a real
+        // first-week reference exists; otherwise the original
+        // weight-based estimate, unchanged.
+        const firstWeekKm = firstWeekDisciplines && firstWeekDisciplines[disc] && Number(firstWeekDisciplines[disc].km);
+        const hasExplicitKm = entries.some((e) => e.km != null && Number(e.km) > 0);
+        const split = (hasExplicitKm && firstWeekKm > 0) ? splitRhythmSessionsByKmSharesMain(entries, firstWeekKm, weeklyKm, RHYTHM_SPLIT_MIN_SESSION_KM_MAIN) : null;
+        const planned = split ? split.sessions.reduce((s, x) => s + x.km, 0) : computeRhythmPlannedKm(entries, weeklyKm);
+        line += ' - ' + Math.round(planned * 10) / 10 + ' km planned of ' + weeklyKm + ' km';
         if (Math.abs(planned - weeklyKm) >= 0.1) line += ' ⚠';
+        if (split && split.dropped.length) line += ' (' + split.dropped.join(', ') + ' merged — too small this week)';
       }
       parts.push(line);
     });
@@ -5568,12 +5644,13 @@ document.addEventListener('DOMContentLoaded', function () {
   let rhythmDraft = null;
   let rhythmActivityTypes = [];
   let rhythmPlanDisciplines = null;
+  let rhythmFirstWeekDisciplines = null;
   let rhythmOpenDay = null; // which day's edit body is currently expanded, if any — preserved across a re-render so toggling one chip doesn't collapse the whole thing
   function defaultRhythmEntry() { return { discipline: 'run', kind: 'easy' }; }
   function renderRhythmGrid() {
     const enabled = rhythmEnabledDisciplines(rhythmActivityTypes);
     const { dayFlags, entryFlags } = computeRhythmFlags(rhythmDraft, availabilityDraft || defaultAvailabilityTemplate(), enabled);
-    $('gsRhythmSummary').textContent = rhythmSummaryLine(rhythmDraft, rhythmPlanDisciplines, enabled);
+    $('gsRhythmSummary').textContent = rhythmSummaryLine(rhythmDraft, rhythmPlanDisciplines, enabled, rhythmFirstWeekDisciplines);
     const grid = $('gsRhythmGrid');
     grid.innerHTML = GS_WEEKDAY_KEYS.map((day) => {
       const entries = rhythmDraft[day] || [];
@@ -5605,10 +5682,19 @@ document.addEventListener('DOMContentLoaded', function () {
           '<button type="button" class="gs-rhythm-chip' + (e.discipline === key ? ' is-active' : '') + '" data-field="discipline" data-value="' + key + '">' + label + '</button>'
         )).join('');
         const entryFlagLines = (entryFlags[day] && entryFlags[day][idx] || []).map((f) => '<div class="gs-rhythm-entry-flag">⚠ ' + escapeHtml(f) + '</div>').join('');
+        // FEATURE (reported) — optional per-session size, run/bike
+        // only (swim is already per-session via its own meters target;
+        // strength has no distance at all). Empty = automatic (the
+        // existing RHYTHM_KIND_WEIGHT_MAIN heuristic, unchanged).
+        const showKmField = e.discipline === 'run' || e.discipline === 'bike';
+        const kmField = showKmField
+          ? '<input type="number" class="gs-rhythm-entry-km" placeholder="km (auto)" min="0.5" max="200" step="0.5" value="' + (e.km != null ? e.km : '') + '">'
+          : '';
         return (
           '<div class="gs-rhythm-entry" data-day="' + day + '" data-index="' + idx + '">' +
             '<div class="gs-rhythm-chiprow" data-role="disciplines">' + discChips + '</div>' +
             (showKindRow ? '<div class="gs-rhythm-chiprow" data-role="kinds">' + kindChips + '</div>' : '') +
+            kmField +
             '<input type="text" class="gs-rhythm-entry-note" placeholder="Note (optional)" value="' + escapeHtml(e.note || '') + '" maxlength="140">' +
             entryFlagLines +
             '<div class="gs-rhythm-entry-actions"><button type="button" class="gs-rhythm-entry-remove" data-day="' + day + '" data-index="' + idx + '">Remove</button></div>' +
@@ -5661,11 +5747,28 @@ document.addEventListener('DOMContentLoaded', function () {
             if (value === 'rest') { delete entry.kind; }
             else if (value === 'strength') { entry.kind = 'auto'; }
             else if (!entry.kind || !RHYTHM_KINDS.some((k) => k[0] === entry.kind)) { entry.kind = 'easy'; }
+            // km only ever means something for run/bike — drop it the
+            // moment the entry switches away from either, so a stale
+            // size never silently survives under an unrelated discipline.
+            if (value !== 'run' && value !== 'bike') delete entry.km;
           } else if (field === 'kind') {
             entry.kind = value;
           }
           saveRhythmDraft();
         });
+      });
+    });
+    grid.querySelectorAll('.gs-rhythm-entry-km').forEach((input) => {
+      input.addEventListener('change', () => {
+        const entryEl = input.closest('.gs-rhythm-entry');
+        const day = entryEl.getAttribute('data-day');
+        const idx = Number(entryEl.getAttribute('data-index'));
+        const entry = (rhythmDraft[day] || [])[idx];
+        if (!entry) return;
+        const km = Number(input.value);
+        if (input.value.trim() !== '' && Number.isFinite(km) && km > 0) entry.km = Math.round(km * 10) / 10;
+        else delete entry.km;
+        saveRhythmDraft();
       });
     });
     grid.querySelectorAll('.gs-rhythm-entry-note').forEach((input) => {
@@ -5713,7 +5816,7 @@ document.addEventListener('DOMContentLoaded', function () {
   }
   async function renderWeeklyRhythmSection() {
     $('gsRhythmGrid').innerHTML = 'Loading…';
-    const [rhythm, types, planDisciplines] = await Promise.all([fetchWeeklyRhythm(), fetchActivityTypesForRhythm(getSecret()), fetchCurrentWeekPlanDisciplines()]);
+    const [rhythm, types, planDisciplines, firstWeekDisciplines] = await Promise.all([fetchWeeklyRhythm(), fetchActivityTypesForRhythm(getSecret()), fetchCurrentWeekPlanDisciplines(), fetchFirstWeekPlanDisciplines()]);
     // Defensive — the server's own GET already normalizes a legacy
     // 'endurance' entry to 'long' (see api/sync-state.js), so this
     // should never actually see the old name in practice, but the
@@ -5726,6 +5829,7 @@ document.addEventListener('DOMContentLoaded', function () {
     });
     rhythmActivityTypes = types || [];
     rhythmPlanDisciplines = planDisciplines;
+    rhythmFirstWeekDisciplines = firstWeekDisciplines;
     renderRhythmGrid();
     $('gsRhythmBody').hidden = true;
     $('gsRhythmToggleBtn').textContent = 'Set weekly rhythm ▾';

@@ -45,4 +45,5 @@ node tests/smoke-refresh-buttons.cjs  # real-page click-through smoke test — g
 node tests/smoke-main-todo.cjs        # real-page click-through smoke test — main.html's To Do list (add/check/uncheck/delete/push)
 node tests/smoke-weekly-plan-card.cjs # real-page render check — gym.html's weekly objectives card (layout naming, no phantom interval card, rationale placement, capacity line)
 node tests/smoke-fresh-week-rebalance.cjs # real-page rebalancer check — fresh Monday with a weekly rhythm never shows a phantom backlog
+node tests/smoke-rhythm-split.cjs     # km-aware weekly-rhythm run/bike split — api/training.js's splitRhythmSessionsByShares
 ```

@@ -698,13 +698,36 @@ function sanitizeActivityTypes(raw) {
   })).filter((t) => t.id && t.name);
 }
 
-function buildPlanSystemPrompt(restrictions, recommendableTypes, activeWeekDisciplines) {
+function buildPlanSystemPrompt(restrictions, recommendableTypes, activeWeekDisciplines, realSessionKinds) {
   const typesList = recommendableTypes.length
     ? JSON.stringify(recommendableTypes.map((t) => ({ id: t.id, name: t.name, unit: t.unit, unitKind: t.unitKind })), null, 2)
     : null;
+  // FEATURE (reported) — realSessionKinds is the exact set of session
+  // kinds the WEEK LAYOUT will actually contain this week (already
+  // decided in code from the user's own weekly rhythm/plan, same
+  // sessionsToPlace the layout section below lists) — present only
+  // when a real layout exists (capacity configured). The model's
+  // rationale/interval-slot text used to be written blind to this
+  // (it only ever saw sessionsNeedingModelPlacement, the subset still
+  // missing a day), so it kept narrating a generic "one interval
+  // session for VO2 max" even on a week whose real rhythm has no
+  // interval session at all — the exact reported bug. See
+  // normalizePlan's stripInventedKindMentions for the code-level
+  // backstop on top of this prompt instruction.
+  const realSessionsNote = (realSessionKinds && realSessionKinds.length)
+    ? 'REAL SESSIONS THIS WEEK (already decided in code from the user\'s own plan/rhythm, read-only, ' +
+      'covers every discipline) — the ONLY session kinds that will actually appear this week: ' +
+      realSessionKinds.join(', ') + '. Your rationale must describe ONLY these — never claim or imply a ' +
+      'session kind/type exists this week (e.g. "an interval session", "a tempo run") unless it is ' +
+      'literally in this list. If "interval" is not in this list, do not mention an interval/VO2-max ' +
+      'session anywhere in your rationale, even if you still fill cardio.interval\'s own fields below ' +
+      '(that field is a separate legacy slot kept for backward compatibility and is not necessarily shown ' +
+      'to the user as a real scheduled session).\n\n'
+    : '';
   return (
+    realSessionsNote +
     (activeWeekDisciplines
-      ? 'THIS WEEK\'S VOLUME TARGETS ARE ALREADY FIXED — ' + describeActiveWeekDisciplinesForPrompt(activeWeekDisciplines, recommendableTypes) + '. These come from the user\'s own long-term training plan, not from you, and the server computes the real numbers in code from that plan — it will IGNORE whatever longSession.targetAmount/easyVolume.targetAmount/strength.targetSessions numbers you write for the disciplines listed above. Do NOT invent different volume numbers for them. Your job here is only: (1) still propose ONE concrete interval/VO2-max session (activityTypeId from the recommendable list below, matching whichever of run/bike makes sense, or null if neither does) with real structure — the fixed targets above have no interval/intensity piece of their own; (2) write a one-sentence, concrete description for cardio.longSession and cardio.easyVolume (effort/pacing guidance for the run/bike volume above) and for strength.focus; (3) mention the swim target explicitly in the rationale even though it has no legacy slot of its own to sit in. Never contradict these fixed numbers anywhere in your rationale or descriptions — in particular, your longSession/easyVolume descriptions must NEVER state a distance/amount of their own at all (e.g. never write "run 9km" or mention any km/m/min figure for these two specifically); describe effort/pacing/structure only (e.g. "steady, conversational effort" or "keep the last 20% faster"), since the actual numbers shown to the user come from targets above, not from this text, and restating a different one anywhere would look like a contradiction even though it would be silently ignored.\n\n'
+      ? 'THIS WEEK\'S VOLUME TARGETS ARE ALREADY FIXED — ' + describeActiveWeekDisciplinesForPrompt(activeWeekDisciplines, recommendableTypes) + '. These come from the user\'s own long-term training plan, not from you, and the server computes the real numbers in code from that plan — it will IGNORE whatever longSession.targetAmount/easyVolume.targetAmount/strength.targetSessions numbers you write for the disciplines listed above. Do NOT invent different volume numbers for them. Your job here is only: (1) ' + (realSessionKinds && realSessionKinds.length ? 'propose a concrete interval/VO2-max session ONLY if "interval" appears in REAL SESSIONS THIS WEEK above — otherwise leave cardio.interval\'s activityTypeId null and targetSessions 0, and do not describe one' : 'still propose ONE concrete interval/VO2-max session') + ' (activityTypeId from the recommendable list below, matching whichever of run/bike makes sense, or null if neither does) with real structure — the fixed targets above have no interval/intensity piece of their own; (2) write a one-sentence, concrete description for cardio.longSession and cardio.easyVolume (effort/pacing guidance for the run/bike volume above) and for strength.focus; (3) mention the swim target explicitly in the rationale even though it has no legacy slot of its own to sit in. Never contradict these fixed numbers anywhere in your rationale or descriptions — in particular, your longSession/easyVolume descriptions must NEVER state a distance/amount of their own at all (e.g. never write "run 9km" or mention any km/m/min figure for these two specifically); describe effort/pacing/structure only (e.g. "steady, conversational effort" or "keep the last 20% faster"), since the actual numbers shown to the user come from targets above, not from this text, and restating a different one anywhere would look like a contradiction even though it would be silently ignored.\n\n'
       : '') +
     'You are a training coach generating ONE week of concrete objectives for a personal dashboard. ' +
     'The user does two kinds of training: strength (equipment-limited, see below) and cardio. Cardio needs ' +
@@ -754,6 +777,46 @@ function buildPlanSystemPrompt(restrictions, recommendableTypes, activeWeekDisci
 function num(v, fallback) {
   const n = Number(v);
   return isNaN(n) ? fallback : n;
+}
+
+// FEATURE (reported) — code-level backstop on top of
+// buildPlanSystemPrompt's REAL SESSIONS instruction: the model is
+// asked not to narrate a session kind that isn't really scheduled
+// this week, but prompt instructions are followed, not guaranteed —
+// this strips any rationale SENTENCE that names a kind-specific
+// phrase whose kind is absent from realSessionKinds, rather than
+// trusting the model's compliance alone. Deliberately narrow (one
+// regex per kind, matched against common ways a kind is actually
+// described in prose) — a sentence that doesn't match any of these
+// patterns at all is left untouched regardless of its content, same
+// "never silently rewrite more than the specific reported problem"
+// discipline as every other backstop in this file.
+const RATIONALE_KIND_PATTERNS = {
+  interval: /\binterval(s)?\b|\bVO2\s*max\b|\btempo\b/i,
+  pace: /\bpace (run|session|effort)\b|\brace[- ]pace\b/i,
+  long: /\blong run\b|\blong session\b/i,
+  technique: /\btechnique (run|session|work)\b|\bdrills?\b/i,
+  brick: /\bbrick (run|session|workout)\b/i,
+};
+function stripInventedKindMentions(rationale, realSessionKinds) {
+  if (!rationale || !realSessionKinds) return rationale; // no real layout this request — untouched, see caller's own comment
+  const present = new Set(realSessionKinds);
+  // Split on sentence-ending punctuation, keeping the punctuation —
+  // simple and matches this file's own truncateAtWordBoundary
+  // precedent of not pulling in a real sentence tokenizer for prose
+  // this short (a 1-3 sentence rationale, per the prompt's own spec).
+  const sentences = rationale.match(/[^.!?]+[.!?]*/g) || [rationale];
+  const kept = sentences.filter((sentence) => {
+    for (const kind in RATIONALE_KIND_PATTERNS) {
+      if (!present.has(kind) && RATIONALE_KIND_PATTERNS[kind].test(sentence)) return false;
+    }
+    return true;
+  });
+  const result = kept.join('').trim();
+  // Never collapse to nothing — a wholly-invented rationale (every
+  // sentence struck) falls back to a short, honest, code-generated
+  // one rather than an empty card.
+  return result || 'This week\'s sessions follow your plan/rhythm as scheduled.';
 }
 
 // BUG FIX (reported): normalizePlan's rationale used to be a bare
@@ -1215,8 +1278,90 @@ function sanitizeRhythmEntries(raw) {
 // comparable to "interval", clearly less than "long" — everything
 // else close to even. Only run/bike use this — swim's target is
 // already per-session (see applyCapacityBackstop's own comment) and
-// strength has no distance to split at all.
+// strength has no distance to split at all. BUG FIX (reported
+// feature) — this is now only the FALLBACK, used when no rhythm entry
+// for this discipline carries an explicit per-session `km` at all
+// (backward compatible: identical output to before this feature).
+// See splitRhythmSessionsByShares below for the km-aware split.
 const RHYTHM_KIND_WEIGHT = { long: 1.5, pace: 0.85, brick: 1.0, easy: 1.0, interval: 0.8, technique: 0.6 };
+// Mirrors gym.html's own REBALANCE_MIN_SESSION_KM exactly (same "a
+// session below this is not a real session on its own" floor) — the
+// km-aware split below uses it to decide when a week's own target is
+// too small to hold every rhythm session at a sane size.
+const RHYTHM_SPLIT_MIN_SESSION_KM = 3;
+// FEATURE (reported) — an optional per-session `km` on a run/bike
+// rhythm entry lets the user size their own structure (e.g. "Tue
+// interval 3km, Wed easy 5km, Fri pace 5km, Sun long 7km" for a 20km
+// week) instead of the flat RHYTHM_KIND_WEIGHT heuristic above. All
+// arithmetic happens here in code — the model never sees or decides
+// any of this.
+//
+// Shares are derived ONCE from the entries' own km values against
+// `firstWeekKm` (the plan's FIRST checkpoint's own target for this
+// discipline — the "reference week" the user actually sized their
+// sessions against, resolved client-side from the plan's own
+// checkpoints and sent as firstWeekTargets, since that reference
+// never changes week to week the way "this week's target" does). An
+// entry with no km of its own takes an equal split of whatever's left
+// of firstWeekKm after the explicit ones (several km-less entries
+// split the remainder evenly) — never negative (clamped to 0 if the
+// explicit kms already meet or exceed firstWeekKm). Those shares
+// (fixed percentages) are then applied to THIS week's own target
+// (`weekKm`, whatever week is actually being generated), rounded to
+// the nearest 0.5km, with the largest session absorbing any rounding
+// drift so the sum always lands exactly on weekKm.
+//
+// Too-small weeks (weekKm below session-count × minSessionKm, e.g.
+// under 12km for 4 sessions at the usual 3km floor) progressively
+// fold the session with the SMALLEST share into the rest — its share
+// redistributes proportionally among the remaining sessions — and
+// repeats until either enough sessions remain to clear that floor or
+// only one is left (which then simply absorbs the whole week). Kinds
+// folded away this way are returned in `dropped`, newer reported by
+// the caller rather than silently shown as a tiny/zero session.
+function splitRhythmSessionsByShares(entries, firstWeekKm, weekKm, minSessionKm) {
+  if (!entries || !entries.length || !(firstWeekKm > 0) || !(weekKm > 0)) return null;
+  const explicit = entries.map((e) => (e.km != null && Number(e.km) > 0) ? Number(e.km) : null);
+  const explicitSum = explicit.reduce((s, v) => s + (v || 0), 0);
+  const implicitCount = explicit.filter((v) => v == null).length;
+  const remainder = Math.max(0, firstWeekKm - explicitSum);
+  const perImplicitKm = implicitCount ? remainder / implicitCount : 0;
+  let items = entries.map((e, i) => ({
+    kind: e.kind, dateKey: e.dateKey,
+    share: (explicit[i] != null ? explicit[i] : perImplicitKm) / firstWeekKm,
+  }));
+
+  function sizesFor(list, total) {
+    const raw = list.map((it) => it.share * total);
+    const rounded = raw.map((v) => Math.round(v * 2) / 2);
+    const sum = Math.round(rounded.reduce((s, v) => s + v, 0) * 2) / 2;
+    const drift = Math.round((total - sum) * 2) / 2;
+    if (drift !== 0 && rounded.length) {
+      let bi = 0;
+      rounded.forEach((v, i) => { if (v > rounded[bi]) bi = i; });
+      rounded[bi] = Math.round((rounded[bi] + drift) * 2) / 2;
+    }
+    return rounded;
+  }
+
+  const dropped = [];
+  const floor = minSessionKm > 0 ? minSessionKm : 3;
+  while (items.length > 1 && weekKm < items.length * floor) {
+    let mi = 0;
+    items.forEach((it, i) => { if (it.share < items[mi].share) mi = i; });
+    dropped.push(items[mi].kind);
+    const droppedShare = items[mi].share;
+    items.splice(mi, 1);
+    const remSum = items.reduce((s, it) => s + it.share, 0) || 1;
+    items = items.map((it) => Object.assign({}, it, { share: it.share + droppedShare * (it.share / remSum) }));
+  }
+
+  const finalSizes = sizesFor(items, weekKm);
+  return {
+    sessions: items.map((it, i) => ({ kind: it.kind, dateKey: it.dateKey, km: finalSizes[i] })),
+    dropped,
+  };
+}
 // 'pace'/'interval'/'long' are hard cardio efforts; 'legs'/'explosive'
 // are the strength-side equivalent (real leg load) — all five count
 // as hard for the back-to-back-hard-days flag and the low-recovery
@@ -1254,7 +1399,7 @@ function rhythmEntriesForDiscipline(rhythm, weekDates, discipline) {
 // caller to fall back to the pre-3.5 behavior for it. An empty array
 // (not null) means the rhythm DOES cover it but there's no real
 // target to size sessions from (never invents one).
-function buildRhythmSessionsForDiscipline(discipline, targets, capacity, rhythm, weekDates, mismatchNotes) {
+function buildRhythmSessionsForDiscipline(discipline, targets, capacity, rhythm, weekDates, mismatchNotes, firstWeekTargets) {
   const entries = rhythmEntriesForDiscipline(rhythm, weekDates, discipline);
   if (!entries.length) return null;
   const t = targets[discipline];
@@ -1262,6 +1407,30 @@ function buildRhythmSessionsForDiscipline(discipline, targets, capacity, rhythm,
   if (discipline === 'run' || discipline === 'bike') {
     if (!t || !t.km || !t.activityTypeId) return [];
     const pace = (perDiscipline[discipline] && perDiscipline[discipline].paceMinPerKm) || 6;
+    // FEATURE (reported) — km-aware split only when at least one
+    // entry actually has a real km set AND a real firstWeekKm is
+    // available to derive shares against; otherwise the exact
+    // original RHYTHM_KIND_WEIGHT heuristic below, byte-for-byte.
+    const firstWeekKm = firstWeekTargets && firstWeekTargets[discipline] && Number(firstWeekTargets[discipline].km);
+    const hasExplicitKm = entries.some((e) => e.entry.km != null && Number(e.entry.km) > 0);
+    if (hasExplicitKm && firstWeekKm > 0) {
+      const split = splitRhythmSessionsByShares(
+        entries.map((e) => ({ kind: e.entry.kind || 'easy', km: e.entry.km, dateKey: e.dateKey })),
+        firstWeekKm, t.km, RHYTHM_SPLIT_MIN_SESSION_KM
+      );
+      if (split) {
+        if (split.dropped.length) {
+          mismatchNotes.push(
+            (discipline === 'run' ? 'Run' : 'Bike') + ': this week\'s target (' + t.km + 'km) is too small for every rhythm session — ' +
+            split.dropped.join(', ') + (split.dropped.length === 1 ? ' was' : ' were') + ' merged into the remaining session(s).'
+          );
+        }
+        return split.sessions.map((s, i) => ({
+          id: discipline + '-rhythm-' + i, discipline, kind: s.kind, activityTypeId: t.activityTypeId, activityName: t.activityName,
+          targetAmount: s.km, unit: 'km', estMinutes: Math.round(s.km * pace), hard: RHYTHM_HARD_KINDS.has(s.kind), dateKey: s.dateKey,
+        }));
+      }
+    }
     const weights = entries.map((e) => RHYTHM_KIND_WEIGHT[e.entry.kind] || 1);
     const weightSum = weights.reduce((s, w) => s + w, 0);
     return entries.map((e, i) => {
@@ -1307,12 +1476,12 @@ function buildRhythmSessionsForDiscipline(discipline, targets, capacity, rhythm,
 // rhythm/weekDates/mismatchNotes are all optional — omitting them (as
 // every caller did before Phase 3.5) reproduces the exact pre-3.5
 // behavior byte-for-byte.
-function buildSessionsToPlace(targets, capacity, rhythm, weekDates, mismatchNotes) {
+function buildSessionsToPlace(targets, capacity, rhythm, weekDates, mismatchNotes, firstWeekTargets) {
   const sessions = [];
   const perDiscipline = (capacity && capacity.configured) ? capacity.perDiscipline : {};
   const notes = mismatchNotes || [];
   ['run', 'bike'].forEach((disc) => {
-    const rhythmSessions = rhythm ? buildRhythmSessionsForDiscipline(disc, targets, capacity, rhythm, weekDates, notes) : null;
+    const rhythmSessions = rhythm ? buildRhythmSessionsForDiscipline(disc, targets, capacity, rhythm, weekDates, notes, firstWeekTargets) : null;
     if (rhythmSessions) { sessions.push(...rhythmSessions); return; }
     const t = targets[disc];
     if (!t || !t.km || !t.activityTypeId) return;
@@ -1458,7 +1627,7 @@ function buildFinalLayout(assignments, sessionsToPlace, perDay, unplacedSeed) {
   return { layout, unplaced };
 }
 
-function normalizePlan(raw, restrictions, recommendableTypes, activeWeekDisciplines, capacity, rhythm, weekDates) {
+function normalizePlan(raw, restrictions, recommendableTypes, activeWeekDisciplines, capacity, rhythm, weekDates, firstWeekTargets) {
   const restricted = restrictedScopeSet(restrictions);
   const types = Array.isArray(recommendableTypes) ? recommendableTypes : [];
   const r = raw || {};
@@ -1489,8 +1658,15 @@ function normalizePlan(raw, restrictions, recommendableTypes, activeWeekDiscipli
   let layout = undefined;
   let unplaced = undefined;
   const rhythmMismatchNotes = [];
+  // FEATURE (reported) — see buildPlanSystemPrompt's own comment;
+  // null (not []) when there's no real layout at all this request,
+  // which is what tells stripInventedKindMentions below to skip
+  // entirely (an unconfigured/no-capacity week's rationale is
+  // completely untouched, same as before this feature existed).
+  let realSessionKinds = null;
   if (targets && capacity && capacity.configured && capacity.perDay.length) {
-    const sessionsToPlace = buildSessionsToPlace(targets, capacity, rhythm, weekDates, rhythmMismatchNotes);
+    const sessionsToPlace = buildSessionsToPlace(targets, capacity, rhythm, weekDates, rhythmMismatchNotes, firstWeekTargets);
+    realSessionKinds = Array.from(new Set(sessionsToPlace.map((s) => s.kind).filter(Boolean)));
     const unplaceableSeed = buildUnplaceableSeed(targets, capacity);
     const placeableSessions = sessionsToPlace.filter((s) => !unplaceableSeed.some((u) => u.id === s.discipline));
     // Phase 3.5 — a rhythm-sourced session already carries its own
@@ -1535,7 +1711,7 @@ function normalizePlan(raw, restrictions, recommendableTypes, activeWeekDiscipli
     // isn't trimmed to match the target, nor is the target changed to
     // match the rhythm).
     rhythmMismatchNotes: rhythmMismatchNotes.length ? rhythmMismatchNotes : undefined,
-    rationale: typeof r.rationale === 'string' ? truncateAtWordBoundary(r.rationale.trim(), 900) : '',
+    rationale: typeof r.rationale === 'string' ? stripInventedKindMentions(truncateAtWordBoundary(r.rationale.trim(), 900), realSessionKinds) : '',
   };
 }
 
@@ -1546,6 +1722,17 @@ async function handlePlan(req, res, apiKey, body) {
   // and sanitizeActiveWeekDisciplines's own comment for why null (not
   // {}) means "nothing to do here, behave exactly as before".
   const activeWeekDisciplines = sanitizeActiveWeekDisciplines(body.activeWeekDisciplines);
+  // FEATURE (reported) — the plan's FIRST checkpoint's own run/bike
+  // target, resolved client-side (gym.html already walks the active
+  // plan's checkpoints) and sent alongside activeWeekDisciplines
+  // (THIS week's own target) — the fixed "reference week" a km-aware
+  // rhythm split's shares are derived against, independent of which
+  // week is actually being generated right now. Reuses the exact
+  // same sanitizer; same shape. Optional — absent whenever no rhythm
+  // entry sets an explicit km at all, or the client couldn't resolve
+  // a first checkpoint, in which case the km-aware split never
+  // triggers at all (see splitRhythmSessionsByShares's own guard).
+  const firstWeekTargets = sanitizeActiveWeekDisciplines(body.firstWeekTargets);
   // Phase 3.4 — see sanitizeCapacity's own comment.
   const capacity = sanitizeCapacity(body.capacity);
   // Pre-compute the FINAL targets/trim/sessions BEFORE calling the
@@ -1571,9 +1758,15 @@ async function handlePlan(req, res, apiKey, body) {
   const rhythm = (body.weeklyRhythm && typeof body.weeklyRhythm === 'object' && rhythmHasAnyEntries(body.weeklyRhythm)) ? body.weeklyRhythm : null;
   const weekDates = (body.weekDates && typeof body.weekDates === 'object') ? body.weekDates : null;
   const preMismatchNotes = [];
-  const sessionsToPlace = preTargets ? buildSessionsToPlace(preTargets, capacity, rhythm, weekDates, preMismatchNotes) : [];
+  const sessionsToPlace = preTargets ? buildSessionsToPlace(preTargets, capacity, rhythm, weekDates, preMismatchNotes, firstWeekTargets) : [];
   const unplaceableSeed = preTargets ? buildUnplaceableSeed(preTargets, capacity) : [];
   const placeableSessions = sessionsToPlace.filter((s) => !unplaceableSeed.some((u) => u.id === s.discipline));
+  // FEATURE (reported) — see buildPlanSystemPrompt's own comment on
+  // realSessionKinds and normalizePlan's stripInventedKindMentions.
+  // Only non-empty when a real layout exists at all (sessionsToPlace
+  // is [] otherwise) — an unconfigured/no-capacity week is untouched,
+  // same as every other layout-only code path in this file.
+  const realSessionKinds = Array.from(new Set(sessionsToPlace.map((s) => s.kind).filter(Boolean)));
   // A rhythm-sourced session already has its own dateKey — the model
   // is NEVER asked to place it (only re-validated against capacity
   // further down, same as every other placement). Only the subset
@@ -1590,7 +1783,7 @@ async function handlePlan(req, res, apiKey, body) {
   };
 
   const text = await callClaude(apiKey, {
-    system: buildPlanSystemPrompt(restrictions, recommendableTypes, activeWeekDisciplines)
+    system: buildPlanSystemPrompt(restrictions, recommendableTypes, activeWeekDisciplines, realSessionKinds)
       + buildCapacityPromptSection(capacity, preTrimNote)
       + buildLayoutPromptSection(sessionsNeedingModelPlacement, capacity),
     userContent: 'Recent history:\n' + JSON.stringify(context, null, 2),
@@ -1634,7 +1827,7 @@ async function handlePlan(req, res, apiKey, body) {
   const parsed = extractJson(text);
   if (!parsed) return res.status(502).json({ ok: false, error: 'Model did not return valid JSON.' });
 
-  return res.status(200).json({ ok: true, plan: normalizePlan(parsed, restrictions, recommendableTypes, activeWeekDisciplines, capacity, rhythm, weekDates) });
+  return res.status(200).json({ ok: true, plan: normalizePlan(parsed, restrictions, recommendableTypes, activeWeekDisciplines, capacity, rhythm, weekDates, firstWeekTargets) });
 }
 
 // ------------------------------------------------------------

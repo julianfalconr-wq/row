@@ -6682,6 +6682,38 @@ img, video, canvas, svg { max-width: 100%; }
       return { disciplines: null, note: null, transition: { fromPreviousPlan: false, newPlanStartDate: newPlanMonday } };
     } catch (e) { return null; }
   }
+  // FEATURE (reported) — the active plan's FIRST checkpoint's own
+  // run/bike target, the fixed "reference week" a km-aware rhythm
+  // split (api/training.js's splitRhythmSessionsByShares) derives its
+  // percentage shares against — distinct from fetchActiveWeekDisciplines
+  // above, which resolves THIS week's own (possibly ramped/deloaded)
+  // target. Reuses the exact same "earliest weekStartDate" firstCp
+  // resolution fetchActiveWeekDisciplines already does for the
+  // transition-week date fix. Only run/bike km matters server-side
+  // (buildRhythmSessionsForDiscipline only reads firstWeekTargets[disc].km),
+  // so this intentionally skips the activityTypeId resolution
+  // resolveActiveWeekDisciplines does. null whenever there's no active
+  // plan or it has no checkpoints at all — the km-aware split then
+  // never triggers (see splitRhythmSessionsByShares's own guard).
+  async function fetchFirstWeekDisciplines() {
+    const secret = getSecret();
+    if (!secret) return null;
+    try {
+      const r = await fetch('/api/sync-state?resource=plans&secret=' + encodeURIComponent(secret));
+      const j = await r.json();
+      const plans = (j && j.ok && Array.isArray(j.plans)) ? j.plans : [];
+      const p = resolveActivePlan(plans);
+      if (!p || !Array.isArray(p.weeklyCheckpoints) || !p.weeklyCheckpoints.length) return null;
+      const firstCp = p.weeklyCheckpoints.reduce((a, b) => (!a || (b.weekStartDate && b.weekStartDate < a.weekStartDate) ? b : a), null);
+      if (!firstCp || !firstCp.disciplines) return null;
+      const out = {};
+      ['run', 'bike'].forEach((disc) => {
+        const d = firstCp.disciplines[disc];
+        if (d && Number(d.km) > 0) out[disc] = { km: Number(d.km) };
+      });
+      return Object.keys(out).length ? out : null;
+    } catch (e) { return null; }
+  }
   // Inverse of disciplineForActivityType() (Phase 2) — given a
   // discipline key (run/bike/swim), finds the first recommendable type
   // whose NAME matches it, so the server can zero the target out if
@@ -7945,6 +7977,7 @@ img, video, canvas, svg { max-width: 100%; }
       activeWeekDisciplines = resolved && resolved.disciplines;
       swimNote = resolved && resolved.note;
       weekTransitionNote = buildWeekTransitionNote(resolved && resolved.transition);
+      const firstWeekTargets = await fetchFirstWeekDisciplines();
 
       // Phase 3.4 — capacity summary (needed vs available per
       // discipline, per-day budgets) for the SAME week the targets
@@ -7964,7 +7997,7 @@ img, video, canvas, svg { max-width: 100%; }
 
       const res = await fetch('/api/training?mode=plan&secret=' + encodeURIComponent(secret), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ strengthSessions, recentExerciseNames, activitySessions, recommendableActivityTypes, whoop, restrictions, activeWeekDisciplines, capacity, weeklyRhythm, weekDates }),
+        body: JSON.stringify({ strengthSessions, recentExerciseNames, activitySessions, recommendableActivityTypes, whoop, restrictions, activeWeekDisciplines, capacity, weeklyRhythm, weekDates, firstWeekTargets }),
       });
       const json = await res.json().catch((parseErr) => { throw new Error('Response was not valid JSON: ' + parseErr.message); });
       if (!res.ok || !json.ok) throw new Error('HTTP ' + res.status + (res.ok ? '' : ' ' + res.statusText) + ' — ' + ((json && json.error) || '(no error detail in response body)'));
