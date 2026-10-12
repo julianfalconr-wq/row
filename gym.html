@@ -7420,12 +7420,25 @@ img, video, canvas, svg { max-width: 100%; }
     let usedMin = 0;
     const satisfied = new Set();
 
-    // Priority 1 — missed strength day-type.
+    // Priority 1 — missed strength day-type. Only ONE strength
+    // session fits per day, so when several day-types are pending
+    // (oldest first — missedDayTypesThisWeek's own chronological
+    // order), only the oldest becomes today's pick; every OTHER
+    // pending one is explicitly reported as can't-fit-this-week
+    // (BUG FIX, reported) rather than silently dropped — the card
+    // must say which ones, not just show the one that fit.
     if (missedDayTypes && missedDayTypes.length) {
       const oldest = missedDayTypes[0];
       sessions.push({ discipline: 'strength', kind: 'auto', dayType: oldest.dayType, weekday: oldest.weekday, targetAmount: null, unit: '', estMinutes: DEFAULT_SESSION_MINUTES.strength, reason: oldest.dayType + ' missed ' + oldest.weekday + ' this week', priority: 'missedStrengthDayType' });
       usedMin += DEFAULT_SESSION_MINUTES.strength;
       satisfied.add('strength');
+      const leftover = missedDayTypes.slice(1);
+      if (leftover.length) {
+        cantFit.push({
+          discipline: 'strength',
+          reason: 'Strength: 1 of ' + missedDayTypes.length + ' missed day-types can fit today; ' + leftover.map((d) => d.dayType).join(' and ') + ' can’t fit this week.',
+        });
+      }
     }
 
     // Priority 2 — backlog session(s) the weekly layout already
@@ -7971,6 +7984,8 @@ img, video, canvas, svg { max-width: 100%; }
     days.forEach((d) => { dayNameById[d.id] = d.name; });
     const exDayById = {};
     (state.exercises || []).forEach((ex) => { exDayById[ex.id] = ex.day; });
+    const routineById = {};
+    (state.routines || []).forEach((r) => { routineById[r.id] = r; });
     // BUG FIX (reported) — "missed" is a per-TYPE question across the
     // whole week, not a per-exact-date one: a Push logged on Saturday
     // satisfies Monday's own assigned Push too, so it must never show
@@ -7984,16 +7999,40 @@ img, video, canvas, svg { max-width: 100%; }
     // strengthSessions above) instead of a raw UTC string slice, so a
     // late-evening log's date reflects the user's own day-boundary
     // rules, not UTC's.
+    //
+    // BUG FIX (reported) — a logged SESSION satisfies the day-type it
+    // was explicitly logged as, never a type merely inferred from one
+    // of its individual exercises. For an ad-hoc log (no routineId),
+    // the exercise's own day IS that declaration — the Strength tab's
+    // exercise list is filtered to exactly one day at a time, so
+    // there's nothing to "infer": you can only log an exercise while
+    // that exact day is selected. For a log made via the Routine
+    // runner (routineId present), the ROUTINE's own declared
+    // linkedDayTypes is the real declaration instead — a routine can
+    // freely include an exercise individually configured under a
+    // DIFFERENT day (e.g. a shared accessory movement) without that
+    // exercise's own day silently counting as satisfied; a routine
+    // linked to MULTIPLE days is the user's own explicit "this session
+    // covers more than one day-type" declaration, so every linked type
+    // is satisfied, not just one guessed at.
     const loggedTypesThisWeek = new Set();
     const logs = state.logs || {};
     Object.keys(logs).forEach((exId) => {
       const dayId = exDayById[exId];
-      const dayName = dayId != null ? dayNameById[dayId] : null;
-      if (!dayName) return;
+      const exDayName = dayId != null ? dayNameById[dayId] : null;
       (logs[exId] || []).forEach((log) => {
         if (!log.date) return;
         const dk = DayLib.effectiveDateKey(new Date(log.date));
-        if (dk >= weekMondayKey && dk <= todayKeyStr) loggedTypesThisWeek.add(dayName);
+        if (dk < weekMondayKey || dk > todayKeyStr) return;
+        const routine = log.routineId ? routineById[log.routineId] : null;
+        const linkedDayNames = (routine && Array.isArray(routine.linkedDayTypes) && routine.linkedDayTypes.length)
+          ? routine.linkedDayTypes.map((id) => dayNameById[id]).filter(Boolean)
+          : null;
+        if (linkedDayNames && linkedDayNames.length) {
+          linkedDayNames.forEach((name) => loggedTypesThisWeek.add(name));
+        } else if (exDayName) {
+          loggedTypesThisWeek.add(exDayName);
+        }
       });
     });
     const missed = [];
