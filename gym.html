@@ -523,6 +523,31 @@ img, video, canvas, svg { max-width: 100%; }
 }
 @media (max-width: 380px) { .run-log-grid { grid-template-columns: 1fr; } }
 
+/* ----- Duplicate activity detection (reported) ----- */
+.dup-warn-box {
+  margin-top: 8px; padding: 8px 10px; border-radius: var(--radius-sm);
+  background: rgba(245,183,93,0.08); border: 1px solid rgba(245,183,93,0.3);
+}
+.dup-warn-text { font-size: 12px; color: var(--warn); font-weight: 700; display: block; margin-bottom: 6px; }
+.dup-choice-row { display: flex; gap: 6px; flex-wrap: wrap; }
+.dup-choice-pill {
+  padding: 5px 10px; border: 1px solid var(--border); background: rgba(0,0,0,0.25);
+  color: var(--text-2); border-radius: var(--radius-pill); cursor: pointer; font-size: 11.5px; font-weight: 700;
+  font-family: inherit;
+}
+.dup-choice-pill.active { background: var(--warn); color: #241a00; border-color: transparent; }
+.dup-banner { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
+.dup-banner-row {
+  padding: 10px; border-radius: var(--radius-sm);
+  background: rgba(245,183,93,0.08); border: 1px solid rgba(245,183,93,0.3);
+}
+.dup-banner-text { font-size: 12.5px; color: var(--text-1); margin-bottom: 8px; }
+.dup-banner-actions { display: flex; gap: 6px; }
+.dup-banner-actions button {
+  flex: 1; padding: 6px 0; border-radius: 8px; border: 1px solid var(--border); background: rgba(0,0,0,0.25);
+  color: var(--text-2); font-size: 11.5px; font-weight: 700; cursor: pointer; font-family: inherit;
+}
+
 .po-header {
   display: flex; align-items: center; justify-content: space-between;
   margin-bottom: 18px;
@@ -2455,6 +2480,7 @@ img, video, canvas, svg { max-width: 100%; }
         <button type="button" class="po-btn-primary" id="runSaveBtn">Save activity</button>
       </div>
 
+      <div id="runDuplicatesBanner" style="display:none"></div>
       <div class="run-history-title">History</div>
       <div id="runHistoryList"></div>
     </div>
@@ -5030,6 +5056,184 @@ img, video, canvas, svg { max-width: 100%; }
   function activityTypeById(id) {
     return activityTypes.find((t) => t.id === id) || activityTypes[0] || activityTypes.find((t) => t.id === 'running');
   }
+
+  // Discipline classification is NAME-based (swim/bike/run keyword
+  // matching against the configured Activity Type's own name) rather
+  // than a new dedicated field on Activity Types — kept deliberately
+  // simple for this phase; an activity type whose name doesn't match
+  // any pattern is treated as unclassified, and an unclassified type
+  // is NEVER blocked by a discipline restriction (better to under-
+  // restrict an activity we can't confidently classify than to
+  // silently hide a legitimate option the user configured). Declared
+  // here, right after activityTypeById — a `const` referenced before
+  // its own declaration line executes throws a real ReferenceError
+  // regardless of function-hoisting (two separate live incidents now:
+  // first renderWeeklyProgress()'s own top-level call, then
+  // runRender()'s, both of which sit EARLIER in this script than
+  // wherever this was declared before each fix — moved here, before
+  // every known top-level caller, rather than chasing a third).
+  const DISCIPLINE_NAME_PATTERNS = { swim: /swim/i, bike: /\b(bike|cycl|ride|spin)/i, run: /\b(run|jog)/i };
+  // BUG FIX (reported): this used to resolve the type via the LENIENT
+  // activityTypeById(), which silently falls back to activityTypes[0]
+  // (whatever type happens to be first — commonly "Running") for ANY
+  // id it can't find in the currently-loaded activityTypes list. That
+  // made the `if (!type) return null` guard below dead code in
+  // practice: an activity logged under a type that's since been
+  // renamed, deleted, or just not yet loaded (e.g. the brief window
+  // before fetchActivityTypes() resolves at page load — see its own
+  // .then() callback's comment) got silently counted as a RUN, raw
+  // distance and all. A swim entry's raw meters value then landed
+  // directly in the Run km total (11.9 real run km + 2000 raw swim
+  // meters = "2011.9 of 20 km"), and the same entry stopped matching
+  // 'swim' at all. Classification now uses a STRICT lookup — no match
+  // in the real list means no discipline, period; it never defaults
+  // to Running. See also logUnmatchedActivitiesThisWeek() below, which
+  // surfaces exactly which entries (if any) this affects.
+  function disciplineForActivityType(activityTypeId) {
+    const type = activityTypes.find((t) => t.id === activityTypeId);
+    if (!type) return null;
+    for (const key of Object.keys(DISCIPLINE_NAME_PATTERNS)) {
+      if (DISCIPLINE_NAME_PATTERNS[key].test(type.name || '')) return key;
+    }
+    return null;
+  }
+
+  // ============================================================
+  // DUPLICATE ACTIVITY DETECTION (reported) — WHOOP auto-import and
+  // manual logging write to the exact same activityEntries array with
+  // no cross-check between them at all (the only existing dedup,
+  // openWhoopImportModal's `alreadyImported` Set, only ever prevents
+  // RE-importing the identical whoopId twice — never checks against a
+  // manual entry). Logging the same real session twice this way
+  // silently inflates every weekly total/capacity/rebalance/score
+  // number that reads activityEntries, until the user notices and
+  // fixes it by hand (exactly what happened Sat 2026-10-10).
+  //
+  // Candidate definition (task's own spec): same CANONICAL discipline
+  // (disciplineForActivityType — "Swiming"/"swimming"/"whoop_swimming"
+  // all resolve to the same 'swim' key via the type's own NAME, not
+  // its id; a type with no discipline match, e.g. Padel or a custom
+  // WHOOP sport, falls back to comparing raw activityTypeId instead,
+  // so two logs of that exact same unmatched type can still dedupe),
+  // same LOCAL date (dateKey — never a raw timestamp compare), and
+  // (duration within DUPLICATE_TOLERANCE.durationPct OR distance
+  // within DUPLICATE_TOLERANCE.distancePct), where AT LEAST ONE side
+  // is WHOOP-sourced (has a whoopId) — two independently manual logs
+  // are never flagged by this feature at all, matching the reported
+  // scenario exactly (WHOOP import vs. manual log of the SAME real
+  // session, not two different manual typos).
+  const DUPLICATE_TOLERANCE = { durationPct: 0.20, distancePct: 0.15 };
+  function canonicalActivityKey(activityTypeId) {
+    return disciplineForActivityType(activityTypeId) || activityTypeId;
+  }
+  function isWithinTolerancePct(a, b, pct) {
+    if (a == null || b == null || !(a > 0) || !(b > 0)) return false;
+    return Math.abs(a - b) / ((a + b) / 2) <= pct;
+  }
+  function isDuplicatePair(a, b) {
+    if (!a || !b) return false;
+    if (!a.whoopId && !b.whoopId) return false; // never flags two independently-manual entries
+    if (a.dateKey !== b.dateKey) return false;
+    if (canonicalActivityKey(a.activityTypeId) !== canonicalActivityKey(b.activityTypeId)) return false;
+    const durMatch = isWithinTolerancePct(a.durationMin, b.durationMin, DUPLICATE_TOLERANCE.durationPct);
+    const distMatch = isWithinTolerancePct(a.distanceKm, b.distanceKm, DUPLICATE_TOLERANCE.distancePct);
+    return durMatch || distMatch;
+  }
+  // Finds the single best (first) match for `candidate` among `pool`,
+  // excluding candidate's own id (so an entry being re-saved/edited
+  // never matches itself). `pool` is always the CURRENTLY STORED
+  // entries — nothing here ever compares two not-yet-saved drafts
+  // against each other.
+  function findDuplicateMatch(candidate, pool) {
+    return (pool || []).find((p) => p && p.id !== candidate.id && isDuplicatePair(candidate, p)) || null;
+  }
+  // Decisions store — "Keep both" and "Dismiss" are remembered FOREVER
+  // (never re-prompted/re-banner'd for that exact pair again), keyed
+  // by the pair's two entry ids (order-independent). "Merge" needs no
+  // entry here: merging collapses the pair into one surviving entry,
+  // so there is no longer a "pair" left to re-flag at all.
+  const PO_DUP_DECISIONS_KEY = 'po_coach_dup_decisions_v1';
+  function dupPairKey(idA, idB) { return [idA, idB].sort().join('::'); }
+  function loadDupDecisions() {
+    try { const arr = JSON.parse(localStorage.getItem(PO_DUP_DECISIONS_KEY)); return Array.isArray(arr) ? arr : []; } catch (e) { return []; }
+  }
+  function saveDupDecisions(list) {
+    try { localStorage.setItem(PO_DUP_DECISIONS_KEY, JSON.stringify(list)); } catch (e) {}
+  }
+  function hasDupDecision(idA, idB) {
+    const key = dupPairKey(idA, idB);
+    return loadDupDecisions().some((d) => d.key === key);
+  }
+  function recordDupDecision(idA, idB, decision) {
+    const key = dupPairKey(idA, idB);
+    const list = loadDupDecisions().filter((d) => d.key !== key);
+    list.push({ key, decision, decidedAt: new Date().toISOString() });
+    saveDupDecisions(list);
+  }
+  // Skipped-WHOOP-workout store — "Skip this one" during import is
+  // remembered too, so the SAME workout (fetchWhoopWorkouts' own
+  // rolling 7-day window) doesn't keep re-prompting on every later
+  // import pass until it ages out of that window. Deliberately
+  // SEPARATE from the pair-decisions store above (a skip concerns one
+  // never-imported WHOOP workout, which has no second entry id yet to
+  // form a pair with).
+  const PO_SKIPPED_WHOOP_KEY = 'po_coach_skipped_whoop_v1';
+  function loadSkippedWhoopIds() {
+    try { const arr = JSON.parse(localStorage.getItem(PO_SKIPPED_WHOOP_KEY)); return Array.isArray(arr) ? arr : []; } catch (e) { return []; }
+  }
+  function markWhoopIdSkipped(whoopId) {
+    const set = new Set(loadSkippedWhoopIds());
+    set.add(whoopId);
+    try { localStorage.setItem(PO_SKIPPED_WHOOP_KEY, JSON.stringify(Array.from(set))); } catch (e) {}
+  }
+  // One-line human label for the duplicate-warning prompt, e.g. "run,
+  // 5.1 km, 31 min" — built from the type's OWN unit/unitKind, same
+  // convention as activityStatsLine, just without the RPE/notes parts
+  // (irrelevant to recognizing "is this the same session").
+  function describeActivityForDupPrompt(entry) {
+    const type = activityTypeById(entry.activityTypeId);
+    const parts = [canonicalActivityKey(entry.activityTypeId) || type.name];
+    if (type.unitKind === 'distance' && entry.distanceKm != null) parts.push(entry.distanceKm + (type.unit || 'km'));
+    else if (type.unitKind === 'count' && entry.count != null) parts.push(entry.count + (type.unit ? ' ' + type.unit : ''));
+    if (entry.durationMin != null) parts.push(entry.durationMin + ' min');
+    return parts.join(', ');
+  }
+  // Merge (BUG FIX, reported duplicate-counting) — keeps the MANUAL
+  // entry's own id/dateKey/activityTypeId/distanceKm/count/notes/
+  // effort untouched (the task's own "keep the manual distance, notes
+  // and effort" requirement) and overlays WHOOP's duration/heart
+  // rate/strain on top, so weekly totals/capacity/rebalancing/score —
+  // all of which read activityEntries directly, completely unchanged
+  // by this feature — see exactly ONE entry counting ONE time instead
+  // of two. Never called automatically; only from an explicit user
+  // choice (Merge, in the import review list, the manual-save prompt,
+  // or the History banner).
+  function mergeActivityEntries(manualEntry, whoopEntry) {
+    return Object.assign({}, manualEntry, {
+      durationMin: whoopEntry.durationMin != null ? whoopEntry.durationMin : manualEntry.durationMin,
+      whoopId: whoopEntry.whoopId,
+      whoopHeartRate: whoopEntry.whoopHeartRate != null ? whoopEntry.whoopHeartRate : manualEntry.whoopHeartRate,
+      whoopStrain: whoopEntry.whoopStrain != null ? whoopEntry.whoopStrain : manualEntry.whoopStrain,
+    });
+  }
+  // Retroactive scan for the History list's "Possible duplicates"
+  // banner — both sides of a pair already exist as separate STORED
+  // entries here (unlike the import-time/save-time checks above,
+  // which catch it before a second entry is even written). Already-
+  // decided pairs (Keep both / Dismiss) are filtered out so they
+  // never reappear, per the task's own requirement.
+  function findAllDuplicatePairs(entries) {
+    const pairs = [];
+    for (let i = 0; i < entries.length; i++) {
+      for (let j = i + 1; j < entries.length; j++) {
+        const a = entries[i], b = entries[j];
+        if (!isDuplicatePair(a, b)) continue;
+        if (hasDupDecision(a.id, b.id)) continue;
+        pairs.push({ a, b });
+      }
+    }
+    return pairs;
+  }
   // BUG FIX (reported) — a distance-type activity's own raw a.distanceKm
   // field (kept under this NAME for backward compatibility with every
   // existing stored entry and every other file that reads it) always
@@ -5201,7 +5405,14 @@ img, video, canvas, svg { max-width: 100%; }
     const durationMin = (isFinite(startMs) && isFinite(endMs)) ? Math.round(((endMs - startMs) / 60000) * 10) / 10 : null;
     const distanceMeters = (w.score && w.score.distance_meter != null) ? w.score.distance_meter : null;
     const dateKey = isFinite(startMs) ? DayLib.effectiveDateKey(new Date(startMs)) : DayLib.effectiveDateKey();
-    return { whoopId: w.id, sportName: w.sport_name || 'Workout', dateKey, durationMin, distanceMeters };
+    // Captured for the duplicate-merge feature (reported) — "attach
+    // WHOOP's duration, heart rate and strain" needs these actually
+    // read off the workout first; neither field existed on a draft at
+    // all before this. Stored as-is (never rounded/transformed), used
+    // only as optional display/merge data, never read by scoring.
+    const heartRate = (w.score && w.score.average_heart_rate != null) ? w.score.average_heart_rate : null;
+    const strain = (w.score && w.score.strain != null) ? w.score.strain : null;
+    return { whoopId: w.id, sportName: w.sport_name || 'Workout', dateKey, durationMin, distanceMeters, heartRate, strain };
   }
   function matchOrCreateType(sportName, distanceMeters) {
     const norm = String(sportName || '').trim().toLowerCase();
@@ -5228,21 +5439,44 @@ img, video, canvas, svg { max-width: 100%; }
     return Math.round(raw * 100) / 100;
   }
   let whoopImportDrafts = [];
+  // BUG FIX (reported duplicates) — a draft with duplicateOf set shows
+  // the exact "Looks like you already logged this (...)" warning plus
+  // the 3-way choice (Merge/Keep both/Skip this one) instead of the
+  // plain checkbox — the checkbox's own `include` is driven by that
+  // choice (skip = excluded) rather than independently.
+  const DUP_CHOICE_LABELS = { merge: 'Merge', keepBoth: 'Keep both', skip: 'Skip this one' };
   function renderWhoopImportList() {
     if (!whoopImportDrafts.length) { $$('whoopImportList').innerHTML = '<div class="whoop-import-empty">Nothing new to import.</div>'; return; }
     $$('whoopImportList').innerHTML = whoopImportDrafts.map((d, i) => {
       const stats = d.type.unitKind === 'distance' && d.distanceKm != null
         ? d.distanceKm + ' ' + (d.type.unit || 'km') + (d.durationMin != null ? ' · ' + d.durationMin + ' min' : '')
         : (d.durationMin != null ? d.durationMin + ' min' : '—');
-      return '<label class="whoop-import-row">' +
-        '<input type="checkbox" class="whoop-import-check" data-idx="' + i + '"' + (d.include ? ' checked' : '') + '>' +
+      const dupBlock = d.duplicateOf
+        ? '<div class="dup-warn-box">' +
+            '<span class="dup-warn-text">Looks like you already logged this (' + escapeHtml(describeActivityForDupPrompt(d.duplicateOf)) + ')</span>' +
+            '<div class="dup-choice-row">' + ['merge', 'keepBoth', 'skip'].map((choice) =>
+              '<button type="button" class="dup-choice-pill' + (d.duplicateAction === choice ? ' active' : '') + '" data-dup-choice="' + choice + '" data-idx="' + i + '">' + DUP_CHOICE_LABELS[choice] + '</button>'
+            ).join('') + '</div>' +
+          '</div>'
+        : '';
+      return '<div class="whoop-import-row">' +
+        (d.duplicateOf ? '' : '<input type="checkbox" class="whoop-import-check" data-idx="' + i + '"' + (d.include ? ' checked' : '') + '>') +
         '<div class="whoop-import-main">' +
           '<div class="whoop-import-title">' + escapeHtml(d.type.name) + (d.isNew ? '<span class="whoop-import-new-badge">New type</span>' : '') + '</div>' +
           '<div class="whoop-import-sub">' + escapeHtml(d.dateKey) + ' · ' + escapeHtml(stats) + '</div>' +
-        '</div></label>';
+          dupBlock +
+        '</div></div>';
     }).join('');
     $$('whoopImportList').querySelectorAll('.whoop-import-check').forEach((cb) => {
       cb.addEventListener('change', () => { whoopImportDrafts[Number(cb.dataset.idx)].include = cb.checked; });
+    });
+    $$('whoopImportList').querySelectorAll('[data-dup-choice]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const d = whoopImportDrafts[Number(btn.dataset.idx)];
+        d.duplicateAction = btn.dataset.dupChoice;
+        d.include = d.duplicateAction !== 'skip';
+        renderWhoopImportList();
+      });
     });
   }
   async function openWhoopImportModal() {
@@ -5256,16 +5490,28 @@ img, video, canvas, svg { max-width: 100%; }
     btn.disabled = false;
     if (!connected) { statusEl.textContent = 'Connect WHOOP on the Health page first.'; return; }
     const alreadyImported = new Set(activityEntries.filter((a) => a.whoopId).map((a) => a.whoopId));
-    const fresh = workouts.filter((w) => w && w.id && !alreadyImported.has(w.id));
+    // BUG FIX (reported duplicates) — a workout the user explicitly
+    // chose "Skip this one" for on an earlier import pass is excluded
+    // here too, so it doesn't keep re-prompting every time it's still
+    // inside the rolling 7-day window.
+    const skipped = new Set(loadSkippedWhoopIds());
+    const fresh = workouts.filter((w) => w && w.id && !alreadyImported.has(w.id) && !skipped.has(w.id));
     if (!fresh.length) {
-      statusEl.textContent = workouts.length ? 'Everything from the last 7 days is already imported.' : 'No WHOOP workouts found in the last 7 days.';
+      statusEl.textContent = workouts.length ? 'Everything from the last 7 days is already imported or skipped.' : 'No WHOOP workouts found in the last 7 days.';
       return;
     }
     whoopImportDrafts = fresh.map((w) => {
       const draft = whoopWorkoutToDraft(w);
       const { type, isNew } = matchOrCreateType(draft.sportName, draft.distanceMeters);
       const distanceKm = distanceValueForWhoopType(draft.distanceMeters, type);
-      return { ...draft, distanceKm, type, isNew, include: true };
+      // BUG FIX (reported duplicates) — checked against the CURRENTLY
+      // STORED entries (manual logs chiefly, but also any earlier
+      // WHOOP import — either way, "at least one side is WHOOP"
+      // already holds here since THIS draft itself always has a
+      // whoopId). Defaults to 'merge' per the task's own "Default to
+      // Merge" requirement.
+      const duplicateOf = findDuplicateMatch({ id: null, dateKey: draft.dateKey, activityTypeId: type.id, distanceKm, durationMin: draft.durationMin, whoopId: draft.whoopId }, activityEntries);
+      return { ...draft, distanceKm, type, isNew, include: true, duplicateOf, duplicateAction: duplicateOf ? 'merge' : null };
     });
     statusEl.textContent = '';
     renderWhoopImportList();
@@ -5275,16 +5521,27 @@ img, video, canvas, svg { max-width: 100%; }
   $$('whoopImportCancel').addEventListener('click', () => { $$('whoopImportModalBg').classList.remove('show'); });
   $$('whoopImportModalBg').addEventListener('click', (e) => { if (e.target.id === 'whoopImportModalBg') $$('whoopImportModalBg').classList.remove('show'); });
   $$('whoopImportConfirm').addEventListener('click', async () => {
-    const selected = whoopImportDrafts.filter((d) => d.include);
-    if (!selected.length) { $$('whoopImportModalBg').classList.remove('show'); return; }
+    // BUG FIX (reported duplicates) — a 'skip' draft is explicitly
+    // excluded even if something left `include` stale; a 'merge'
+    // draft is "acted on" (its whoopId/duration/heart rate/strain get
+    // attached to the existing manual entry) without ever becoming a
+    // second standalone entry.
+    const skipDrafts = whoopImportDrafts.filter((d) => d.duplicateAction === 'skip');
+    const actedDrafts = whoopImportDrafts.filter((d) => d.include && d.duplicateAction !== 'skip');
+    if (!actedDrafts.length && !skipDrafts.length) { $$('whoopImportModalBg').classList.remove('show'); return; }
     const btn = $$('whoopImportConfirm');
     btn.disabled = true;
     try {
+      skipDrafts.forEach((d) => markWhoopIdSkipped(d.whoopId));
       // Any brand-new types get created (persisted) BEFORE the entries
       // that reference them, so a refresh never briefly shows an
-      // activity type that "shouldn't" exist yet.
+      // activity type that "shouldn't" exist yet. A 'merge' draft
+      // never needs its (possibly auto-created) type at all — nothing
+      // ends up referencing it, since the existing manual entry keeps
+      // its own type untouched.
+      const newTypeDrafts = actedDrafts.filter((d) => d.duplicateAction !== 'merge');
       const newTypes = [];
-      selected.forEach((d) => {
+      newTypeDrafts.forEach((d) => {
         if (d.isNew && !activityTypes.some((t) => t.id === d.type.id) && !newTypes.some((t) => t.id === d.type.id)) newTypes.push(d.type);
       });
       if (newTypes.length) {
@@ -5292,7 +5549,16 @@ img, video, canvas, svg { max-width: 100%; }
         try { await saveActivityTypesToServer(activityTypes); } catch (e) { /* non-fatal — the entries below still save locally either way, and General Settings' own fetch will retry */ }
         populateActivityTypeSelect();
       }
-      selected.forEach((d) => {
+      let mergedCount = 0, addedCount = 0;
+      actedDrafts.forEach((d) => {
+        if (d.duplicateAction === 'merge' && d.duplicateOf) {
+          const idx = activityEntries.findIndex((a) => a.id === d.duplicateOf.id);
+          if (idx !== -1) {
+            activityEntries[idx] = mergeActivityEntries(activityEntries[idx], { whoopId: d.whoopId, durationMin: d.durationMin, whoopHeartRate: d.heartRate, whoopStrain: d.strain });
+            mergedCount++;
+          }
+          return;
+        }
         const entry = {
           id: 'run_' + Date.now() + '_' + Math.floor(Math.random() * 9999) + '_' + Math.floor(Math.random() * 9999),
           dateKey: d.dateKey,
@@ -5300,10 +5566,18 @@ img, video, canvas, svg { max-width: 100%; }
           effort: null,
           notes: 'Imported from WHOOP',
           whoopId: d.whoopId,
+          whoopHeartRate: d.heartRate,
+          whoopStrain: d.strain,
         };
         if (d.type.unitKind === 'distance' && d.distanceKm != null) entry.distanceKm = d.distanceKm;
         if (d.durationMin != null) entry.durationMin = d.durationMin;
         activityEntries.push(entry);
+        addedCount++;
+        // BUG FIX (reported duplicates) — "Keep both" is remembered:
+        // this exact pair must never be re-flagged by the retroactive
+        // History banner, which would otherwise immediately re-detect
+        // these same two entries the moment both exist standalone.
+        if (d.duplicateAction === 'keepBoth' && d.duplicateOf) recordDupDecision(d.duplicateOf.id, entry.id, 'keptBoth');
       });
       activityEntries.sort((a, b) => b.dateKey.localeCompare(a.dateKey));
       activitySave(activityEntries);
@@ -5311,7 +5585,11 @@ img, video, canvas, svg { max-width: 100%; }
       renderTrainingHistory();
       renderWeeklyProgress();
       $$('whoopImportModalBg').classList.remove('show');
-      $$('whoopImportStatus').textContent = 'Imported ' + selected.length + ' ' + (selected.length === 1 ? 'workout' : 'workouts') + '.';
+      const parts = [];
+      if (addedCount) parts.push('Imported ' + addedCount + ' ' + (addedCount === 1 ? 'workout' : 'workouts'));
+      if (mergedCount) parts.push('merged ' + mergedCount + ' into existing ' + (mergedCount === 1 ? 'entry' : 'entries'));
+      if (skipDrafts.length) parts.push('skipped ' + skipDrafts.length);
+      $$('whoopImportStatus').textContent = parts.length ? parts.join(', ') + '.' : 'Nothing imported.';
     } finally {
       btn.disabled = false;
     }
@@ -5339,7 +5617,53 @@ img, video, canvas, svg { max-width: 100%; }
     return parts.join(' · ');
   }
 
+  // BUG FIX (reported duplicates) — retroactive banner for pairs that
+  // already exist as two separate stored entries (e.g. imported BEFORE
+  // this feature existed, or from a device that missed the import-time/
+  // save-time prompts). Scans the FULL activityEntries list, not just
+  // the History list's own displayed slice(0,30), since a duplicate
+  // pair can straddle that boundary. Merge/Keep both/Dismiss here act
+  // immediately (no further confirmation) since this already IS the
+  // explicit, deliberate click the task's own "never delete... without
+  // confirmation" rule is about.
+  function renderDupBanner() {
+    const el = $$('runDuplicatesBanner');
+    const pairs = findAllDuplicatePairs(activityEntries);
+    if (!pairs.length) { el.style.display = 'none'; el.innerHTML = ''; return; }
+    el.style.display = 'block';
+    el.innerHTML = '<div class="dup-banner">' + pairs.map((pair, i) => {
+      return '<div class="dup-banner-row" data-pair="' + i + '">' +
+        '<div class="dup-banner-text">Possible duplicate: ' + escapeHtml(describeActivityForDupPrompt(pair.a)) + ' and ' + escapeHtml(describeActivityForDupPrompt(pair.b)) + ' on ' + escapeHtml(pair.a.dateKey) + '</div>' +
+        '<div class="dup-banner-actions">' +
+          '<button type="button" data-dup-banner-action="merge" data-pair="' + i + '">Merge</button>' +
+          '<button type="button" data-dup-banner-action="keepBoth" data-pair="' + i + '">Keep both</button>' +
+          '<button type="button" data-dup-banner-action="dismiss" data-pair="' + i + '">Dismiss</button>' +
+        '</div></div>';
+    }).join('') + '</div>';
+    el.querySelectorAll('[data-dup-banner-action]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const pair = pairs[Number(btn.dataset.pair)];
+        const action = btn.dataset.dupBannerAction;
+        if (action === 'merge') {
+          const whoopSide = pair.a.whoopId ? pair.a : (pair.b.whoopId ? pair.b : null);
+          const manualSide = whoopSide === pair.a ? pair.b : pair.a;
+          const survivor = whoopSide ? mergeActivityEntries(manualSide, whoopSide) : manualSide;
+          const removedId = whoopSide ? whoopSide.id : pair.b.id;
+          activityEntries = activityEntries.filter((a) => a.id !== removedId).map((a) => a.id === survivor.id ? survivor : a);
+          activitySave(activityEntries);
+        } else {
+          // 'keepBoth' and 'dismiss' both just record the decision —
+          // neither one touches activityEntries at all.
+          recordDupDecision(pair.a.id, pair.b.id, action === 'keepBoth' ? 'keptBoth' : 'dismissed');
+        }
+        runRender();
+        renderTrainingHistory();
+        renderWeeklyProgress();
+      });
+    });
+  }
   function runRender() {
+    renderDupBanner();
     const listEl = $$('runHistoryList');
     if (!activityEntries.length) { listEl.innerHTML = '<div class="run-empty">No activities logged yet.</div>'; return; }
     listEl.innerHTML = activityEntries.slice(0, 30).map((a) => {
@@ -5551,18 +5875,53 @@ img, video, canvas, svg { max-width: 100%; }
       entry.distanceKm = Math.round(dist * 100) / 100;
       entry.durationMin = Math.round(dur * 10) / 10;
     }
+    // BUG FIX (reported duplicates) — a WHOOP-imported entry that
+    // already matches this manual one (same canonical discipline,
+    // same date, duration/distance within tolerance) is never
+    // silently double-counted. Native confirm() (this file's existing
+    // pattern for a quick binary choice, e.g. the secret-missing
+    // alerts above) rather than a new modal, since there are only two
+    // meaningful outcomes here (no third "skip" — not saving at all
+    // already covers that).
+    const dup = findDuplicateMatch(entry, activityEntries);
+    if (dup) {
+      const mergeIntoExisting = confirm(
+        'Looks like you already logged this from WHOOP (' + describeActivityForDupPrompt(dup) + ').\n\n' +
+        'OK — Merge into the imported one (keeps this one\'s distance/notes/effort, keeps WHOOP\'s duration/heart rate/strain)\n' +
+        'Cancel — Add anyway (keep both as separate entries)'
+      );
+      if (mergeIntoExisting) {
+        const idx = activityEntries.findIndex((a) => a.id === dup.id);
+        if (idx !== -1) activityEntries[idx] = mergeActivityEntries(entry, activityEntries[idx]);
+        activitySave(activityEntries);
+        runRender();
+        renderTrainingHistory();
+        renderWeeklyProgress();
+        clearLogForm();
+        return;
+      }
+      // "Add anyway" — proceed to push `entry` below as normal, but
+      // remember this exact pair so the retroactive History banner
+      // (which would otherwise immediately re-detect these same two
+      // entries) never re-prompts for it again, matching "Keep both"
+      // being remembered everywhere else in this feature.
+      recordDupDecision(dup.id, entry.id, 'keptBoth');
+    }
+
     activityEntries.push(entry);
     activityEntries.sort((a, b) => b.dateKey.localeCompare(a.dateKey));
     activitySave(activityEntries);
     runRender();
     renderTrainingHistory();
     renderWeeklyProgress();
-
+    clearLogForm();
+  });
+  function clearLogForm() {
     runDistanceInput.value = ''; runCountInput.value = ''; runDurationInput.value = ''; runPaceDisplay.value = '';
     runNotesInput.value = ''; selectedEffort = null;
     document.querySelectorAll('.run-effort-pill').forEach((p) => p.classList.remove('active'));
     runDateInput.value = DayLib.effectiveDateKey();
-  });
+  }
 
   populateActivityTypeSelect();
   runRender();
@@ -5718,48 +6077,12 @@ img, video, canvas, svg { max-width: 100%; }
     } catch (e) { return null; }
   }
   function saveStoredPlan(p) { try { localStorage.setItem(PLAN_KEY, JSON.stringify(p)); } catch (e) {} }
-
-  // Discipline classification is NAME-based (swim/bike/run keyword
-  // matching against the configured Activity Type's own name) rather
-  // than a new dedicated field on Activity Types — kept deliberately
-  // simple for this phase; an activity type whose name doesn't match
-  // any pattern is treated as unclassified, and an unclassified type
-  // is NEVER blocked by a discipline restriction (better to under-
-  // restrict an activity we can't confidently classify than to
-  // silently hide a legitimate option the user configured). Declared
-  // here (ABOVE computeWeekProgressByDiscipline, which needs it at
-  // page-load time via the plain renderWeeklyProgress() call a few
-  // lines below, not just from a later click handler) rather than
-  // down in the Phase 2 section where it originated — a `const`
-  // referenced before its own declaration line executes throws a real
-  // ReferenceError regardless of function-hoisting, caught via a live
-  // Playwright run that showed the progress bars silently failing to
-  // render on page load with this exact error.
-  const DISCIPLINE_NAME_PATTERNS = { swim: /swim/i, bike: /\b(bike|cycl|ride|spin)/i, run: /\b(run|jog)/i };
-  // BUG FIX (reported): this used to resolve the type via the LENIENT
-  // activityTypeById(), which silently falls back to activityTypes[0]
-  // (whatever type happens to be first — commonly "Running") for ANY
-  // id it can't find in the currently-loaded activityTypes list. That
-  // made the `if (!type) return null` guard below dead code in
-  // practice: an activity logged under a type that's since been
-  // renamed, deleted, or just not yet loaded (e.g. the brief window
-  // before fetchActivityTypes() resolves at page load — see its own
-  // .then() callback's comment) got silently counted as a RUN, raw
-  // distance and all. A swim entry's raw meters value then landed
-  // directly in the Run km total (11.9 real run km + 2000 raw swim
-  // meters = "2011.9 of 20 km"), and the same entry stopped matching
-  // 'swim' at all. Classification now uses a STRICT lookup — no match
-  // in the real list means no discipline, period; it never defaults
-  // to Running. See also logUnmatchedActivitiesThisWeek() below, which
-  // surfaces exactly which entries (if any) this affects.
-  function disciplineForActivityType(activityTypeId) {
-    const type = activityTypes.find((t) => t.id === activityTypeId);
-    if (!type) return null;
-    for (const key of Object.keys(DISCIPLINE_NAME_PATTERNS)) {
-      if (DISCIPLINE_NAME_PATTERNS[key].test(type.name || '')) return key;
-    }
-    return null;
-  }
+  // Discipline classification (DISCIPLINE_NAME_PATTERNS/disciplineFor
+  // ActivityType) and the duplicate-activity-detection helpers that
+  // depend on it have been moved up near activityTypeById's own
+  // declaration (BUG FIX, reported regression — runRender()'s own
+  // unconditional top-level call, now also rendering the duplicates
+  // banner, happens even earlier in this script than this spot).
   // Permanent, lightweight diagnostic (not the temporary debug box from
   // earlier rounds, which was removed once confirmed) — logs any
   // activity entry logged this week whose activityTypeId doesn't match
