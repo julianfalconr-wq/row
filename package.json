@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "prepare": "git config core.hooksPath .githooks || true",
-    "check": "node tests/lint-gym-html.cjs && node tests/smoke-refresh-buttons.cjs && node tests/smoke-main-todo.cjs && node tests/smoke-weekly-plan-card.cjs && node tests/smoke-fresh-week-rebalance.cjs && node tests/smoke-rhythm-split.cjs && node tests/smoke-today-rhythm-backstop.cjs && node tests/smoke-rhythm-cap-preview.cjs"
+    "build": "node scripts/generate-build-stamp.cjs",
+    "check": "node tests/lint-gym-html.cjs && node tests/smoke-refresh-buttons.cjs && node tests/smoke-main-todo.cjs && node tests/smoke-weekly-plan-card.cjs && node tests/smoke-fresh-week-rebalance.cjs && node tests/smoke-rhythm-split.cjs && node tests/smoke-today-rhythm-backstop.cjs && node tests/smoke-rhythm-cap-preview.cjs && node tests/smoke-build-stamp.cjs"
   },
   "dependencies": {
     "web-push": "^3.6.7"

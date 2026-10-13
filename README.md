@@ -48,4 +48,9 @@ node tests/smoke-fresh-week-rebalance.cjs # real-page rebalancer check — fresh
 node tests/smoke-rhythm-split.cjs     # km-aware weekly-rhythm run/bike split — api/training.js's splitRhythmSessionsByShares
 node tests/smoke-today-rhythm-backstop.cjs # Today's/Tomorrow's session never invents an unscheduled session when a rhythm exists
 node tests/smoke-rhythm-cap-preview.cjs # weekly-rhythm long-run cap settings + "Next weeks" preview table — main.html
+node tests/smoke-build-stamp.cjs      # footer build stamp — gym.html/main.html/plan.html
 ```
+
+## Build stamp
+
+gym.html, main.html and plan.html each show a small muted "build &lt;commit&gt;, &lt;date&gt; &lt;time&gt;" line in their own footer. It's generated at deploy time: Vercel's build step runs `npm run build` (`scripts/generate-build-stamp.cjs`), which overwrites `build-stamp.js` with `VERCEL_GIT_COMMIT_SHA` (short hash) and the build time, read from Vercel's own System Environment Variables — no API call, no fetch at runtime. Locally (or if those variables are absent), `build-stamp.js` keeps the committed "dev" placeholder.

@@ -8,6 +8,7 @@
 #   - tests/smoke-rhythm-split.cjs    (km-aware weekly-rhythm run/bike split, api/training.js)
 #   - tests/smoke-today-rhythm-backstop.cjs (Today's/Tomorrow's session never invents an unscheduled session when a rhythm exists)
 #   - tests/smoke-rhythm-cap-preview.cjs (weekly-rhythm long-run cap settings + "Next weeks" preview table, main.html)
+#   - tests/smoke-build-stamp.cjs (footer build stamp on gym.html/main.html/plan.html)
 #
 # Installed via `git config core.hooksPath .githooks` — see this
 # repo's package.json "prepare" script (runs automatically on
@@ -111,6 +112,17 @@ if ! node tests/smoke-rhythm-cap-preview.cjs; then
   echo "pre-push: BLOCKED — tests/smoke-rhythm-cap-preview.cjs failed (see output above)."
   echo "pre-push: fix the reported issue(s), or run it by hand to iterate:"
   echo "pre-push:   node tests/smoke-rhythm-cap-preview.cjs"
+  echo ""
+  exit 1
+fi
+
+echo ""
+echo "pre-push: running tests/smoke-build-stamp.cjs ..."
+if ! node tests/smoke-build-stamp.cjs; then
+  echo ""
+  echo "pre-push: BLOCKED — tests/smoke-build-stamp.cjs failed (see output above)."
+  echo "pre-push: fix the reported issue(s), or run it by hand to iterate:"
+  echo "pre-push:   node tests/smoke-build-stamp.cjs"
   echo ""
   exit 1
 fi

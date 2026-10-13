@@ -1640,5 +1640,21 @@ document.addEventListener('DOMContentLoaded', function () {
   boot();
 });
 </script>
+
+<!-- Build stamp (reported) — see build-stamp.js's own header comment
+     and scripts/generate-build-stamp.cjs. Static "dev" text first (no
+     layout shift, no flash) — build-stamp.js (loaded as a normal page
+     asset, never a runtime fetch) sets window.BUILD_STAMP
+     synchronously before this script runs; "dev" stays shown if it's
+     missing (local run). Does not depend on an existing <footer>. -->
+<div id="buildStampFooter" style="text-align:center;font-size:11px;color:var(--text-tertiary);padding:12px 0;opacity:.7;">build dev</div>
+<script src="build-stamp.js"></script>
+<script>
+  (function () {
+    var el = document.getElementById('buildStampFooter');
+    if (el) el.textContent = 'build ' + (window.BUILD_STAMP || 'dev');
+  })();
+</script>
+
 </body>
 </html>
