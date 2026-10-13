@@ -891,6 +891,21 @@ document.addEventListener('DOMContentLoaded', function () {
   function hasAnyAcceptedSwimBaseline(weekStartKey) {
     return Object.keys(PLAN_SWIM_ACCEPTED_BASELINES_BY_WEEK_START).some((key) => !!PLAN_SWIM_ACCEPTED_BASELINES_BY_WEEK_START[key][weekStartKey]);
   }
+  // FEATURE (reported) — one-off, surgical note correction: table week
+  // 25 (this plan's own restarted week 22, Monday 2027-03-08 — see
+  // PLAN RESTART PREP above) said "Long run 8-10km" before the long-
+  // run cap became a real, configurable number; now that week's cap
+  // is 12km (see the weekly-rhythm resource's own longRunCapOverrides),
+  // the note should say so. This week is NOT an `overwrite` week (its
+  // disciplines are already correct) so the generic overwrite
+  // mechanism below never touches its note at all — protected the
+  // SAME way swim is above: only overwritten while the stored note
+  // still matches this EXACT old text (never the user's own edit),
+  // idempotent (once corrected, `cp.note` no longer equals `from`, so
+  // this never re-fires).
+  const PLAN_NOTE_CORRECTIONS_BY_WEEK_START = {
+    [addWeeksKey(PLAN_WEEK1_MONDAY, 25 - 1)]: { from: 'Long run 8-10km', to: 'Long run 12km' },
+  };
   function disciplinesWithoutSwim(d) {
     if (!d) return d;
     const copy = Object.assign({}, d);
@@ -1003,6 +1018,15 @@ document.addEventListener('DOMContentLoaded', function () {
       return matchesBaseline && !swimEqual(cp.disciplines.swim, fill.disciplines.swim);
     });
     if (swimStale) return true;
+    // Note-correction eligibility — see PLAN_NOTE_CORRECTIONS_BY_WEEK_START's
+    // own comment: only the one week whose stored note still matches
+    // the exact old text is eligible; a user-edited note is left alone.
+    const noteStale = plan.weeklyCheckpoints.some((cp) => {
+      const weekKey = checkpointCanonicalRange(cp).start;
+      const correction = PLAN_NOTE_CORRECTIONS_BY_WEEK_START[weekKey];
+      return !!correction && cp.note === correction.from;
+    });
+    if (noteStale) return true;
     // Checkpoints already match — separately check the top-level
     // header target against what the (already-correct) last
     // checkpoint says, so a plan whose checkpoints were backfilled
@@ -1071,6 +1095,17 @@ document.addEventListener('DOMContentLoaded', function () {
             skippedSwimWeeks.push({ weekNumber: cp.weekNumber, current: currentSwim });
           }
         }
+      }
+      // Note correction — surgical, independent of the disciplines
+      // overwrite mechanism above (this week isn't an `overwrite`
+      // week — its disciplines are already correct and untouched by
+      // the block above; see PLAN_NOTE_CORRECTIONS_BY_WEEK_START's
+      // own comment).
+      const noteCorrection = PLAN_NOTE_CORRECTIONS_BY_WEEK_START[weekKey];
+      if (noteCorrection && (next.note !== undefined ? next.note : cp.note) === noteCorrection.from) {
+        diffLines.push('Week ' + cp.weekNumber + ' note: "' + noteCorrection.from + '" -> "' + noteCorrection.to + '"');
+        next.note = noteCorrection.to;
+        changed = true;
       }
       if (changed) next.disciplines = disciplines;
       if (cumulativeByWeek[weekKey] != null) {

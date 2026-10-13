@@ -1312,6 +1312,17 @@ body {
 .gs-rhythm-entry-remove { background: transparent; border: none; color: var(--text-tertiary); font-family: inherit; font-size: 11.5px; font-weight: 700; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
 .gs-rhythm-entry-remove:hover { color: var(--danger); }
 .gs-rhythm-add-session { background: transparent; border: 1px dashed var(--line); color: var(--text-tertiary); font-family: inherit; font-size: 11.5px; font-weight: 700; padding: 7px; border-radius: var(--radius-xs, 6px); cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.gs-rhythm-cap-settings { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; }
+.gs-rhythm-cap-row { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); }
+.gs-rhythm-cap-row input[type="number"] { width: 60px; background: var(--inset-bg); border: 1px solid var(--line); color: var(--text-primary); font-family: inherit; font-size: 12px; padding: 5px 7px; border-radius: var(--radius-xs, 6px); outline: none; }
+.gs-rhythm-cap-override-row { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-secondary); flex-wrap: wrap; }
+.gs-rhythm-cap-override-row input[type="date"] { background: var(--inset-bg); border: 1px solid var(--line); color: var(--text-primary); font-family: inherit; font-size: 11.5px; padding: 5px 7px; border-radius: var(--radius-xs, 6px); outline: none; }
+.gs-rhythm-entry-km { width: 64px; background: var(--inset-bg); border: 1px solid var(--line); color: var(--text-primary); font-family: inherit; font-size: 12px; padding: 7px 9px; border-radius: var(--radius-xs, 6px); outline: none; }
+.gs-rhythm-preview { margin-top: 8px; overflow-x: auto; }
+.gs-rhythm-preview table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+.gs-rhythm-preview th, .gs-rhythm-preview td { padding: 4px 6px; text-align: right; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.gs-rhythm-preview th:first-child, .gs-rhythm-preview td:first-child { text-align: left; }
+.gs-rhythm-preview .gs-rhythm-preview-shortfall { color: var(--warning); }
 
 .gs-restrictions-list { display: flex; flex-direction: column; gap: 8px; }
 .gs-restriction-row {
@@ -1606,7 +1617,10 @@ body {
         <div class="hf-advanced-body" id="gsRhythmBody" hidden>
           <div class="gs-rhythm-summary" id="gsRhythmSummary"></div>
           <div class="gs-rhythm-grid" id="gsRhythmGrid"></div>
+          <div class="gs-rhythm-cap-settings" id="gsRhythmCapSettings"></div>
           <div class="gs-avail-save-status" id="gsRhythmSaveStatus"></div>
+          <button type="button" class="hf-advanced-toggle" id="gsRhythmPreviewToggleBtn">Next weeks preview ▾</button>
+          <div class="gs-rhythm-preview" id="gsRhythmPreview" hidden></div>
         </div>
       </div>
 
@@ -5495,6 +5509,36 @@ document.addEventListener('DOMContentLoaded', function () {
     } catch (e) {}
     return null;
   }
+  // Same canonical-Monday resolution fetchCurrentWeekPlanDisciplines
+  // already does per-checkpoint (median-day-of-7 -> Monday), extracted
+  // so the "Next weeks" preview table below can apply it to EVERY
+  // checkpoint, not just the one covering today.
+  function checkpointMondayMain(cp) {
+    const mid = window.DayLib.parseDateKey(cp.weekStartDate);
+    mid.setDate(mid.getDate() + 3);
+    return rhythmCanonicalWeekStart(window.DayLib.plainDateKey(mid));
+  }
+  // FEATURE (reported) — every real checkpoint of the active plan,
+  // sorted chronologically, each paired with its own canonical Monday
+  // — the "Next weeks" preview table's raw data. No AI call: these are
+  // the plan's own ALREADY-STORED weekly targets (same real numbers
+  // gym.html's objectives card eventually generates sessions from),
+  // just read and split by the SAME code this file already runs.
+  async function fetchAllWeekPlanDisciplinesMain() {
+    const secret = getSecret();
+    if (!secret) return [];
+    try {
+      const r = await fetch('/api/sync-state?secret=' + encodeURIComponent(secret) + '&resource=plans');
+      const j = await r.json();
+      const plans = (j && j.ok && Array.isArray(j.plans)) ? j.plans : [];
+      const p = resolveActivePlan(plans);
+      if (!p || !Array.isArray(p.weeklyCheckpoints)) return [];
+      return p.weeklyCheckpoints
+        .filter((cp) => cp.weekStartDate && cp.disciplines)
+        .map((cp) => ({ weekNumber: cp.weekNumber, monday: checkpointMondayMain(cp), disciplines: cp.disciplines }))
+        .sort((a, b) => (a.monday < b.monday ? -1 : a.monday > b.monday ? 1 : 0));
+    } catch (e) { return []; }
+  }
   // Flags are informational only — never block saving (the task spec
   // says "inline flags (not silent)", not "reject the entry"). Each
   // day's entries are checked against: (1) that discipline not allowed
@@ -5588,40 +5632,57 @@ document.addEventListener('DOMContentLoaded', function () {
     const weightSum = weights.reduce((s, w) => s + w, 0);
     return Math.round(entries.reduce((sum, e, i) => sum + Math.max(0, Math.round((weeklyKm * (weights[i] / weightSum)) * 10) / 10), 0) * 10) / 10;
   }
-  // FEATURE (reported) — mirrors api/training.js's own
-  // splitRhythmSessionsByShares exactly (same algorithm, duplicated
-  // per this project's per-file convention — this preview must show
-  // the SAME number the server will actually assign). Used only when
-  // at least one entry has an explicit km AND a real first-week
-  // reference exists; computeRhythmPlannedKm above remains the
-  // fallback (backward compatible, unchanged) otherwise.
+  // CHANGE (reported) — mirrors api/training.js's own
+  // splitRhythmSessionsFixedGrowth/resolveLongRunCapForWeek exactly
+  // (same algorithm, duplicated per this project's per-file
+  // convention — this preview must show the SAME numbers the server
+  // will actually assign). Used only when at least one entry has an
+  // explicit km AND a real first-week reference exists;
+  // computeRhythmPlannedKm above remains the fallback (backward
+  // compatible, unchanged) otherwise.
   const RHYTHM_SPLIT_MIN_SESSION_KM_MAIN = 3;
-  function splitRhythmSessionsByKmSharesMain(entries, firstWeekKm, weekKm, minSessionKm) {
+  const RHYTHM_LONG_RUN_CAP_DEFAULT_KM_MAIN = 10;
+  function resolveLongRunCapForWeekMain(rhythm, weekMondayKey) {
+    const defaultCap = (rhythm && Number(rhythm.longRunCapKm) > 0) ? Number(rhythm.longRunCapKm) : RHYTHM_LONG_RUN_CAP_DEFAULT_KM_MAIN;
+    if (!weekMondayKey || !rhythm || !Array.isArray(rhythm.longRunCapOverrides)) return defaultCap;
+    const hit = rhythm.longRunCapOverrides.find((o) => o && o.from && o.to && weekMondayKey >= o.from && weekMondayKey <= o.to);
+    return (hit && Number(hit.km) > 0) ? Number(hit.km) : defaultCap;
+  }
+  function round0_5Main(v) { return Math.round(v * 2) / 2; }
+  function splitRhythmSessionsFixedGrowthMain(entries, firstWeekKm, weekKm, cap, minSessionKm) {
     if (!entries || !entries.length || !(firstWeekKm > 0) || !(weekKm > 0)) return null;
-    const explicit = entries.map((e) => (e.km != null && Number(e.km) > 0) ? Number(e.km) : null);
-    const explicitSum = explicit.reduce((s, v) => s + (v || 0), 0);
-    const implicitCount = explicit.filter((v) => v == null).length;
-    const remainder = Math.max(0, firstWeekKm - explicitSum);
-    const perImplicitKm = implicitCount ? remainder / implicitCount : 0;
-    let items = entries.map((e, i) => ({
-      kind: e.kind,
-      share: (explicit[i] != null ? explicit[i] : perImplicitKm) / firstWeekKm,
-    }));
-    function sizesFor(list, total) {
-      const raw = list.map((it) => it.share * total);
-      const rounded = raw.map((v) => Math.round(v * 2) / 2);
-      const sum = Math.round(rounded.reduce((s, v) => s + v, 0) * 2) / 2;
-      const drift = Math.round((total - sum) * 2) / 2;
-      if (drift !== 0 && rounded.length) {
-        let bi = 0;
-        rounded.forEach((v, i) => { if (v > rounded[bi]) bi = i; });
-        rounded[bi] = Math.round((rounded[bi] + drift) * 2) / 2;
-      }
-      return rounded;
+    const longIdx = entries.findIndex((e) => e.kind === 'long');
+    const easyIdx = entries.findIndex((e) => e.kind === 'easy');
+    const baselines = entries.map((e) => Number(e.km) || 0);
+    if (longIdx !== -1 && !(Number(entries[longIdx].km) > 0)) {
+      const othersSum = baselines.reduce((s, v, i) => s + (i === longIdx ? 0 : v), 0);
+      baselines[longIdx] = Math.max(0, round0_5Main(firstWeekKm - othersSum));
     }
-    const dropped = [];
+    if (weekKm >= firstWeekKm) {
+      let growthRemaining = weekKm - firstWeekKm;
+      const sizes = baselines.slice();
+      if (longIdx !== -1) {
+        const room = Math.max(0, cap - baselines[longIdx]);
+        const grow = Math.min(growthRemaining, room);
+        sizes[longIdx] = round0_5Main(baselines[longIdx] + grow);
+        growthRemaining -= grow;
+      }
+      if (easyIdx !== -1 && growthRemaining > 0) {
+        const longFinal = longIdx !== -1 ? sizes[longIdx] : Infinity;
+        const easyMax = Math.max(baselines[easyIdx], longFinal - 1);
+        const room = Math.max(0, easyMax - baselines[easyIdx]);
+        const grow = Math.min(growthRemaining, room);
+        sizes[easyIdx] = round0_5Main(baselines[easyIdx] + grow);
+        growthRemaining -= grow;
+      }
+      const placed = sizes.reduce((s, v) => s + v, 0);
+      const shortfall = Math.max(0, Math.round((weekKm - placed) * 10) / 10);
+      return { sessions: entries.map((e, i) => ({ kind: e.kind, km: sizes[i] })), dropped: [], shortfall, cap };
+    }
     const floor = minSessionKm > 0 ? minSessionKm : 3;
-    while (items.length > 1 && weekKm < items.length * floor) {
+    let items = entries.map((e, i) => ({ kind: e.kind, share: firstWeekKm ? baselines[i] / firstWeekKm : 0 }));
+    const dropped = [];
+    while (items.length > 1 && weekKm <= items.length * floor) {
       let mi = 0;
       items.forEach((it, i) => { if (it.share < items[mi].share) mi = i; });
       dropped.push(items[mi].kind);
@@ -5630,8 +5691,16 @@ document.addEventListener('DOMContentLoaded', function () {
       const remSum = items.reduce((s, it) => s + it.share, 0) || 1;
       items = items.map((it) => Object.assign({}, it, { share: it.share + droppedShare * (it.share / remSum) }));
     }
-    const finalSizes = sizesFor(items, weekKm);
-    return { sessions: items.map((it, i) => ({ kind: it.kind, km: finalSizes[i] })), dropped };
+    const raw = items.map((it) => it.share * weekKm);
+    const rounded = raw.map((v) => round0_5Main(v));
+    const sum = round0_5Main(rounded.reduce((s, v) => s + v, 0));
+    const drift = round0_5Main(weekKm - sum);
+    if (drift !== 0 && rounded.length) {
+      let bi = 0;
+      rounded.forEach((v, i) => { if (v > rounded[bi]) bi = i; });
+      rounded[bi] = round0_5Main(rounded[bi] + drift);
+    }
+    return { sessions: items.map((it, i) => ({ kind: it.kind, km: rounded[i] })), dropped, shortfall: 0, cap };
   }
   function rhythmSummaryLine(rhythm, planDisciplines, enabled, firstWeekDisciplines) {
     const byDiscipline = { run: [], bike: [], swim: [], strength: [] };
@@ -5655,11 +5724,14 @@ document.addEventListener('DOMContentLoaded', function () {
         // weight-based estimate, unchanged.
         const firstWeekKm = firstWeekDisciplines && firstWeekDisciplines[disc] && Number(firstWeekDisciplines[disc].km);
         const hasExplicitKm = entries.some((e) => e.km != null && Number(e.km) > 0);
-        const split = (hasExplicitKm && firstWeekKm > 0) ? splitRhythmSessionsByKmSharesMain(entries, firstWeekKm, weeklyKm, RHYTHM_SPLIT_MIN_SESSION_KM_MAIN) : null;
+        const thisWeekMonday = mondayOfKey(DayLib.effectiveDateKey());
+        const cap = resolveLongRunCapForWeekMain(rhythm, thisWeekMonday);
+        const split = (hasExplicitKm && firstWeekKm > 0) ? splitRhythmSessionsFixedGrowthMain(entries, firstWeekKm, weeklyKm, cap, RHYTHM_SPLIT_MIN_SESSION_KM_MAIN) : null;
         const planned = split ? split.sessions.reduce((s, x) => s + x.km, 0) : computeRhythmPlannedKm(entries, weeklyKm);
         line += ' - ' + Math.round(planned * 10) / 10 + ' km planned of ' + weeklyKm + ' km';
         if (Math.abs(planned - weeklyKm) >= 0.1) line += ' ⚠';
         if (split && split.dropped.length) line += ' (' + split.dropped.join(', ') + ' merged — too small this week)';
+        if (split && split.shortfall > 0) line += ' — ' + split.shortfall + 'km short, long run capped at ' + split.cap + 'km';
       }
       parts.push(line);
     });
@@ -5687,6 +5759,7 @@ document.addEventListener('DOMContentLoaded', function () {
   let rhythmActivityTypes = [];
   let rhythmPlanDisciplines = null;
   let rhythmFirstWeekDisciplines = null;
+  let rhythmCapDraft = null; // {longRunCapKm, longRunCapOverrides} — week-level settings, sibling to rhythmDraft's per-weekday entries
   let rhythmOpenDay = null; // which day's edit body is currently expanded, if any — preserved across a re-render so toggling one chip doesn't collapse the whole thing
   function defaultRhythmEntry() { return { discipline: 'run', kind: 'easy' }; }
   function renderRhythmGrid() {
@@ -5853,8 +5926,115 @@ document.addEventListener('DOMContentLoaded', function () {
   }
   async function saveRhythmDraft() {
     renderRhythmGrid();
-    try { await saveWeeklyRhythmToServer(rhythmDraft); setRhythmSaveStatus(true); }
+    renderRhythmCapSettings();
+    renderRhythmPreview();
+    // longRunCapKm/longRunCapOverrides are sibling keys on the SAME
+    // stored object as the per-weekday entries (see api/sync-state.js's
+    // own sanitizeWeeklyRhythm) — merged into one payload here so a
+    // single save covers both, same as the grid's own entries always did.
+    const payload = Object.assign({}, rhythmDraft, rhythmCapDraft);
+    try { await saveWeeklyRhythmToServer(payload); setRhythmSaveStatus(true); }
     catch (e) { setRhythmSaveStatus(false, e.message || String(e)); }
+  }
+  // FEATURE (reported) — the long-run cap settings: a default (km)
+  // plus optional date-ranged overrides (editable next to the km
+  // field's own grid, per the task's own wording) — week-level, not
+  // per-entry, so rendered in its own small block rather than inside
+  // any one day's entry markup.
+  function renderRhythmCapSettings() {
+    const el = $('gsRhythmCapSettings');
+    if (!rhythmCapDraft) { el.innerHTML = ''; return; }
+    const overrides = rhythmCapDraft.longRunCapOverrides || [];
+    el.innerHTML = (
+      '<div class="gs-rhythm-cap-row">' +
+        '<span>Long run cap</span>' +
+        '<input type="number" id="gsRhythmCapDefault" min="1" max="60" step="0.5" value="' + rhythmCapDraft.longRunCapKm + '">' +
+        '<span>km</span>' +
+      '</div>' +
+      overrides.map((o, idx) => (
+        '<div class="gs-rhythm-cap-override-row" data-index="' + idx + '">' +
+          '<input type="date" class="gs-rhythm-cap-override-from" value="' + escapeHtml(o.from || '') + '">' +
+          '<span>to</span>' +
+          '<input type="date" class="gs-rhythm-cap-override-to" value="' + escapeHtml(o.to || '') + '">' +
+          '<input type="number" class="gs-rhythm-cap-override-km" min="1" max="60" step="0.5" value="' + (o.km != null ? o.km : '') + '" style="width:50px">' +
+          '<span>km</span>' +
+          '<button type="button" class="gs-rhythm-entry-remove gs-rhythm-cap-override-remove" data-index="' + idx + '">Remove</button>' +
+        '</div>'
+      )).join('') +
+      '<button type="button" class="gs-rhythm-add-session" id="gsRhythmCapOverrideAdd">+ Add a date-range override</button>'
+    );
+    $('gsRhythmCapDefault').addEventListener('change', (e) => {
+      const km = Number(e.target.value);
+      if (Number.isFinite(km) && km > 0) rhythmCapDraft.longRunCapKm = Math.round(km * 10) / 10;
+      saveRhythmDraft();
+    });
+    el.querySelectorAll('.gs-rhythm-cap-override-row').forEach((row) => {
+      const idx = Number(row.getAttribute('data-index'));
+      row.querySelector('.gs-rhythm-cap-override-from').addEventListener('change', (e) => { overrides[idx].from = e.target.value; saveRhythmDraft(); });
+      row.querySelector('.gs-rhythm-cap-override-to').addEventListener('change', (e) => { overrides[idx].to = e.target.value; saveRhythmDraft(); });
+      row.querySelector('.gs-rhythm-cap-override-km').addEventListener('change', (e) => {
+        const km = Number(e.target.value);
+        if (Number.isFinite(km) && km > 0) overrides[idx].km = Math.round(km * 10) / 10;
+        saveRhythmDraft();
+      });
+      row.querySelector('.gs-rhythm-cap-override-remove').addEventListener('click', () => { overrides.splice(idx, 1); saveRhythmDraft(); });
+    });
+    $('gsRhythmCapOverrideAdd').addEventListener('click', () => {
+      overrides.push({ from: '', to: '', km: rhythmCapDraft.longRunCapKm });
+      saveRhythmDraft();
+    });
+  }
+  function collectRhythmEntriesForDisciplineMain(rhythm, discipline) {
+    const out = [];
+    GS_WEEKDAY_KEYS.forEach((day) => { (rhythm[day] || []).forEach((e) => { if (e.discipline === discipline) out.push(e); }); });
+    return out;
+  }
+  // FEATURE (reported) — "Next weeks" preview: weeks 1-31 (or however
+  // many real checkpoints the active plan has), run target, per-
+  // session km, and any shortfall — computed by the SAME code
+  // (splitRhythmSessionsFixedGrowthMain/resolveLongRunCapForWeekMain)
+  // mode=plan will actually run, with NO AI call at all. Lazy — only
+  // fetches/computes while the panel is actually open, so loading the
+  // settings page never pays for an extra plans fetch nobody asked to see.
+  async function renderRhythmPreview() {
+    const el = $('gsRhythmPreview');
+    if (el.hidden) return;
+    el.innerHTML = 'Loading…';
+    if (!rhythmDraft || !rhythmCapDraft) { el.innerHTML = ''; return; }
+    const runEntries = collectRhythmEntriesForDisciplineMain(rhythmDraft, 'run');
+    const firstWeekKm = rhythmFirstWeekDisciplines && rhythmFirstWeekDisciplines.run && Number(rhythmFirstWeekDisciplines.run.km);
+    if (!runEntries.length || !(firstWeekKm > 0)) {
+      el.innerHTML = '<div class="gs-habits-note">Set a run rhythm with at least one session sized (km), and have an active plan with weekly checkpoints, to see this preview.</div>';
+      return;
+    }
+    const weeks = await fetchAllWeekPlanDisciplinesMain();
+    const rows = weeks.map((w, i) => {
+      const weekKm = w.disciplines.run && Number(w.disciplines.run.km);
+      if (!(weekKm > 0)) return null;
+      const cap = resolveLongRunCapForWeekMain(rhythmCapDraft, w.monday);
+      const split = splitRhythmSessionsFixedGrowthMain(runEntries, firstWeekKm, weekKm, cap, RHYTHM_SPLIT_MIN_SESSION_KM_MAIN);
+      return { weekNumber: w.weekNumber != null ? w.weekNumber : (i + 1), monday: w.monday, weekKm, split };
+    }).filter(Boolean);
+    if (!rows.length) { el.innerHTML = '<div class="gs-habits-note">No run targets found in the active plan\'s checkpoints.</div>'; return; }
+    const kindsPresent = Array.from(new Set(runEntries.map((e) => e.kind)));
+    el.innerHTML = (
+      '<table><thead><tr><th>Week</th><th>Monday</th><th>Target</th>' +
+      kindsPresent.map((k) => '<th>' + escapeHtml(k.charAt(0).toUpperCase() + k.slice(1)) + '</th>').join('') +
+      '<th>Note</th></tr></thead><tbody>' +
+      rows.map((row) => {
+        const byKind = {}; (row.split ? row.split.sessions : []).forEach((s) => { byKind[s.kind] = s.km; });
+        const dropped = row.split ? row.split.dropped : [];
+        const shortfall = row.split ? row.split.shortfall : 0;
+        let note = dropped.length ? (dropped.join(', ') + ' merged') : '';
+        if (shortfall > 0) note += (note ? '; ' : '') + shortfall + 'km short of the ' + row.weekKm + 'km target, long run capped at ' + row.split.cap + 'km';
+        return (
+          '<tr><td>' + row.weekNumber + '</td><td>' + row.monday + '</td><td>' + row.weekKm + 'km</td>' +
+          kindsPresent.map((k) => '<td>' + (byKind[k] != null ? byKind[k] + 'km' : (dropped.includes(k) ? '—' : '')) + '</td>').join('') +
+          '<td' + (note ? ' class="gs-rhythm-preview-shortfall"' : '') + '>' + escapeHtml(note) + '</td></tr>'
+        );
+      }).join('') +
+      '</tbody></table>'
+    );
   }
   async function renderWeeklyRhythmSection() {
     $('gsRhythmGrid').innerHTML = 'Loading…';
@@ -5866,13 +6046,24 @@ document.addEventListener('DOMContentLoaded', function () {
     // normalization happens.
     const rawRhythm = rhythm || {};
     rhythmDraft = {};
-    Object.keys(rawRhythm).forEach((wd) => {
+    // FEATURE (reported) — longRunCapKm/longRunCapOverrides are
+    // week-level settings stored as sibling keys on the SAME rhythm
+    // object, not per-weekday entry arrays — iterating GS_WEEKDAY_KEYS
+    // explicitly here (rather than every key of rawRhythm) keeps them
+    // out of this loop so `.map()` is never called on a plain number.
+    GS_WEEKDAY_KEYS.forEach((wd) => {
       rhythmDraft[wd] = (rawRhythm[wd] || []).map((e) => (e && e.kind ? Object.assign({}, e, { kind: normalizeRhythmKindForCompatMain(e.discipline, e.kind) }) : e));
     });
+    rhythmCapDraft = {
+      longRunCapKm: Number(rawRhythm.longRunCapKm) > 0 ? Number(rawRhythm.longRunCapKm) : RHYTHM_LONG_RUN_CAP_DEFAULT_KM_MAIN,
+      longRunCapOverrides: Array.isArray(rawRhythm.longRunCapOverrides) ? rawRhythm.longRunCapOverrides.map((o) => Object.assign({}, o)) : [],
+    };
     rhythmActivityTypes = types || [];
     rhythmPlanDisciplines = planDisciplines;
     rhythmFirstWeekDisciplines = firstWeekDisciplines;
     renderRhythmGrid();
+    renderRhythmCapSettings();
+    renderRhythmPreview();
     $('gsRhythmBody').hidden = true;
     $('gsRhythmToggleBtn').textContent = 'Set weekly rhythm ▾';
     $('gsRhythmSaveStatus').textContent = '';
@@ -5881,6 +6072,12 @@ document.addEventListener('DOMContentLoaded', function () {
     const body = $('gsRhythmBody');
     body.hidden = !body.hidden;
     $('gsRhythmToggleBtn').textContent = 'Set weekly rhythm ' + (body.hidden ? '▾' : '▴');
+  });
+  $('gsRhythmPreviewToggleBtn').addEventListener('click', () => {
+    const el = $('gsRhythmPreview');
+    el.hidden = !el.hidden;
+    $('gsRhythmPreviewToggleBtn').textContent = 'Next weeks preview ' + (el.hidden ? '▾' : '▴');
+    if (!el.hidden) renderRhythmPreview();
   });
 
   // Day Ring's per-weekday wake/sleep schedule — a field of the same

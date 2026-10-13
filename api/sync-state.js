@@ -311,22 +311,42 @@
 //     // gym.html's state.days, never by a fixed id.
 //     // km (FEATURE, reported): optional, run/bike only — the session
 //     // size the user wants in a reference week (e.g. "Tue interval
-//     // 3km"). Lets api/training.js derive FIXED percentage shares of
-//     // the weekly target from the user's own sizes instead of the
-//     // flat kind-weight heuristic (splitRhythmSessionsByShares) —
-//     // see that function's own header comment. Absent/empty on any
-//     // entry (the usual case) falls back to the heuristic, byte-for-
-//     // byte unchanged.
+//     // 3km"). 'long'/'easy' entries GROW with the weekly target
+//     // (long first, up to the cap below, then easy); every other
+//     // kind (interval/pace/technique/brick) is FIXED at this km,
+//     // never growing — see api/training.js's
+//     // splitRhythmSessionsFixedGrowth for the full algorithm. The
+//     // 'long' entry is expected to be left WITHOUT a km (it absorbs
+//     // whatever's left of the reference week's own target). Absent/
+//     // empty km on every entry (the usual case before this feature)
+//     // falls back to the original flat kind-weight heuristic, byte-
+//     // for-byte unchanged.
 //     tuesday: [...], ... sunday: [...],
 //     // any weekday key MAY be absent entirely (tolerated, not an
 //     // error) — absence means "nothing scheduled that day", same as
 //     // an empty array. A day can hold more than one entry (a second
 //     // session), e.g. a strength day that's also an easy swim day.
+//
+//     // longRunCapKm (FEATURE, reported): optional Number — the long
+//     // run's own growth ceiling (km) in a normal, non-deload week;
+//     // defaults to api/training.js's own RHYTHM_LONG_RUN_CAP_DEFAULT_KM
+//     // (10) when absent. A sibling, week-level setting, not a
+//     // per-weekday entry.
+//     longRunCapKm: 10,
+//     // longRunCapOverrides (FEATURE, reported): optional [{from, to,
+//     // km}] — date-ranged (YYYY-MM-DD, inclusive) replacements for
+//     // longRunCapKm, matched against a WEEK's own canonical Monday
+//     // (never a week number — immune to a restarted plan's
+//     // checkpoints renumbering from 1 again). The first matching
+//     // range wins when more than one covers the same week.
+//     longRunCapOverrides: [{ from: '2027-02-15', to: '2027-03-21', km: 12 }],
 //   }
 // null (never saved) and {} (saved but empty) both mean "no rhythm
 // configured" to every reader — see each consumer's own
 // rhythmHasAnyEntries()-style check, so "no rhythm exists" behaves
 // byte-for-byte like before this phase existed anywhere that reads it.
+// (This is unaffected by longRunCapKm/longRunCapOverrides, which are
+// meaningless without at least one real weekday entry anyway.)
 //
 // GET  /api/sync-state?secret=...&resource=weekly-rhythm
 //   -> { ok:true, rhythm: {...} | null }
@@ -537,6 +557,13 @@ function normalizeStoredRhythmForRead(rhythm) {
   if (!rhythm || typeof rhythm !== 'object') return rhythm;
   const out = {};
   Object.keys(rhythm).forEach((wd) => {
+    // FEATURE (reported) — longRunCapKm/longRunCapOverrides are
+    // week-level settings stored as sibling keys alongside the
+    // per-weekday arrays (see sanitizeWeeklyRhythm's own comment) —
+    // never weekday entry lists, so they pass through untouched
+    // rather than through the per-entry kind-compat mapping below,
+    // which only makes sense for a real weekday's array of entries.
+    if (!WEEKDAY_KEYS.includes(wd)) { out[wd] = rhythm[wd]; return; }
     const list = rhythm[wd];
     out[wd] = Array.isArray(list) ? list.map((e) => {
       if (!e || !e.kind) return e;
@@ -570,6 +597,31 @@ function sanitizeWeeklyRhythm(raw) {
       return true;
     }).slice(0, 3);
     if (entries.length) out[wd] = entries;
+  }
+  // FEATURE (reported) — the weekly run/bike split's long-run cap: a
+  // default (km) plus optional date-ranged overrides, stored as
+  // sibling keys on the SAME weekly-rhythm blob (one row per user,
+  // same reasoning as everything else here) rather than a separate
+  // resource. Both optional; absent means "use the server's own
+  // built-in default" (see api/training.js's RHYTHM_LONG_RUN_CAP_DEFAULT_KM).
+  const capKm = Number(raw.longRunCapKm);
+  if (Number.isFinite(capKm) && capKm > 0 && capKm <= 60) out.longRunCapKm = Math.round(capKm * 10) / 10;
+  if (Array.isArray(raw.longRunCapOverrides)) {
+    // Each range is a plain [from, to] date-key pair (YYYY-MM-DD,
+    // inclusive) matched against a WEEK's own canonical Monday
+    // server-side — never a week number, so this is immune to a
+    // restarted plan's checkpoints renumbering from 1 again (same
+    // "date, not week number" discipline as plan.html's own
+    // PLAN_BACKFILL_BY_WEEK_START).
+    const overrides = raw.longRunCapOverrides.slice(0, 20).map((o) => {
+      if (!o || typeof o !== 'object') return null;
+      const from = (typeof o.from === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(o.from)) ? o.from : null;
+      const to = (typeof o.to === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(o.to)) ? o.to : null;
+      const km = Number(o.km);
+      if (!from || !to || from > to || !Number.isFinite(km) || km <= 0 || km > 60) return null;
+      return { from, to, km: Math.round(km * 10) / 10 };
+    }).filter(Boolean);
+    if (overrides.length) out.longRunCapOverrides = overrides;
   }
   return out;
 }

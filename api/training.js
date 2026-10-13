@@ -1340,64 +1340,102 @@ const RHYTHM_KIND_WEIGHT = { long: 1.5, pace: 0.85, brick: 1.0, easy: 1.0, inter
 // km-aware split below uses it to decide when a week's own target is
 // too small to hold every rhythm session at a sane size.
 const RHYTHM_SPLIT_MIN_SESSION_KM = 3;
-// FEATURE (reported) — an optional per-session `km` on a run/bike
-// rhythm entry lets the user size their own structure (e.g. "Tue
-// interval 3km, Wed easy 5km, Fri pace 5km, Sun long 7km" for a 20km
-// week) instead of the flat RHYTHM_KIND_WEIGHT heuristic above. All
-// arithmetic happens here in code — the model never sees or decides
-// any of this.
+// CHANGE (reported) — replaces the earlier proportional-shares split
+// (every session grew/shrunk by the same percentage) with a fixed/
+// growth-order model: 'interval'/'pace'/'technique'/'brick' entries
+// are FIXED at their own reference-week km and never grow; only
+// 'long' and 'easy' grow as the weekly target rises above the
+// reference week, in that order — long absorbs growth first, up to
+// `cap`, then any surplus goes to easy, which is never let within
+// 1km of long. Below the reference week (deload/taper), ALL sessions
+// (fixed ones too) scale down together proportionally — see the
+// second half of this function.
+const RHYTHM_LONG_RUN_CAP_DEFAULT_KM = 10;
+// Per-week long-run cap: `rhythm.longRunCapKm` (or this default) with
+// any `rhythm.longRunCapOverrides` date range covering `weekMondayKey`
+// taking precedence (first match wins) — see api/sync-state.js's own
+// header comment on the shape. weekMondayKey is this week's own
+// canonical Monday (weekDates.monday, client-computed via DayLib) —
+// matched by DATE, never a week number, so a restarted plan's
+// checkpoints renumbering from 1 again never misresolves this.
+function resolveLongRunCapForWeek(rhythm, weekMondayKey) {
+  const defaultCap = (rhythm && Number(rhythm.longRunCapKm) > 0) ? Number(rhythm.longRunCapKm) : RHYTHM_LONG_RUN_CAP_DEFAULT_KM;
+  if (!weekMondayKey || !rhythm || !Array.isArray(rhythm.longRunCapOverrides)) return defaultCap;
+  const hit = rhythm.longRunCapOverrides.find((o) => o && o.from && o.to && weekMondayKey >= o.from && weekMondayKey <= o.to);
+  return (hit && Number(hit.km) > 0) ? Number(hit.km) : defaultCap;
+}
+function round0_5(v) { return Math.round(v * 2) / 2; }
+// entries: [{kind, km, dateKey}] in weekday order. firstWeekKm: the
+// reference week's own total target for this discipline (see
+// buildRhythmSessionsForDiscipline's own comment on firstWeekTargets).
+// weekKm: THIS week's own target (whatever week is actually being
+// generated). cap: this week's resolved long-run cap (see
+// resolveLongRunCapForWeek). minSessionKm: the deload/taper merge
+// floor (same meaning as before this change).
 //
-// Shares are derived ONCE from the entries' own km values against
-// `firstWeekKm` (the plan's FIRST checkpoint's own target for this
-// discipline — the "reference week" the user actually sized their
-// sessions against, resolved client-side from the plan's own
-// checkpoints and sent as firstWeekTargets, since that reference
-// never changes week to week the way "this week's target" does). An
-// entry with no km of its own takes an equal split of whatever's left
-// of firstWeekKm after the explicit ones (several km-less entries
-// split the remainder evenly) — never negative (clamped to 0 if the
-// explicit kms already meet or exceed firstWeekKm). Those shares
-// (fixed percentages) are then applied to THIS week's own target
-// (`weekKm`, whatever week is actually being generated), rounded to
-// the nearest 0.5km, with the largest session absorbing any rounding
-// drift so the sum always lands exactly on weekKm.
+// Baselines (the reference week's own sizes) come straight from each
+// entry's own `km` except 'long', which is expected to be left
+// without one and absorbs whatever's left of firstWeekKm after every
+// other entry's baseline — "Tue interval 3, Wed easy 5, Fri pace 5,
+// Sun long (absorbs the rest) = 20" is the documented shape this is
+// built for.
 //
-// Too-small weeks (weekKm below session-count × minSessionKm, e.g.
-// under 12km for 4 sessions at the usual 3km floor) progressively
-// fold the session with the SMALLEST share into the rest — its share
-// redistributes proportionally among the remaining sessions — and
-// repeats until either enough sessions remain to clear that floor or
-// only one is left (which then simply absorbs the whole week). Kinds
-// folded away this way are returned in `dropped`, newer reported by
-// the caller rather than silently shown as a tiny/zero session.
-function splitRhythmSessionsByShares(entries, firstWeekKm, weekKm, minSessionKm) {
+// weekKm >= firstWeekKm (GROWTH): fixed-kind entries stay at their
+// baseline, unchanged. growthTotal = weekKm - firstWeekKm goes first
+// to 'long' (up to `cap`), then any remainder to 'easy' (capped at
+// long's own final size minus 1km, so easy never catches up to long).
+// Whatever still doesn't fit is an explicit, reported `shortfall` —
+// sizes are never pushed past these rules to force an exact match.
+//
+// weekKm < firstWeekKm (DELOAD/TAPER): every entry (fixed ones too)
+// scales down together by weekKm/firstWeekKm, rounded to the nearest
+// 0.5km with drift absorbed by the largest session — same "too small
+// for every session" merge/drop mechanics as this function's
+// predecessor (splitRhythmSessionsByShares): the smallest-BASELINE-
+// share session folds into the rest, repeating until the week clears
+// session-count × minSessionKm or only one session remains.
+function splitRhythmSessionsFixedGrowth(entries, firstWeekKm, weekKm, cap, minSessionKm) {
   if (!entries || !entries.length || !(firstWeekKm > 0) || !(weekKm > 0)) return null;
-  const explicit = entries.map((e) => (e.km != null && Number(e.km) > 0) ? Number(e.km) : null);
-  const explicitSum = explicit.reduce((s, v) => s + (v || 0), 0);
-  const implicitCount = explicit.filter((v) => v == null).length;
-  const remainder = Math.max(0, firstWeekKm - explicitSum);
-  const perImplicitKm = implicitCount ? remainder / implicitCount : 0;
-  let items = entries.map((e, i) => ({
-    kind: e.kind, dateKey: e.dateKey,
-    share: (explicit[i] != null ? explicit[i] : perImplicitKm) / firstWeekKm,
-  }));
+  const longIdx = entries.findIndex((e) => e.kind === 'long');
+  const easyIdx = entries.findIndex((e) => e.kind === 'easy');
 
-  function sizesFor(list, total) {
-    const raw = list.map((it) => it.share * total);
-    const rounded = raw.map((v) => Math.round(v * 2) / 2);
-    const sum = Math.round(rounded.reduce((s, v) => s + v, 0) * 2) / 2;
-    const drift = Math.round((total - sum) * 2) / 2;
-    if (drift !== 0 && rounded.length) {
-      let bi = 0;
-      rounded.forEach((v, i) => { if (v > rounded[bi]) bi = i; });
-      rounded[bi] = Math.round((rounded[bi] + drift) * 2) / 2;
-    }
-    return rounded;
+  const baselines = entries.map((e) => Number(e.km) || 0);
+  if (longIdx !== -1 && !(Number(entries[longIdx].km) > 0)) {
+    const othersSum = baselines.reduce((s, v, i) => s + (i === longIdx ? 0 : v), 0);
+    baselines[longIdx] = Math.max(0, round0_5(firstWeekKm - othersSum));
   }
 
-  const dropped = [];
+  if (weekKm >= firstWeekKm) {
+    let growthRemaining = weekKm - firstWeekKm;
+    const sizes = baselines.slice();
+    if (longIdx !== -1) {
+      const room = Math.max(0, cap - baselines[longIdx]);
+      const grow = Math.min(growthRemaining, room);
+      sizes[longIdx] = round0_5(baselines[longIdx] + grow);
+      growthRemaining -= grow;
+    }
+    if (easyIdx !== -1 && growthRemaining > 0) {
+      const longFinal = longIdx !== -1 ? sizes[longIdx] : Infinity;
+      const easyMax = Math.max(baselines[easyIdx], longFinal - 1);
+      const room = Math.max(0, easyMax - baselines[easyIdx]);
+      const grow = Math.min(growthRemaining, room);
+      sizes[easyIdx] = round0_5(baselines[easyIdx] + grow);
+      growthRemaining -= grow;
+    }
+    const placed = sizes.reduce((s, v) => s + v, 0);
+    const shortfall = Math.max(0, Math.round((weekKm - placed) * 10) / 10);
+    return {
+      sessions: entries.map((e, i) => ({ kind: e.kind, dateKey: e.dateKey, km: sizes[i] })),
+      dropped: [],
+      shortfall,
+      cap,
+    };
+  }
+
   const floor = minSessionKm > 0 ? minSessionKm : 3;
-  while (items.length > 1 && weekKm < items.length * floor) {
+  let items = entries.map((e, i) => ({ kind: e.kind, dateKey: e.dateKey, share: firstWeekKm ? baselines[i] / firstWeekKm : 0 }));
+  const dropped = [];
+  while (items.length > 1 && weekKm <= items.length * floor) {
     let mi = 0;
     items.forEach((it, i) => { if (it.share < items[mi].share) mi = i; });
     dropped.push(items[mi].kind);
@@ -1406,11 +1444,20 @@ function splitRhythmSessionsByShares(entries, firstWeekKm, weekKm, minSessionKm)
     const remSum = items.reduce((s, it) => s + it.share, 0) || 1;
     items = items.map((it) => Object.assign({}, it, { share: it.share + droppedShare * (it.share / remSum) }));
   }
-
-  const finalSizes = sizesFor(items, weekKm);
+  const raw = items.map((it) => it.share * weekKm);
+  const rounded = raw.map((v) => round0_5(v));
+  const sum = round0_5(rounded.reduce((s, v) => s + v, 0));
+  const drift = round0_5(weekKm - sum);
+  if (drift !== 0 && rounded.length) {
+    let bi = 0;
+    rounded.forEach((v, i) => { if (v > rounded[bi]) bi = i; });
+    rounded[bi] = round0_5(rounded[bi] + drift);
+  }
   return {
-    sessions: items.map((it, i) => ({ kind: it.kind, dateKey: it.dateKey, km: finalSizes[i] })),
+    sessions: items.map((it, i) => ({ kind: it.kind, dateKey: it.dateKey, km: rounded[i] })),
     dropped,
+    shortfall: 0,
+    cap,
   };
 }
 // 'pace'/'interval'/'long' are hard cardio efforts; 'legs'/'explosive'
@@ -1458,22 +1505,30 @@ function buildRhythmSessionsForDiscipline(discipline, targets, capacity, rhythm,
   if (discipline === 'run' || discipline === 'bike') {
     if (!t || !t.km || !t.activityTypeId) return [];
     const pace = (perDiscipline[discipline] && perDiscipline[discipline].paceMinPerKm) || 6;
-    // FEATURE (reported) — km-aware split only when at least one
-    // entry actually has a real km set AND a real firstWeekKm is
-    // available to derive shares against; otherwise the exact
-    // original RHYTHM_KIND_WEIGHT heuristic below, byte-for-byte.
+    // FEATURE (reported) — the fixed/growth km-aware split only when
+    // at least one entry actually has a real km set AND a real
+    // firstWeekKm is available as the reference week's baseline;
+    // otherwise the exact original RHYTHM_KIND_WEIGHT heuristic below,
+    // byte-for-byte.
     const firstWeekKm = firstWeekTargets && firstWeekTargets[discipline] && Number(firstWeekTargets[discipline].km);
     const hasExplicitKm = entries.some((e) => e.entry.km != null && Number(e.entry.km) > 0);
     if (hasExplicitKm && firstWeekKm > 0) {
-      const split = splitRhythmSessionsByShares(
+      const weekMondayKey = weekDates && weekDates.monday;
+      const cap = resolveLongRunCapForWeek(rhythm, weekMondayKey);
+      const split = splitRhythmSessionsFixedGrowth(
         entries.map((e) => ({ kind: e.entry.kind || 'easy', km: e.entry.km, dateKey: e.dateKey })),
-        firstWeekKm, t.km, RHYTHM_SPLIT_MIN_SESSION_KM
+        firstWeekKm, t.km, cap, RHYTHM_SPLIT_MIN_SESSION_KM
       );
       if (split) {
         if (split.dropped.length) {
           mismatchNotes.push(
             (discipline === 'run' ? 'Run' : 'Bike') + ': this week\'s target (' + t.km + 'km) is too small for every rhythm session — ' +
             split.dropped.join(', ') + (split.dropped.length === 1 ? ' was' : ' were') + ' merged into the remaining session(s).'
+          );
+        }
+        if (split.shortfall > 0) {
+          mismatchNotes.push(
+            (discipline === 'run' ? 'Run' : 'Bike') + ': ' + split.shortfall + 'km short of this week\'s ' + t.km + 'km target — the long run is capped at ' + split.cap + 'km.'
           );
         }
         return split.sessions.map((s, i) => ({
