@@ -3655,7 +3655,14 @@ document.addEventListener('DOMContentLoaded', function () {
     const gaps = computeFreeGapsInWindow(upcoming, win.startMs, win.endMs);
     const longestFreeBlockMin = Math.round(longestGapMinutesMain(gaps));
     const budgetMin = dayAvail.minutes != null ? Math.round(dayAvail.minutes) : null;
-    const allowedDisciplines = dayAvail.disciplines || { swim: false, bike: false, run: false, strength: false };
+    // BUG FIX (reported) — a discipline the weekly rhythm places on
+    // tomorrow counts as allowed tomorrow regardless of what the
+    // template says; the template still supplies the minutes budget
+    // and still governs any OTHER discipline tomorrow's rhythm has no
+    // opinion on. Same rule applied in gym.html's buildWeekCapacity/
+    // buildTodayFeasibility and api/training.js's buildFinalLayout.
+    const allowedDisciplines = Object.assign({}, dayAvail.disciplines || { swim: false, bike: false, run: false, strength: false });
+    (rhythmForDay || []).forEach((e) => { if (e.discipline && e.discipline !== 'rest') allowedDisciplines[e.discipline] = true; });
     function fits(discipline, estMinutes) {
       if (estMinutes == null) return false;
       if (discipline && allowedDisciplines[discipline] === false) return false;
@@ -5208,7 +5215,18 @@ document.addEventListener('DOMContentLoaded', function () {
   // modal otherwise uses for Schedule/Category Weights/etc. ----------
   const AVAIL_WEEKDAY_LABELS = { monday: 'Mon', tuesday: 'Tue', wednesday: 'Wed', thursday: 'Thu', friday: 'Fri', saturday: 'Sat', sunday: 'Sun' };
   const AVAIL_DISCIPLINES = [['swim', 'S'], ['bike', 'B'], ['run', 'R'], ['strength', 'St']];
-  function defaultAvailabilityDay() { return { minutes: null, disciplines: { swim: false, bike: false, run: false, strength: false } }; }
+  // BUG FIX (reported) — this used to default every discipline to
+  // false ("nothing allowed"), contradicting api/sync-state.js's own
+  // documented intent for an unconfigured day: "treated as fully
+  // unconstrained". That wrong default was used both per-day (a day
+  // missing from a real template) AND for the WHOLE template while
+  // availabilityDraft is still null (a real race: renderTrainingAvailability
+  // and renderWeeklyRhythmSection fire concurrently from
+  // openGeneralSettings with no ordering guarantee, so whichever
+  // resolves first wins) — the exact mechanism behind "every day gets
+  // flagged" even with a fully-configured template: the rhythm grid
+  // could render before availabilityDraft was ever set.
+  function defaultAvailabilityDay() { return { minutes: null, disciplines: { swim: true, bike: true, run: true, strength: true } }; }
   function defaultAvailabilityTemplate() {
     const t = { preferredLongDay: null };
     GS_WEEKDAY_KEYS.forEach((day) => { t[day] = defaultAvailabilityDay(); });
@@ -5541,15 +5559,25 @@ document.addEventListener('DOMContentLoaded', function () {
   }
   // Flags are informational only — never block saving (the task spec
   // says "inline flags (not silent)", not "reject the entry"). Each
-  // day's entries are checked against: (1) that discipline not allowed
-  // on that weekday per the availability template above (strength IS
-  // one of availability's own discipline toggles; rest has no such
-  // check — there's nothing to disallow), (2) the day's total estimated
+  // day's entries are checked against: (1) the day's total estimated
   // minutes (RHYTHM_KIND_EST_MINUTES sum) exceeding availability's
   // minutes budget for that day (skipped when minutes is null —
-  // unconstrained), (3) two hard (interval/long) sessions on
+  // unconstrained), (2) two hard (interval/long) sessions on
   // calendar-adjacent days (Sun/Mon are NOT treated as adjacent here —
   // this is a within-week pattern, not a real rolling 7-day calendar).
+  //
+  // BUG FIX (reported) — this used to ALSO flag "<discipline> isn't an
+  // allowed discipline on <day>" whenever the availability template
+  // disallowed that entry's own discipline on that exact day. But
+  // every entry being checked here IS something the rhythm itself
+  // placed on that day — per the rule now applied consistently
+  // everywhere availability is checked (buildWeekCapacity, Today/
+  // Tomorrow feasibility, the layout): a discipline the weekly rhythm
+  // places on a weekday counts as allowed THAT day; the template only
+  // ever supplies the minutes budget. The template's own disciplines
+  // still matter for any day/discipline the rhythm has no opinion on
+  // (e.g. gym.html's own capacity-building for a day with no rhythm
+  // entry at all), just never for an entry the rhythm already placed.
   function computeRhythmFlags(rhythm, availability, enabled) {
     const dayFlags = {};
     const entryFlags = {};
@@ -5561,9 +5589,6 @@ document.addEventListener('DOMContentLoaded', function () {
       let dayHasHard = false;
       entryFlags[day] = entries.map((e) => {
         const flags = [];
-        if (e.discipline !== 'rest' && avail.disciplines && avail.disciplines[e.discipline] === false) {
-          flags.push((RHYTHM_DISCIPLINES.find((d) => d[0] === e.discipline) || [, e.discipline])[1] + ' isn\'t an allowed discipline on ' + AVAIL_WEEKDAY_LABELS[day]);
-        }
         if (e.discipline !== 'rest' && enabled && enabled[e.discipline] === false) {
           flags.push((RHYTHM_DISCIPLINES.find((d) => d[0] === e.discipline) || [, e.discipline])[1] + ' has no recommendable activity type — ignored at runtime');
         }

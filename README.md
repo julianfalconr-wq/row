@@ -50,6 +50,7 @@ node tests/smoke-today-rhythm-backstop.cjs # Today's/Tomorrow's session never in
 node tests/smoke-rhythm-cap-preview.cjs # weekly-rhythm long-run cap settings + "Next weeks" preview table — main.html
 node tests/smoke-build-stamp.cjs      # footer build stamp — gym.html/main.html/plan.html
 node tests/check-vercel-config.cjs    # vercel.json's buildCommand must have a matching outputDirectory (a past deploy broke on exactly this)
+node tests/smoke-availability-rhythm-allowed.cjs # a weekly-rhythm placement always counts as allowed on its own day, regardless of the availability template
 ```
 
 **Any change to `vercel.json` (buildCommand, outputDirectory, functions, etc.) must go through a Preview deployment first** — push it to a branch, confirm the Preview build succeeds and the live pages/API actually work on the preview URL, and only then merge to `main`. A deploy-config mistake doesn't show up in `npm run check` (it's a Vercel build/serving concern, not something jsdom can exercise) and breaks the LIVE site for everyone the moment `main` deploys — exactly what happened with commit 9b3de4d's missing `outputDirectory`.

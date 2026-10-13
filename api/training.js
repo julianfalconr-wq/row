@@ -1623,7 +1623,16 @@ function buildSessionsToPlace(targets, capacity, rhythm, weekDates, mismatchNote
 // placement could ever fix. Checked BEFORE ever asking the model, so
 // "a no-swim-days week reports swim as unplaceable" is guaranteed by
 // code, not dependent on model behavior.
-function buildUnplaceableSeed(targets, capacity) {
+// BUG FIX (reported) — sessionsToPlace (optional) lets this exempt a
+// discipline that's already rhythm-fixed to a real day (carries its
+// own dateKey — see buildRhythmSessionsForDiscipline) from "no day
+// allows X" even when the client's own capacity.perDay says every
+// OTHER day disallows it: the rhythm's own placement is what counts,
+// per the same rule buildFinalLayout below applies per-session. Without
+// sessionsToPlace (the normalizePlan call site, which seeds this
+// BEFORE computing sessionsToPlace itself) this exemption simply never
+// applies — identical to this function's own pre-existing behavior.
+function buildUnplaceableSeed(targets, capacity, sessionsToPlace) {
   const seed = [];
   if (!capacity || !capacity.configured || !capacity.perDay.length) return seed;
   ['run', 'bike', 'swim', 'strength'].forEach((disc) => {
@@ -1631,7 +1640,8 @@ function buildUnplaceableSeed(targets, capacity) {
     const hasTarget = (disc === 'swim' || disc === 'strength') ? (t && t.sessions > 0) : (t && t.km > 0);
     if (!hasTarget) return;
     const anyDayAllows = capacity.perDay.some((d) => d.allowedDisciplines[disc] !== false);
-    if (!anyDayAllows) seed.push({ id: disc, reason: 'No day this week allows ' + disc + '.' });
+    const rhythmFixedThisDiscipline = Array.isArray(sessionsToPlace) && sessionsToPlace.some((s) => s.discipline === disc && s.dateKey);
+    if (!anyDayAllows && !rhythmFixedThisDiscipline) seed.push({ id: disc, reason: 'No day this week allows ' + disc + '.' });
   });
   return seed;
 }
@@ -1682,7 +1692,18 @@ function buildFinalLayout(assignments, sessionsToPlace, perDay, unplacedSeed) {
     const session = sessionById[a.id];
     const day = dayByDate[a.dateKey];
     if (!session || !day) return;
-    if (day.allowedDisciplines[session.discipline] === false) {
+    // BUG FIX (reported) — session.dateKey (set only by a rhythm-
+    // sourced session — see buildRhythmSessionsForDiscipline) means
+    // the USER already deliberately placed this discipline on this
+    // exact day; per the rule applied consistently everywhere
+    // availability is checked (gym.html's buildWeekCapacity/Today/
+    // Tomorrow feasibility, main.html's rhythm-grid warnings), that
+    // placement itself counts as allowed, same as the hard-adjacency
+    // exemption a rhythm-fixed session already gets just below. The
+    // client's own allowedDisciplines (computed from the SAME rule)
+    // would already say true here in practice — this is the server's
+    // own independent re-validation never trusting the client blindly.
+    if (!session.dateKey && day.allowedDisciplines[session.discipline] === false) {
       unplaced.push({ id: a.id, reason: session.discipline + ' is not allowed on ' + day.weekday + '.' });
       return;
     }
@@ -1773,7 +1794,7 @@ function normalizePlan(raw, restrictions, recommendableTypes, activeWeekDiscipli
   if (targets && capacity && capacity.configured && capacity.perDay.length) {
     const sessionsToPlace = buildSessionsToPlace(targets, capacity, rhythm, weekDates, rhythmMismatchNotes, firstWeekTargets);
     realSessionKinds = Array.from(new Set(sessionsToPlace.map((s) => s.kind).filter(Boolean)));
-    const unplaceableSeed = buildUnplaceableSeed(targets, capacity);
+    const unplaceableSeed = buildUnplaceableSeed(targets, capacity, sessionsToPlace);
     const placeableSessions = sessionsToPlace.filter((s) => !unplaceableSeed.some((u) => u.id === s.discipline));
     // Phase 3.5 — a rhythm-sourced session already carries its own
     // dateKey; it's taken as a fixed assignment directly (never asked
@@ -1865,7 +1886,7 @@ async function handlePlan(req, res, apiKey, body) {
   const weekDates = (body.weekDates && typeof body.weekDates === 'object') ? body.weekDates : null;
   const preMismatchNotes = [];
   const sessionsToPlace = preTargets ? buildSessionsToPlace(preTargets, capacity, rhythm, weekDates, preMismatchNotes, firstWeekTargets) : [];
-  const unplaceableSeed = preTargets ? buildUnplaceableSeed(preTargets, capacity) : [];
+  const unplaceableSeed = preTargets ? buildUnplaceableSeed(preTargets, capacity, sessionsToPlace) : [];
   const placeableSessions = sessionsToPlace.filter((s) => !unplaceableSeed.some((u) => u.id === s.discipline));
   // FEATURE (reported) — see buildPlanSystemPrompt's own comment on
   // realSessionKinds and normalizePlan's stripInventedKindMentions.

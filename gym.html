@@ -6282,6 +6282,10 @@ img, video, canvas, svg { max-width: 100%; }
         return;
       }
       const ctx = await window.gatherTodayContext();
+      // No weeklyRhythm fetch here — this call only ever reads
+      // capacity.totalFreeMin/daysWithTimeCount (never perDay's own
+      // allowedDisciplines), so the rhythm-override has nothing to
+      // affect for this particular render.
       const capacity = await buildWeekCapacity(ctx, null);
       if (!capacity.configured) { $$('tpCapacityLine').style.display = 'none'; return; }
       const totalMin = capacity.totalFreeMin;
@@ -6987,8 +6991,9 @@ img, video, canvas, svg { max-width: 100%; }
   // null (no active-plan disciplines configured), in which case
   // perDiscipline stays {} (still returns configured:true with
   // perDay, useful context either way, but nothing to compare needed-
-  // vs-available for).
-  async function buildWeekCapacity(ctx, rawDisciplines) {
+  // vs-available for). weeklyRhythm (optional) — see the per-day
+  // allowedDisciplines override below.
+  async function buildWeekCapacity(ctx, rawDisciplines, weeklyRhythm) {
     const availability = ctx && ctx.availability;
     if (!availability || !availability.configured) return { configured: false };
     const todayKey = DayLib.effectiveDateKey();
@@ -7031,10 +7036,22 @@ img, video, canvas, svg { max-width: 100%; }
       // calendar gaps both applied — a session can't happen during an
       // actual conflict no matter what the template says.
       const availableMin = budgetMin != null ? Math.min(budgetMin, freeMin) : freeMin;
+      // BUG FIX (reported) — a discipline the weekly rhythm places on
+      // this weekday counts as allowed THIS day regardless of what
+      // the template says; the template only ever supplies the
+      // minutes budget (availableMin above, untouched) and still
+      // governs any OTHER discipline this day's rhythm has no opinion
+      // on. Same rule applied in buildTodayFeasibility/
+      // buildTomorrowFeasibility and api/training.js's buildFinalLayout
+      // (which exempts a rhythm-fixed session, i.e. one that already
+      // carries its own dateKey, the same way it already exempts one
+      // from the hard-adjacency check).
+      const allowedDisciplines = Object.assign({}, dayAvail.disciplines || { swim: false, bike: false, run: false, strength: false });
+      ((weeklyRhythm && weeklyRhythm[weekday]) || []).forEach((e) => { if (e.discipline && e.discipline !== 'rest') allowedDisciplines[e.discipline] = true; });
       perDay.push({
         weekday, dateKey: dk,
         availableMin: Math.round(availableMin),
-        allowedDisciplines: dayAvail.disciplines || { swim: false, bike: false, run: false, strength: false },
+        allowedDisciplines,
       });
       cursor.setDate(cursor.getDate() + 1);
     }
@@ -7833,7 +7850,7 @@ img, video, canvas, svg { max-width: 100%; }
           // calendar gaps), not the whole-week needed-vs-available
           // aggregate buildWeekCapacity also computes for the normal
           // "generate objectives" flow.
-          const capacity = await buildWeekCapacity(ctx, null);
+          const capacity = await buildWeekCapacity(ctx, null, weeklyRhythm);
           capacityConfigured = capacity.configured;
           if (capacity.configured) result = buildRebalanceLayout(outstanding, capacity, weeklyRhythm, restrictions, activeWeekDisciplines, deload);
         }
@@ -7991,7 +8008,7 @@ img, video, canvas, svg { max-width: 100%; }
         const ready = await waitForGatherTodayContext(3000);
         if (ready) {
           const ctx = await window.gatherTodayContext();
-          capacity = await buildWeekCapacity(ctx, activeWeekDisciplines);
+          capacity = await buildWeekCapacity(ctx, activeWeekDisciplines, weeklyRhythm);
         }
       } catch (e) { capacity = { configured: false }; }
 
@@ -8741,7 +8758,14 @@ img, video, canvas, svg { max-width: 100%; }
       const remainingMin = Math.max(0, (bedtimeMs - nowMs) / 60000);
       budgetMin = Math.round(Math.min(budgetMin, remainingMin));
     }
-    const allowedDisciplines = availability.today.disciplines || { swim: false, bike: false, run: false, strength: false };
+    // BUG FIX (reported) — a discipline today's weekly rhythm places
+    // counts as allowed today regardless of what the template says;
+    // the template still supplies the minutes budget and still
+    // governs any OTHER discipline today's rhythm has no opinion on.
+    // Same rule applied in buildWeekCapacity/buildTomorrowFeasibility
+    // and api/training.js's buildFinalLayout.
+    const allowedDisciplines = Object.assign({}, availability.today.disciplines || { swim: false, bike: false, run: false, strength: false });
+    (rhythmForDay || []).forEach((e) => { if (e.discipline && e.discipline !== 'rest') allowedDisciplines[e.discipline] = true; });
 
     function fitsToday(discipline, estMinutes) {
       if (estMinutes == null) return false;

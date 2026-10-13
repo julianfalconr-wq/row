@@ -72,9 +72,26 @@ async function main() {
   const dom = new JSDOM(html, {
     url: 'https://row.test/gym.html', runScripts: 'dangerously', pretendToBeVisual: true, virtualConsole,
     beforeParse(win) {
+      // BUG FIX (date drift) — this scenario is specifically "Monday
+      // of a fresh week" and every dateKey in WEEK_PLAN/the mocked
+      // fetch responses above is a hardcoded real Monday
+      // (2026-10-12); relying on the ACTUAL wall-clock date to also
+      // land on that same Monday is what broke this test the moment
+      // the real date moved on — pin the page's own notion of "now"
+      // instead, so this test stays deterministic regardless of
+      // when it's actually run. Only the no-arg/Date.now() forms are
+      // pinned; explicit date-string parsing (used throughout the
+      // real page for every OTHER date) is untouched.
+      const FIXED_NOW = new win.Date('2026-10-12T12:00:00Z');
+      const RealDate = win.Date;
+      class FixedDate extends RealDate {
+        constructor(...args) { return args.length ? new RealDate(...args) : new RealDate(FIXED_NOW); }
+        static now() { return FIXED_NOW.getTime(); }
+      }
+      win.Date = FixedDate;
       win.localStorage.setItem('dashboard:secret', 'test-secret');
       win.sessionStorage.setItem('dashboard:unlocked', '1');
-      win.localStorage.setItem('po_coach_weekly_plan_v1', JSON.stringify({ weekStart: '2026-10-12', plan: WEEK_PLAN, generatedAt: new Date().toISOString() }));
+      win.localStorage.setItem('po_coach_weekly_plan_v1', JSON.stringify({ weekStart: '2026-10-12', plan: WEEK_PLAN, generatedAt: FIXED_NOW.toISOString() }));
     },
   });
   const { window } = dom;
