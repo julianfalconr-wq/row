@@ -1,5 +1,6 @@
 #!/bin/sh
 # Pre-push hook — blocks a push if any check fails:
+#   - tests/check-vercel-config.cjs   (vercel.json buildCommand must have a matching outputDirectory)
 #   - tests/lint-gym-html.cjs         (top-level-TDZ lint, gym.html/plan.html/main.html/sync.js)
 #   - tests/smoke-refresh-buttons.cjs (real-page click-through smoke test, gym.html)
 #   - tests/smoke-main-todo.cjs       (real-page click-through smoke test, main.html's To Do list)
@@ -29,6 +30,17 @@ if [ ! -d node_modules/jsdom ] || [ ! -d node_modules/eslint ]; then
   exit 1
 fi
 
+echo "pre-push: running tests/check-vercel-config.cjs ..."
+if ! node tests/check-vercel-config.cjs; then
+  echo ""
+  echo "pre-push: BLOCKED — tests/check-vercel-config.cjs failed (see output above)."
+  echo "pre-push: fix the reported issue(s), or run it by hand to iterate:"
+  echo "pre-push:   node tests/check-vercel-config.cjs"
+  echo ""
+  exit 1
+fi
+
+echo ""
 echo "pre-push: running tests/lint-gym-html.cjs ..."
 if ! node tests/lint-gym-html.cjs; then
   echo ""
