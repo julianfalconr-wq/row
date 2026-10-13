@@ -602,6 +602,57 @@ function describeRebalanceTodayPick(sessions) {
     return name + amount;
   }).join(' + ');
 }
+// BUG FIX (reported) — the old fast path here only checked whether
+// the rhythm's PRIMARY entry was mentioned SOMEWHERE in the
+// recommendation string, then trusted the ENTIRE string verbatim —
+// "Push + Running interval" mentions "Push" (the Monday rhythm entry)
+// so it passed unchanged, silently keeping the invented "Running
+// interval" clause the model tacked on (there is no interval, or any
+// run at all, scheduled for Monday — the first run is Tuesday). This
+// re-validates EVERY "+"-joined clause (the model's own convention,
+// see buildTodaySystemPrompt's own example) against an explicit
+// allowlist — today's rhythm entries plus any code-computed
+// rebalanceToday catch-up session — and drops anything that matches
+// neither, rather than trusting the model's pick blindly just because
+// SOME part of it was right.
+function clauseMatchesDescriptor(clause, discipline, kind) {
+  const disciplinePattern = BACKSTOP_DISCIPLINE_PATTERNS[discipline];
+  if (!disciplinePattern || !disciplinePattern.test(clause)) return false;
+  if (!kind || kind === 'auto') return true;
+  return new RegExp('\\b' + kind + '\\b', 'i').test(clause);
+}
+function buildAllowedRhythmDescriptors(rhythmForDay, rebalanceToday) {
+  const allowed = (rhythmForDay || []).filter((e) => e.discipline !== 'rest').map((e) => ({ discipline: e.discipline, kind: e.kind }));
+  if (rebalanceToday && Array.isArray(rebalanceToday.sessions)) {
+    rebalanceToday.sessions.forEach((s) => {
+      // A missed-strength-day-type pick carries the real day type in
+      // `dayType` (see sanitizeRebalanceToday's own comment) — `kind`
+      // itself is just the literal placeholder 'auto' for that case.
+      const kind = (s.discipline === 'strength' && s.dayType) ? s.dayType : s.kind;
+      allowed.push({ discipline: s.discipline, kind });
+    });
+  }
+  return allowed;
+}
+// Only called once the recommendation has ALREADY been confirmed to
+// mention the rhythm's primary entry (the caller's own fast-path
+// condition) — a single-clause recommendation is that primary entry
+// itself and needs no further splitting; a multi-clause one ("X + Y")
+// gets every clause checked independently against the allowlist.
+function stripUnvalidatedRhythmClauses(recommendation, rhythmForDay, rebalanceToday) {
+  const clauses = recommendation.split(/\s+\+\s+/).map((c) => c.trim()).filter(Boolean);
+  if (clauses.length <= 1) return recommendation;
+  const allowed = buildAllowedRhythmDescriptors(rhythmForDay, rebalanceToday);
+  const dropped = [];
+  const kept = clauses.filter((clause) => {
+    const ok = allowed.some((d) => clauseMatchesDescriptor(clause, d.discipline, d.kind));
+    if (!ok) dropped.push(clause);
+    return ok;
+  });
+  if (!dropped.length) return recommendation;
+  const text = kept.join(' + ') || describeRhythmEntryForToday(rhythmForDay[0]);
+  return text + ' (dropped unscheduled: ' + dropped.join(', ') + ')';
+}
 // Phase 3.5 — the LAST-resort code check: the prompt already tells
 // the model today's rhythm entry is the default and to only deviate
 // for a short, specific list of checkable reasons (buildRhythm
@@ -619,7 +670,7 @@ function applyRhythmBackstop(recommendation, rhythmForDay, feasibility, restrict
   const disciplinePattern = BACKSTOP_DISCIPLINE_PATTERNS[entry.discipline];
   const mentionsDiscipline = disciplinePattern ? disciplinePattern.test(recommendation) : false;
   const mentionsKind = !entry.kind || entry.kind === 'auto' || new RegExp('\\b' + entry.kind + '\\b', 'i').test(recommendation);
-  if (mentionsDiscipline && mentionsKind) return recommendation; // already matches the rhythm -- nothing to backstop
+  if (mentionsDiscipline && mentionsKind) return stripUnvalidatedRhythmClauses(recommendation, rhythmForDay, rebalanceToday); // matches the rhythm -- still validate every "+"-joined clause
 
   // Restriction scope values are "running"/"strength"/"padel" (see
   // api/chat.js's propose_restriction tool) — a different vocabulary
@@ -1849,9 +1900,12 @@ function buildRhythmPromptSection(dayLabel, allowRecoveryDeviation) {
     'strength entry specifically, kind IS the day type (e.g. "push", "legs", "explosive") — treat it exactly ' +
     'as authoritative as strengthContext.todaySplitDay (you may not pick a different day type) UNLESS kind ' +
     'is "auto", which means the rhythm has no opinion on WHICH day type and you follow ' +
-    'strengthContext.todaySplitDay/the rotation exactly as you would with no rhythm at all. Never invent a ' +
-    'session that is neither in rhythmForDay nor already part of weekPlan\'s own targets — no extra interval ' +
-    '"just because". If you deviate from the rhythm for any of these reasons, say so in ONE short clause ' +
+    'strengthContext.todaySplitDay/the rotation exactly as you would with no rhythm at all. ' +
+    'BUG FIX (reported) — never invent a session that is neither in rhythmForDay nor a code-computed ' +
+    'rebalanceToday catch-up session — weekPlan\'s own cardio/volume targets are NOT by themselves a reason ' +
+    'to add a session; a target being outstanding for the WEEK does not mean it belongs TODAY specifically ' +
+    '(that is exactly what rhythmForDay/rebalanceToday already decide). No extra interval "just because". ' +
+    'If you deviate from the rhythm for any of these reasons, say so in ONE short clause ' +
     'naming the real reason (e.g. "Easy run instead of interval — recovery 31%", "Pull instead of Legs — ' +
     'Monday\'s Push was missed"). If rhythmForDay is empty/absent, ignore this paragraph and decide as you ' +
     'would otherwise.\n\n'
@@ -1883,13 +1937,37 @@ function buildRebalanceTodayPromptSection(rebalanceToday) {
     'is, or move one to a different day.\n\n'
   );
 }
-function buildTodaySystemPrompt(restrictions, feasibility, rebalanceToday) {
+// BUG FIX (reported) — weekPlan.cardio's legacy interval/longSession/
+// easyVolume pieces are a WEEKLY summary (is this piece outstanding
+// ACROSS the whole week), with no idea which specific day it belongs
+// on. Once a real weekly rhythm is configured, rhythmForDay/
+// rebalanceToday already decide that per-day placement exactly — the
+// CARDIO section below used to run unconditionally regardless, which
+// is how "Push + Running interval" got invented on a Monday whose
+// rhythm is only Push (the first run isn't until Tuesday): the model
+// correctly named Push from the rhythm, then ALSO added an interval
+// session because weekPlan.cardio.interval still had a nonzero
+// target for the week. See applyRhythmBackstop's own
+// stripUnvalidatedRhythmClauses for the code-level backstop on top of
+// this prompt-level fix.
+function buildCardioLegacySkipNote(dayLabel) {
+  return (
+    'CARDIO — a weekly rhythm is configured, which is the sole source of truth for which cardio session ' +
+    '(if any) belongs ' + dayLabel + '. IGNORE weekPlan.cardio\'s interval/longSession/easyVolume pieces ' +
+    'entirely when deciding what to recommend ' + dayLabel + ' — a nonzero target there only means that ' +
+    'piece is outstanding SOMEWHERE this week, never that it belongs ' + dayLabel + ' specifically; it is a ' +
+    'legacy weekly summary only, never a reason to add, resize, or describe a session beyond what ' +
+    'rhythmForDay/rebalanceToday above already give you.\n\n'
+  );
+}
+function buildTodaySystemPrompt(restrictions, feasibility, rebalanceToday, rhythmConfigured) {
   return (
     'You recommend today\'s training on a personal dashboard. This week\'s plan (weekPlan) always covers ' +
     'BOTH strength and cardio — evaluate the two independently, then combine whichever pieces are ' +
     'actually outstanding and appropriate today into ONE recommendation (e.g. "Push + Cycling interval"). ' +
     'It is normal and expected for the answer to include both — do not default to naming only strength; ' +
-    'check cardio\'s status with the same weight every time.\n\n' +
+    'check cardio\'s status with the same weight every time. ' +
+    (rhythmConfigured ? 'A weekly rhythm is configured below — see its own section for how that changes this.' : '') + '\n\n' +
     buildRhythmPromptSection('today', true) +
     'WHOOP-ADJUSTMENT (match this app\'s existing convention exactly): recovery >=67% is high/well-' +
     'recovered — combining strength with even the hard interval piece today is fine if both are due. ' +
@@ -1929,6 +2007,7 @@ function buildTodaySystemPrompt(restrictions, feasibility, rebalanceToday) {
     'with the isRestDayInRotation catch-up logic above in the same recommendation — exactly one strength ' +
     'day-type per day, period. If missedDayTypes is empty, or strength is already on track this week, use ' +
     'todaySplitDay/the isRestDayInRotation logic above exactly as already described, unaffected by this.\n\n' +
+    (rhythmConfigured ? buildCardioLegacySkipNote('today') :
     'CARDIO (Phase 3 of the multi-activity-type generalization — no longer always running) — ' +
     'weekPlan.cardio has three pieces, each already assigned its OWN activity by name when the weekly ' +
     'plan was generated: interval (activityTypeId/activityName + targetSessions/targetMinutes), ' +
@@ -1950,7 +2029,7 @@ function buildTodaySystemPrompt(restrictions, feasibility, rebalanceToday) {
     'for checking which specific piece is still due. Even if weekPlan.cardio shows a nonzero target for a ' +
     'piece, do NOT recommend it if that piece\'s activityTypeId or activityName matches an entry in ' +
     'activeRestrictions below (checked by id or name) — a restriction can be added after the weekly plan ' +
-    'was last generated, so this is a live, independent check, not just trusting weekPlan\'s own numbers.\n\n' +
+    'was last generated, so this is a live, independent check, not just trusting weekPlan\'s own numbers.\n\n') +
     buildRebalanceTodayPromptSection(rebalanceToday) +
     'PADEL — todayCalendar tells you whether the user has a real padel session on their Google Calendar ' +
     'today (todayCalendar.padelToday, with the actual matched event title in ' +
@@ -1996,14 +2075,15 @@ function buildTodaySystemPrompt(restrictions, feasibility, rebalanceToday) {
 // established for this exact distinction — reason from the week's
 // remaining objectives and general load-management principles
 // instead (e.g. not stacking two hard days back to back).
-function buildTomorrowSystemPrompt(restrictions, feasibility) {
+function buildTomorrowSystemPrompt(restrictions, feasibility, rhythmConfigured) {
   return (
     'You recommend training for a day OTHER than today on a personal dashboard — main.html\'s "Plan my day" ' +
     'is being generated ahead of time for tomorrow. This week\'s plan (weekPlan) always covers BOTH strength ' +
     'and cardio — evaluate the two independently, then combine whichever pieces are actually outstanding and ' +
     'appropriate for that day into ONE recommendation (e.g. "Push + Cycling interval"). It is normal and ' +
     'expected for the answer to include both — do not default to naming only strength; check cardio\'s ' +
-    'status with the same weight every time.\n\n' +
+    'status with the same weight every time. ' +
+    (rhythmConfigured ? 'A weekly rhythm is configured below — see its own section for how that changes this.' : '') + '\n\n' +
     buildRhythmPromptSection('tomorrow', false) +
     'RECOVERY IS UNKNOWN FOR THIS DAY — do NOT lead with or rely on today\'s specific WHOOP recovery/strain ' +
     'numbers as if they predict or describe tomorrow; a future day\'s recovery is fundamentally unknowable in ' +
@@ -2030,6 +2110,7 @@ function buildTomorrowSystemPrompt(restrictions, feasibility) {
     'daysTrainedThisWeek. Keep the framing to a couple trailing words at most (e.g. "<day-type> anyway"). ' +
     'If strengthContext itself is missing or todaySplitDay is null, no split is configured — say that ' +
     'plainly rather than guessing.\n\n' +
+    (rhythmConfigured ? buildCardioLegacySkipNote('tomorrow') :
     'CARDIO (Phase 3 of the multi-activity-type generalization — no longer always running) — weekPlan.cardio ' +
     'has three pieces, each already assigned its OWN activity by name when the weekly plan was generated: ' +
     'interval, longSession, and easyVolume. Different pieces can be different activities (e.g. interval on ' +
@@ -2039,7 +2120,7 @@ function buildTomorrowSystemPrompt(restrictions, feasibility) {
     'been logged since Monday (through today) — match against each piece\'s activityTypeId to judge which ' +
     'piece(s) are still outstanding and worth recommending for that day.\n\n' +
     'Even if weekPlan.cardio shows a nonzero target for a piece, do NOT recommend it if that piece\'s ' +
-    'activityTypeId or activityName matches an entry in activeRestrictions below.\n\n' +
+    'activityTypeId or activityName matches an entry in activeRestrictions below.\n\n') +
     buildFeasibilityPromptSection(feasibility, 'tomorrow') +
     buildRestrictionsPromptSection(restrictions) +
     'FORMAT — this is the most important rule: the recommendation is a SHORT LABEL, not a paragraph. One ' +
@@ -2076,6 +2157,13 @@ async function handleToday(req, res, apiKey, body) {
     // as everywhere else here). Absent/empty means no rhythm is
     // configured, or nothing is set for this specific day.
     rhythmForDay: sanitizeRhythmEntries(body.rhythmForDay),
+    // FEATURE (reported) — whether ANY day of the week has a real
+    // rhythm entry configured (not just today/tomorrow specifically) —
+    // see buildCardioLegacySkipNote's own comment on why the legacy
+    // weekPlan.cardio section must be suppressed once this is true,
+    // regardless of whether rhythmForDay itself is empty today (e.g.
+    // a day the rhythm deliberately has nothing for).
+    rhythmConfigured: !!body.rhythmConfigured,
   };
   if (forTomorrow) {
     // No padel/calendar input for this variant — out of scope (see
@@ -2115,7 +2203,7 @@ async function handleToday(req, res, apiKey, body) {
   // this kind of simple, short-output, latency-sensitive task, and lets
   // the model skip thinking entirely on inputs this straightforward.
   const text = await callClaude(apiKey, {
-    system: forTomorrow ? buildTomorrowSystemPrompt(restrictions, context.feasibility) : buildTodaySystemPrompt(restrictions, context.feasibility, context.rebalanceToday),
+    system: forTomorrow ? buildTomorrowSystemPrompt(restrictions, context.feasibility, context.rhythmConfigured) : buildTodaySystemPrompt(restrictions, context.feasibility, context.rebalanceToday, context.rhythmConfigured),
     userContent: 'Context:\n' + JSON.stringify(context, null, 2),
     maxTokens: 800,
     effort: 'low',

@@ -8656,6 +8656,64 @@ img, video, canvas, svg { max-width: 100%; }
     return Math.round((meters / 100) * pace);
   }
 
+  // Short, generic label for a plain rhythm/backlog candidate — same
+  // spirit as api/training.js's own describeRhythmEntryForToday, kept
+  // local since this is purely for the feasibility.candidates list's
+  // own `label` field (informational context for the prompt, not the
+  // actual recommendation text).
+  function rhythmCandidateLabel(discipline, kind, dayType) {
+    if (discipline === 'strength') {
+      const type = dayType || ((kind && kind !== 'auto') ? kind : '');
+      return type ? (type.charAt(0).toUpperCase() + type.slice(1)) : 'Strength';
+    }
+    const disc = discipline.charAt(0).toUpperCase() + discipline.slice(1);
+    return kind ? disc + ' ' + kind : disc;
+  }
+  // Today's own already-sized session for `discipline`, straight from
+  // plan.layout (built server-side in mode=plan, including the km-
+  // aware rhythm split) — the single real source of "how big is
+  // today's session," never recomputed/guessed here.
+  function findTodayLayoutSession(plan, discipline, todayKeyStr) {
+    const day = (plan.layout || []).find((d) => d.dateKey === todayKeyStr);
+    if (!day) return null;
+    return (day.sessions || []).find((s) => s.discipline === discipline) || null;
+  }
+  // BUG FIX (reported) — the weekly remaining-volume/legacy-cardio-
+  // slot candidates built below (run/bike/swim/interval) are blind to
+  // which DAY that volume is actually scheduled for; once a real
+  // weekly rhythm is configured, that per-day placement is already
+  // decided (rhythmForDay/the plan's own layout) and the generic
+  // "still outstanding this week" candidates are exactly how an
+  // unscheduled "Running interval" leaked into today's pick on a
+  // Monday whose rhythm is only Push (the model was told the interval
+  // piece was "ALREADY confirmed to fit" today, feasibility-wise,
+  // purely because it had a nonzero weekly target — it was never
+  // actually placed today at all). Candidates are now built strictly
+  // from rhythmForDay's own entries (sized from plan.layout when
+  // possible) plus any code-computed rebalanceToday catch-up session.
+  function buildRhythmAwareCandidates(plan, rhythmForDay, rebalanceToday, todayKeyStr, fitsToday) {
+    const candidates = [];
+    const seenDisciplines = new Set();
+    (rhythmForDay || []).forEach((entry) => {
+      if (entry.discipline === 'rest' || seenDisciplines.has(entry.discipline)) return;
+      seenDisciplines.add(entry.discipline);
+      const layoutSession = findTodayLayoutSession(plan, entry.discipline, todayKeyStr);
+      const est = layoutSession && layoutSession.estMinutes != null ? layoutSession.estMinutes
+        : (entry.discipline === 'strength' ? DEFAULT_SESSION_MINUTES.strength : DEFAULT_SESSION_MINUTES.genericCount);
+      const label = rhythmCandidateLabel(entry.discipline, entry.kind, null);
+      candidates.push({ key: 'rhythm:' + entry.discipline, label, estMinutes: est, feasible: fitsToday(entry.discipline, est) });
+    });
+    if (rebalanceToday && Array.isArray(rebalanceToday.sessions)) {
+      rebalanceToday.sessions.forEach((s) => {
+        if (seenDisciplines.has(s.discipline)) return;
+        seenDisciplines.add(s.discipline);
+        const est = s.estMinutes != null ? s.estMinutes : (s.discipline === 'strength' ? DEFAULT_SESSION_MINUTES.strength : DEFAULT_SESSION_MINUTES.genericCount);
+        const label = s.activityName || rhythmCandidateLabel(s.discipline, s.kind, s.dayType);
+        candidates.push({ key: 'backlog:' + s.discipline, label, estMinutes: est, feasible: fitsToday(s.discipline, est) });
+      });
+    }
+    return candidates;
+  }
   // Builds the `feasibility` object sent to mode=today. Returns
   // {configured:false} whenever there's nothing to constrain with — no
   // availability template configured at all, or no weekly plan to draw
@@ -8663,7 +8721,7 @@ img, video, canvas, svg { max-width: 100%; }
   // unchanged in that case (verified: see api/training.js's own
   // isRaceDay-style branch for this same "configured:false means
   // behave exactly as before" convention already established there).
-  function buildTodayFeasibility(ctx, plan) {
+  function buildTodayFeasibility(ctx, plan, rhythmForDay, rebalanceToday, rhythmConfigured) {
     const availability = ctx && ctx.availability;
     if (!availability || !availability.configured || !availability.today || !plan) {
       return { configured: false };
@@ -8693,7 +8751,10 @@ img, video, canvas, svg { max-width: 100%; }
       return true;
     }
 
-    const candidates = [];
+    const candidates = rhythmConfigured
+      ? buildRhythmAwareCandidates(plan, rhythmForDay, rebalanceToday, DayLib.effectiveDateKey(), fitsToday)
+      : [];
+    if (!rhythmConfigured) {
     if (plan.strength && (Number(plan.strength.targetSessions) || 0) > 0 && !(plan.targets && plan.targets.strength)) {
       // Only when targets ISN'T already driving strength (below) —
       // avoids a duplicate "Strength" candidate.
@@ -8749,6 +8810,7 @@ img, video, canvas, svg { max-width: 100%; }
         candidates.push({ key: kind, label: slot.activityName || (typeForLabel && typeForLabel.name) || 'Session', estMinutes: est, feasible: fitsToday(discipline, est) });
       });
     }
+    } // !rhythmConfigured
 
     return {
       configured: true,
@@ -8834,6 +8896,16 @@ img, video, canvas, svg { max-width: 100%; }
       // just below to build rhythmForDay, same as before.
       const weeklyRhythm = await fetchWeeklyRhythm();
       const strengthContext = buildTodayStrengthContext(weeklyRhythm);
+      // Resolve TODAY's own rhythm entries to send separately from the
+      // whole weekly rhythm (this file already has DayLib; the server
+      // never resolves "today" itself — see api/training.js's own comment).
+      // Moved ahead of buildTodayFeasibility below (BUG FIX, reported) —
+      // that function now needs rhythmForDay/rhythmConfigured to decide
+      // whether its candidates come from the weekly legacy targets or
+      // strictly from the rhythm; it used to run before either existed.
+      const todayWeekdayForRhythm = AVAIL_WEEKDAY_NAMES[DayLib.parseDateKey(DayLib.effectiveDateKey()).getDay()];
+      const rhythmForDay = weeklyRhythm[todayWeekdayForRhythm] || [];
+      const rhythmConfigured = !!(weeklyRhythm && Object.keys(weeklyRhythm).some((wd) => Array.isArray(weeklyRhythm[wd]) && weeklyRhythm[wd].length));
       // Fetched once here and reused for both padel detection and Phase 2's
       // availability/calendar feasibility (see detectPadelToday's and
       // buildTodayFeasibility's own comments) — one gatherTodayContext()
@@ -8843,12 +8915,7 @@ img, video, canvas, svg { max-width: 100%; }
       if (ctxReady) { try { ctx = await window.gatherTodayContext(); } catch (e) {} }
       const todayCalendar = await detectPadelToday(ctx);
       const restrictions = await fetchActiveRestrictions();
-      const feasibility = buildTodayFeasibility(ctx, plan);
-      // Resolve TODAY's own rhythm entries to send separately from the
-      // whole weekly rhythm (this file already has DayLib; the server
-      // never resolves "today" itself — see api/training.js's own comment).
-      const todayWeekdayForRhythm = AVAIL_WEEKDAY_NAMES[DayLib.parseDateKey(DayLib.effectiveDateKey()).getDay()];
-      const rhythmForDay = weeklyRhythm[todayWeekdayForRhythm] || [];
+      const feasibility = buildTodayFeasibility(ctx, plan, rhythmForDay, rebalanceToday, rhythmConfigured);
 
       const res = await fetch('/api/training?mode=today&secret=' + encodeURIComponent(secret), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -8872,6 +8939,7 @@ img, video, canvas, svg { max-width: 100%; }
           restrictions,
           feasibility,
           rhythmForDay,
+          rhythmConfigured,
           rebalanceToday,
         }),
       });

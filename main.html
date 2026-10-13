@@ -3596,7 +3596,41 @@ document.addEventListener('DOMContentLoaded', function () {
   // minutes/disciplines directly, no second merge needed here.
   // budgetMin is NOT capped by "time remaining right now" the way
   // today's version is — tomorrow's whole day is still ahead.
-  function buildTomorrowFeasibility(ctx, plan, todayDateKey, tomorrowDateKey, types, activities) {
+  // Short, generic label for a plain rhythm candidate — mirrors
+  // gym.html's own rhythmCandidateLabel (same per-closure small-
+  // duplication convention as the rest of this file's rhythm logic).
+  function rhythmCandidateLabelMain(discipline, kind) {
+    if (discipline === 'strength') return (kind && kind !== 'auto') ? (kind.charAt(0).toUpperCase() + kind.slice(1)) : 'Strength';
+    const disc = discipline.charAt(0).toUpperCase() + discipline.slice(1);
+    return kind ? disc + ' ' + kind : disc;
+  }
+  function findTomorrowLayoutSession(plan, discipline, tomorrowDateKey) {
+    const day = (plan.layout || []).find((d) => d.dateKey === tomorrowDateKey);
+    if (!day) return null;
+    return (day.sessions || []).find((s) => s.discipline === discipline) || null;
+  }
+  // BUG FIX (reported) — mirrors gym.html's own buildRhythmAwareCandidates
+  // exactly (same root cause, same fix: see that function's own
+  // comment): once a weekly rhythm is configured, the weekly
+  // remaining-volume/legacy-cardio candidates below are blind to
+  // which day that volume actually belongs on, which is how an
+  // unscheduled session leaked into "Plan my day" for tomorrow too.
+  // No rebalance signal for Tomorrow (same as before this fix —
+  // see fetchTomorrowRecommendation's own comment on why), so
+  // candidates here are strictly tomorrow's own rhythm entries.
+  function buildRhythmAwareCandidatesMain(plan, rhythmForDay, tomorrowDateKey, fits) {
+    const candidates = [];
+    const seen = new Set();
+    (rhythmForDay || []).forEach((entry) => {
+      if (entry.discipline === 'rest' || seen.has(entry.discipline)) return;
+      seen.add(entry.discipline);
+      const layoutSession = findTomorrowLayoutSession(plan, entry.discipline, tomorrowDateKey);
+      const est = layoutSession && layoutSession.estMinutes != null ? layoutSession.estMinutes : (entry.discipline === 'strength' ? 45 : 30);
+      candidates.push({ key: 'rhythm:' + entry.discipline, label: rhythmCandidateLabelMain(entry.discipline, entry.kind), estMinutes: est, feasible: fits(entry.discipline, est) });
+    });
+    return candidates;
+  }
+  function buildTomorrowFeasibility(ctx, plan, todayDateKey, tomorrowDateKey, types, activities, rhythmForDay, rhythmConfigured) {
     const availability = ctx && ctx.availability;
     if (!availability || !availability.configured || !Array.isArray(availability.thisWeek) || !plan) return { configured: false };
     const tomorrowWeekday = AVAIL_WEEKDAY_NAMES_MAIN[DayLib.parseDateKey(tomorrowDateKey).getDay()];
@@ -3616,7 +3650,8 @@ document.addEventListener('DOMContentLoaded', function () {
       return true;
     }
     const weekMondayKey = mondayOfKey(todayDateKey);
-    const candidates = [];
+    const candidates = rhythmConfigured ? buildRhythmAwareCandidatesMain(plan, rhythmForDay, tomorrowDateKey, fits) : [];
+    if (!rhythmConfigured) {
     const strengthTargetSessions = (plan.targets && plan.targets.strength) ? plan.targets.strength.sessions : ((plan.strength && Number(plan.strength.targetSessions)) || 0);
     if (strengthTargetSessions > 0) {
       const est = 45; // DEFAULT_SESSION_MINUTES.strength, same documented flat default as gym.html's Phase 2
@@ -3661,6 +3696,7 @@ document.addEventListener('DOMContentLoaded', function () {
         candidates.push({ key: kind, label: slot.activityName || (type && type.name) || 'Session', estMinutes: est, feasible: fits(discipline, est) });
       });
     }
+    } // !rhythmConfigured
     return { configured: true, budgetMin, longestFreeBlockMin: Math.round(longestFreeBlockMin), allowedDisciplines, candidates };
   }
 
@@ -3680,6 +3716,18 @@ document.addEventListener('DOMContentLoaded', function () {
     const progress = weekProgressAsOf(mondayOfKey(todayDateKey), todayDateKey, plan);
     const whoopToday = await fetchRecoveryForPlan();
 
+    // Tomorrow's own rhythm entries, resolved client-side the same
+    // way gym.html resolves today's (this file already has DayLib;
+    // the server never resolves a specific weekday itself) — from the
+    // SAME weeklyRhythm fetched above, not a second fetch. Moved ahead
+    // of buildTomorrowFeasibility below (BUG FIX, reported) — that
+    // function now needs rhythmForDay/rhythmConfigured to decide
+    // whether its candidates come from the weekly legacy targets or
+    // strictly from the rhythm.
+    const tomorrowWeekday = AVAIL_WEEKDAY_NAMES_MAIN[DayLib.parseDateKey(tomorrowDateKey).getDay()];
+    const rhythmForDay = weeklyRhythm[tomorrowWeekday] || [];
+    const rhythmConfigured = !!(weeklyRhythm && Object.keys(weeklyRhythm).some((wd) => Array.isArray(weeklyRhythm[wd]) && weeklyRhythm[wd].length));
+
     // Phase 3.2: tomorrow's availability/calendar feasibility — see
     // buildTomorrowFeasibility's own comment. Any failure anywhere in
     // this chain (gatherTodayContext not ready yet, no secret, network
@@ -3694,16 +3742,9 @@ document.addEventListener('DOMContentLoaded', function () {
         const types = await fetchActivityTypesForFeasibility(secret);
         let activities = [];
         try { activities = JSON.parse(localStorage.getItem('po_coach_activities')) || []; } catch (e) {}
-        feasibility = buildTomorrowFeasibility(ctx, plan, todayDateKey, tomorrowDateKey, types, activities);
+        feasibility = buildTomorrowFeasibility(ctx, plan, todayDateKey, tomorrowDateKey, types, activities, rhythmForDay, rhythmConfigured);
       }
     } catch (e) { feasibility = { configured: false }; }
-
-    // Tomorrow's own rhythm entries, resolved client-side the same
-    // way gym.html resolves today's (this file already has DayLib;
-    // the server never resolves a specific weekday itself) — from the
-    // SAME weeklyRhythm fetched above, not a second fetch.
-    const tomorrowWeekday = AVAIL_WEEKDAY_NAMES_MAIN[DayLib.parseDateKey(tomorrowDateKey).getDay()];
-    const rhythmForDay = weeklyRhythm[tomorrowWeekday] || [];
 
     try {
       const res = await fetch('/api/training?mode=today&secret=' + encodeURIComponent(secret), {
@@ -3716,6 +3757,7 @@ document.addEventListener('DOMContentLoaded', function () {
           todayRecommendation,
           feasibility,
           rhythmForDay,
+          rhythmConfigured,
         }),
       });
       const json = await res.json();
