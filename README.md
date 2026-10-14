@@ -54,6 +54,7 @@ node tests/smoke-availability-rhythm-allowed.cjs # a weekly-rhythm placement alw
 node tests/smoke-rebalance-backlog-named.cjs # backlog = capped by ahead-vs-remaining-target, always named; no generic "could not be placed"/"0 of 1" lines
 node tests/smoke-rhythm-cap-golden.cjs # server/client long-run-cap cross-check across 31 weeks + golden sequence + preview header
 node tests/smoke-fueling.cjs          # Fueling card — computeFueling golden cases, real page render, settings sanitizer
+node tests/smoke-strength-core-extra.cjs # strength core (push/pull/legs) vs optional-extra (Explosive) rebalance priority — never dropped silently
 ```
 
 ## Fueling

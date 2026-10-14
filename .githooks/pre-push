@@ -14,6 +14,7 @@
 #   - tests/smoke-rebalance-backlog-named.cjs (backlog = capped by ahead-vs-remaining-target, always named; no generic "could not be placed"/"0 of 1" lines)
 #   - tests/smoke-rhythm-cap-golden.cjs (server/client long-run-cap cross-check across 31 weeks + golden sequence + preview header)
 #   - tests/smoke-fueling.cjs (Fueling card — computeFueling golden cases, real page render, settings sanitizer)
+#   - tests/smoke-strength-core-extra.cjs (strength core-vs-optional-extra rebalance priority — classifyWeeklyStrengthRhythm, buildRebalanceLayout's STRENGTH block, todayStrengthDisplacement)
 #
 # Installed via `git config core.hooksPath .githooks` — see this
 # repo's package.json "prepare" script (runs automatically on
@@ -183,6 +184,17 @@ if ! node tests/smoke-fueling.cjs; then
   echo "pre-push: BLOCKED — tests/smoke-fueling.cjs failed (see output above)."
   echo "pre-push: fix the reported issue(s), or run it by hand to iterate:"
   echo "pre-push:   node tests/smoke-fueling.cjs"
+  echo ""
+  exit 1
+fi
+
+echo ""
+echo "pre-push: running tests/smoke-strength-core-extra.cjs ..."
+if ! node tests/smoke-strength-core-extra.cjs; then
+  echo ""
+  echo "pre-push: BLOCKED — tests/smoke-strength-core-extra.cjs failed (see output above)."
+  echo "pre-push: fix the reported issue(s), or run it by hand to iterate:"
+  echo "pre-push:   node tests/smoke-strength-core-extra.cjs"
   echo ""
   exit 1
 fi
