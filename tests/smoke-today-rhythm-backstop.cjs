@@ -66,9 +66,24 @@ let r = applyRhythmBackstop('Push', rhythmMonday, { configured: false }, [], nul
 if (r !== 'Push') fail('Monday Push-only, nothing logged: expected pick = Push only, got ' + JSON.stringify(r));
 else ok('Monday Push-only, nothing logged: pick = Push only');
 
+// BUG FIX (reported) — the primary entry's own clause is always
+// replaced with describeRhythmEntryForToday's canonical phrasing
+// ("Run interval", capitalized discipline name) rather than kept
+// verbatim as the model wrote it ("Running interval") — this is what
+// guarantees the real size shows up below, independent of whatever
+// the model happened to phrase.
 r = applyRhythmBackstop('Running interval', rhythmTuesday, { configured: false }, [], null, null, null);
-if (r !== 'Running interval') fail('Tuesday run entry: expected pick = that run only, got ' + JSON.stringify(r));
-else ok('Tuesday run entry: pick = that run only');
+if (r !== 'Run interval') fail('Tuesday run entry: expected pick = that run only (canonical "Run interval"), got ' + JSON.stringify(r));
+else ok('Tuesday run entry: pick = that run only ("Run interval")');
+
+// Point 4 (reported) — Today's session title shows the SIZE of the
+// rhythm entry, taken from todayLayoutEntry (today's real,
+// already-sized plan.layout session), never from the model's own
+// (untold, untrustworthy) guess.
+const todayLayoutEntryTue = { sessions: [{ discipline: 'run', targetAmount: 3, unit: 'km' }] };
+r = applyRhythmBackstop('Running interval', rhythmTuesday, { configured: false }, [], null, null, null, todayLayoutEntryTue);
+if (r !== 'Run interval 3km') fail('THE EXACT ASSERTION REQUESTED: today\'s session title must show the rhythm entry\'s real size, got ' + JSON.stringify(r));
+else ok('today\'s session title shows the real size: "Run interval 3km"');
 
 r = applyRhythmBackstop('Push + Running interval', rhythmMonday, { configured: false }, [], null, null, null);
 const mainClause = r.split(' (dropped')[0];

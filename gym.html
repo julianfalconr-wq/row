@@ -7207,6 +7207,22 @@ img, video, canvas, svg { max-width: 100%; }
   // (oldest rhythm session first) against the week's total logged
   // pool for that discipline. Today's OWN rhythm entry is never
   // backlog — it's today's plan, not something already missed.
+  // BUG FIX (reported) — backlog used to be "every missed rhythm
+  // session, period" (missedKm/missedCount straight through to
+  // outstanding), which double-counts whenever the rhythm's REMAINING
+  // sessions this week (today through Sunday, sized from planLayout)
+  // already cover what's left of the plan target on their own — e.g.
+  // strength target 3, 0 done, Wed Pull + Thu Explosive + Sat Legs
+  // still ahead (3) already meets the target of 3, so Monday's missed
+  // Push is correctly NOT backlog even though it's a real missed
+  // session. Corrected definition: a missed session only becomes
+  // backlog to the extent the AHEAD pool can't cover `target - done`
+  // — backlog is capped at min(missed, shortfall), never the raw
+  // missed amount by itself. Consumed oldest-missed-first so the
+  // `missed` list attached to each out[disc] entry below names EXACTLY
+  // which original session(s) (kind/weekday/amount) the reported
+  // backlog actually came from, for the rebalancer to name in its own
+  // moved/can't-fit lines instead of a generic count/message.
   function computeOutstandingByDiscipline(activeWeekDisciplines, todayKeyStr, weeklyRhythm, planLayout, missedStrengthDayTypes) {
     const hasRealRhythm = !!(weeklyRhythm && Object.keys(weeklyRhythm).some((wd) => Array.isArray(weeklyRhythm[wd]) && weeklyRhythm[wd].length));
     if (!hasRealRhythm || !Array.isArray(planLayout) || !planLayout.length) {
@@ -7216,6 +7232,10 @@ img, video, canvas, svg { max-width: 100%; }
     const soFar = activityEntries.filter((a) => a.dateKey >= monday && a.dateKey <= todayKeyStr);
     const todayWindowOver = Date.now() >= resolveTodayBedtimeMs();
     const pastCutoffKey = todayWindowOver ? todayKeyStr : addDaysKey(todayKeyStr, -1);
+    // "Ahead" starts the day AFTER pastCutoffKey — today itself while
+    // today's own window hasn't closed yet, otherwise tomorrow — so
+    // past/ahead never overlap and never double-count the same day.
+    const aheadCutoffKey = addDaysKey(pastCutoffKey, 1);
     function loggedTotalFor(disc) {
       return soFar.filter((a) => disciplineForActivityType(a.activityTypeId) === disc)
         .reduce((s, a) => s + (Number(a.distanceKm) || 0), 0);
@@ -7226,60 +7246,101 @@ img, video, canvas, svg { max-width: 100%; }
     function pastRhythmSessions(disc) {
       return planLayout
         .filter((day) => day.dateKey <= pastCutoffKey)
-        .flatMap((day) => (day.sessions || []).filter((s) => s.discipline === disc).map((s) => ({ dateKey: day.dateKey, amount: Number(s.targetAmount) || 0 })))
+        .flatMap((day) => (day.sessions || []).filter((s) => s.discipline === disc).map((s) => ({ dateKey: day.dateKey, weekday: day.weekday, kind: s.kind, amount: Number(s.targetAmount) || 0 })))
         .sort((a, b) => (a.dateKey < b.dateKey ? -1 : 1));
+    }
+    // This week's remaining rhythm sessions for a discipline (today
+    // through Sunday, today only while its own window hasn't closed
+    // yet), sized straight from the layout — what's still scheduled
+    // to cover the remaining target, regardless of whether it's been
+    // logged yet (it hasn't happened yet by definition).
+    function aheadRhythmSessions(disc) {
+      return planLayout
+        .filter((day) => day.dateKey >= aheadCutoffKey)
+        .flatMap((day) => (day.sessions || []).filter((s) => s.discipline === disc));
     }
     const d = activeWeekDisciplines || {};
     const out = {};
     ['run', 'bike'].forEach((disc) => {
       const t = d[disc];
       if (!t || !t.activityTypeId || !Number(t.km)) return; // disabled or no real target -- ignored everywhere, never backlog
-      const sessions = pastRhythmSessions(disc);
-      if (!sessions.length) return; // the rhythm hasn't placed anything on a past day yet -- nothing can be behind
+      const missedSessions = pastRhythmSessions(disc);
+      if (!missedSessions.length) return; // the rhythm hasn't placed anything on a past day yet -- nothing can be behind
       let pool = loggedTotalFor(disc);
-      let backlogKm = 0;
-      sessions.forEach((sess) => {
+      let missedKm = 0;
+      const missedAmounts = []; // {dateKey, weekday, kind, amount} -- amount still unconsumed by logged volume, per original session
+      missedSessions.forEach((sess) => {
         if (pool >= sess.amount) { pool -= sess.amount; return; }
-        backlogKm += sess.amount - pool;
+        const shortThis = sess.amount - pool;
+        missedKm += shortThis;
+        missedAmounts.push({ dateKey: sess.dateKey, weekday: sess.weekday, kind: sess.kind, amount: Math.round(shortThis * 10) / 10 });
         pool = 0;
       });
-      backlogKm = Math.round(backlogKm * 10) / 10;
-      if (backlogKm > 0) {
-        out[disc] = { targetKm: Number(t.km), doneKm: Math.round(loggedTotalFor(disc) * 10) / 10, outstandingKm: backlogKm, activityTypeId: t.activityTypeId, activityName: t.activityName || '' };
+      missedKm = Math.round(missedKm * 10) / 10;
+      if (missedKm <= 0) return;
+      const doneKm = Math.round(loggedTotalFor(disc) * 10) / 10;
+      const remaining = Math.max(0, Number(t.km) - doneKm);
+      const aheadKm = aheadRhythmSessions(disc).reduce((s, s2) => s + (Number(s2.targetAmount) || 0), 0);
+      const shortfall = Math.max(0, Math.round((remaining - aheadKm) * 10) / 10);
+      const backlogKm = Math.min(missedKm, shortfall);
+      if (backlogKm <= 0) return; // ahead alone already covers what's left of the target -- the missed session is real but never becomes backlog
+      // Oldest-missed-first, up to backlogKm — names exactly which
+      // original session(s) the (possibly capped) backlog came from.
+      let remainingBacklog = backlogKm;
+      const missed = [];
+      for (const m of missedAmounts) {
+        if (remainingBacklog <= 0) break;
+        const take = Math.round(Math.min(m.amount, remainingBacklog) * 10) / 10;
+        if (take > 0) missed.push({ dateKey: m.dateKey, weekday: m.weekday, kind: m.kind, amount: take });
+        remainingBacklog = Math.round((remainingBacklog - take) * 10) / 10;
       }
+      out[disc] = { targetKm: Number(t.km), doneKm, outstandingKm: backlogKm, activityTypeId: t.activityTypeId, activityName: t.activityName || '', missed };
     });
     if (d.swim && d.swim.activityTypeId && Number(d.swim.sessions) > 0) {
       // Swim's own unit is a discrete SESSION, not a km pool — each
       // past rhythm swim session consumes exactly one logged swim
       // session (by discipline, not exact date), same chronological
       // oldest-first order.
-      const sessions = pastRhythmSessions('swim');
-      if (sessions.length) {
+      const missedSessions = pastRhythmSessions('swim');
+      if (missedSessions.length) {
         let loggedSessions = soFar.filter((a) => disciplineForActivityType(a.activityTypeId) === 'swim').length;
-        let backlogSessions = 0;
-        sessions.forEach(() => { if (loggedSessions > 0) loggedSessions--; else backlogSessions++; });
-        if (backlogSessions > 0) {
-          out.swim = {
-            targetSessions: Number(d.swim.sessions), doneSessions: soFar.filter((a) => disciplineForActivityType(a.activityTypeId) === 'swim').length,
-            outstandingSessions: backlogSessions, perSessionMeters: Number(d.swim.meters) || 0, activityTypeId: d.swim.activityTypeId, activityName: d.swim.activityName || '',
-          };
+        const missedList = [];
+        missedSessions.forEach((sess) => { if (loggedSessions > 0) loggedSessions--; else missedList.push(sess); });
+        if (missedList.length) {
+          const doneSessions = soFar.filter((a) => disciplineForActivityType(a.activityTypeId) === 'swim').length;
+          const remaining = Math.max(0, Number(d.swim.sessions) - doneSessions);
+          const aheadSessions = aheadRhythmSessions('swim').length;
+          const shortfall = Math.max(0, remaining - aheadSessions);
+          const missed = missedList.slice(0, shortfall);
+          if (missed.length) {
+            out.swim = {
+              targetSessions: Number(d.swim.sessions), doneSessions,
+              outstandingSessions: missed.length, perSessionMeters: Number(d.swim.meters) || 0, activityTypeId: d.swim.activityTypeId, activityName: d.swim.activityName || '', missed,
+            };
+          }
         }
       }
     }
     if (d.strength && Number(d.strength.sessions) > 0) {
       // Strength already has its own correct, rhythm-aware, type-
-      // matched-not-date-matched backlog mechanism (missedDayTypes
-      // ThisWeek, Phase 3.3/3.3-fix) used for Today's own pick —
-      // reused here as the count, rather than recomputing a second,
-      // rhythm-UNAWARE "target minus doneSessions" number that would
-      // have the exact same double-counting bug this whole fix is
-      // about. rebalanceRestOfWeek passes this in; see its own call.
-      const missedCount = (missedStrengthDayTypes || []).length;
-      if (missedCount > 0) {
+      // matched-not-date-matched missed-session list (missedDayTypes
+      // ThisWeek, Phase 3.3/3.3-fix, oldest first) used for Today's own
+      // pick — reused here as the raw missed list, then capped by the
+      // SAME ahead-vs-remaining-target rule as run/bike/swim above
+      // (this is the exact piece that was missing: every missed
+      // day-type used to count as backlog unconditionally).
+      const missedList = missedStrengthDayTypes || [];
+      if (missedList.length) {
         let doneDays = {};
         try { doneDays = (window.PoCoach && window.PoCoach.getDoneDays()) || {}; } catch (e) {}
         const doneSessions = Object.keys(doneDays).filter((dk) => dk >= monday && dk <= todayKeyStr && !!doneDays[dk]).length;
-        out.strength = { targetSessions: Number(d.strength.sessions), doneSessions, outstandingSessions: missedCount };
+        const remaining = Math.max(0, Number(d.strength.sessions) - doneSessions);
+        const aheadSessions = aheadRhythmSessions('strength').length;
+        const shortfall = Math.max(0, remaining - aheadSessions);
+        const missed = missedList.slice(0, shortfall);
+        if (missed.length) {
+          out.strength = { targetSessions: Number(d.strength.sessions), doneSessions, outstandingSessions: missed.length, missed };
+        }
       }
     }
     return out;
@@ -7483,8 +7544,14 @@ img, video, canvas, svg { max-width: 100%; }
     // day the rhythm already runs on, then earliest date. ---
     if (outstanding.run) {
       let remainingKm = outstanding.run.outstandingKm;
+      // BUG FIX (reported) — outstanding.run.missed (see
+      // computeOutstandingByDiscipline's own comment) names exactly
+      // which original rhythm session(s) this backlog km pool came
+      // from (kind/weekday/amount) — used below so every moved/can't-
+      // fit line names the real session instead of a bare km number.
+      const runOrigin = (outstanding.run.missed || []).map((m) => (m.kind || 'run') + ' ' + m.amount + 'km (missed ' + (PLAN_CARD_WEEKDAY_SHORT[m.weekday] || m.weekday) + ')').join(', ');
       if (restrictionBlocksDiscipline(restrictions, 'run')) {
-        cantFit.push({ discipline: 'run', reason: 'Running is currently restricted — ' + remainingKm + 'km could not be rescheduled.' });
+        cantFit.push({ discipline: 'run', reason: 'Running is currently restricted — ' + (runOrigin || (remainingKm + 'km')) + ' could not be rescheduled.' });
       } else {
         const preferredDay = capacity.preferredLongDay;
         const candidates = perDay.filter((d) => d.allowedDisciplines.run !== false).sort((a, b) => {
@@ -7551,10 +7618,10 @@ img, video, canvas, svg { max-width: 100%; }
         }
         const placedKm = Math.round(chunks.reduce((s, c) => s + c.km, 0) * 10) / 10;
         const movedDays = chunks.map((c) => c.day.weekday);
-        if (placedKm > 0) movedParts.push(placedKm + 'km of run moved to ' + movedDays.join('/'));
+        if (placedKm > 0) movedParts.push((runOrigin || (placedKm + 'km of run')) + ' moved to ' + movedDays.join('/'));
         if (tooSmallKmParts.length) {
           const tooSmallKm = Math.round(tooSmallKmParts.reduce((s, k) => s + k, 0) * 10) / 10;
-          cantFit.push({ discipline: 'run', reason: tooSmallKm + 'km too small to schedule on its own.' });
+          cantFit.push({ discipline: 'run', reason: (runOrigin || (tooSmallKm + 'km of run')) + ' — ' + tooSmallKm + 'km too small to schedule on its own.' });
         }
         // BUG FIX (reported) — "Xkm could not fit this week's remaining
         // days/budget" reads like a capacity/scheduling failure even
@@ -7565,8 +7632,8 @@ img, video, canvas, svg { max-width: 100%; }
         // the other.
         if (remainingKm > 0) {
           cantFit.push(candidates.length
-            ? { discipline: 'run', reason: remainingKm + 'km could not fit this week’s remaining days/budget.' }
-            : { discipline: 'run', reason: remainingKm + 'km could not be rescheduled — running isn’t allowed on any remaining day this week per your availability template.' });
+            ? { discipline: 'run', reason: (runOrigin || (remainingKm + 'km')) + ' could not fit this week’s remaining days/budget.' }
+            : { discipline: 'run', reason: (runOrigin || (remainingKm + 'km')) + ' could not be rescheduled — running isn’t allowed on any remaining day this week per your availability template.' });
         }
       }
     }
@@ -7576,59 +7643,78 @@ img, video, canvas, svg { max-width: 100%; }
     // preferring a day the rhythm already swims on. Swim has no
     // restriction scope of its own (see restrictionBlocksDiscipline). ---
     if (outstanding.swim) {
-      let remaining = outstanding.swim.outstandingSessions;
+      // BUG FIX (reported) — outstanding.swim.missed (oldest first —
+      // see computeOutstandingByDiscipline's own comment) names
+      // exactly which original missed session(s) this backlog came
+      // from, so both a placed session and a can't-fit line can name
+      // kind + original weekday instead of a generic count.
+      const missed = outstanding.swim.missed || [];
+      let remaining = missed.length;
       const candidates = perDay.filter((d) => d.allowedDisciplines.swim !== false).sort((a, b) => {
         const aRhy = a.hasRhythmFor('swim') ? 1 : 0, bRhy = b.hasRhythmFor('swim') ? 1 : 0;
         if (aRhy !== bRhy) return bRhy - aRhy;
         return a.dateKey < b.dateKey ? -1 : 1;
       });
-      const movedDays = [];
+      const placedMissed = [];
       candidates.forEach((day) => {
         if (remaining <= 0) return;
         if (cardioRoomOnDay(day) < swimSessionMin) return;
-        day.sessions.push({ discipline: 'swim', kind: 'session', targetAmount: outstanding.swim.perSessionMeters, unit: 'm', estMinutes: swimSessionMin, activityTypeId: outstanding.swim.activityTypeId, activityName: outstanding.swim.activityName, isBacklog: true });
+        const m = missed[missed.length - remaining];
+        day.sessions.push({ discipline: 'swim', kind: m.kind || 'session', targetAmount: outstanding.swim.perSessionMeters, unit: 'm', estMinutes: swimSessionMin, activityTypeId: outstanding.swim.activityTypeId, activityName: outstanding.swim.activityName, isBacklog: true });
         day.backlogUsed += swimSessionMin;
         day.totalBacklogUsed += swimSessionMin;
         remaining--;
-        movedDays.push(day.weekday);
+        placedMissed.push({ m, weekday: day.weekday });
       });
-      const placedCount = outstanding.swim.outstandingSessions - remaining;
-      if (placedCount > 0) movedParts.push(placedCount + ' swim session' + (placedCount === 1 ? '' : 's') + ' moved to ' + movedDays.join('/'));
+      if (placedMissed.length) {
+        movedParts.push(placedMissed.map((p) => 'Swim ' + (p.m.kind || 'session') + ' (missed ' + (PLAN_CARD_WEEKDAY_SHORT[p.m.weekday] || p.m.weekday) + ') -> ' + (PLAN_CARD_WEEKDAY_SHORT[p.weekday] || p.weekday)).join(', '));
+      }
       // BUG FIX (reported) — same distinction as run above: no day
       // left this week allowing swim per the availability template is
       // a config fact, not a scheduling/capacity bug.
       if (remaining > 0) {
+        const leftover = missed.slice(missed.length - remaining);
+        const names = leftover.map((m) => 'Swim ' + (m.kind || 'session') + ' (missed ' + (PLAN_CARD_WEEKDAY_SHORT[m.weekday] || m.weekday) + ')').join(', ');
         cantFit.push(candidates.length
-          ? { discipline: 'swim', reason: placedCount + ' of ' + outstanding.swim.outstandingSessions + ' can fit this week.' }
-          : { discipline: 'swim', reason: placedCount + ' of ' + outstanding.swim.outstandingSessions + ' can fit — swim isn’t allowed on any remaining day this week per your availability template.' });
+          ? { discipline: 'swim', reason: names + ' could not fit this week.' }
+          : { discipline: 'swim', reason: names + ' could not be rescheduled — swim isn’t allowed on any remaining day this week per your availability template.' });
       }
     }
 
     // --- STRENGTH: discrete sessions, at most ONE per day overall
     // (never on a day the rhythm already has strength -- that would
-    // stack two strength sessions the same day), generic/untyped
-    // (never resolved to a specific missed day-type here -- see
-    // missedDayTypesThisWeek for that separate, informational list),
-    // so never counted as hard/leg-load. ---
+    // stack two strength sessions the same day). BUG FIX (reported) —
+    // now carries its own real missed day-type (outstanding.strength.missed,
+    // oldest first — see computeOutstandingByDiscipline's own comment)
+    // instead of a generic/untyped session, so both a placed backlog
+    // session AND a can't-fit line name exactly which day-type and
+    // original weekday it came from. Still never counted as hard/
+    // leg-load (a backlog catch-up, not today's real rotation pick). ---
     if (outstanding.strength) {
-      let remaining = outstanding.strength.outstandingSessions;
+      const missed = outstanding.strength.missed || [];
+      let remaining = missed.length;
       if (restrictionBlocksDiscipline(restrictions, 'strength')) {
-        cantFit.push({ discipline: 'strength', reason: 'Strength is currently restricted — ' + remaining + ' session' + (remaining === 1 ? '' : 's') + ' could not be rescheduled.' });
+        cantFit.push({ discipline: 'strength', reason: 'Strength is currently restricted — ' + missed.map((m) => m.dayType + ' (missed ' + (PLAN_CARD_WEEKDAY_SHORT[m.weekday] || m.weekday) + ')').join(', ') + ' could not be rescheduled.' });
       } else {
         const candidates = perDay.filter((d) => d.allowedDisciplines.strength !== false && !d.hasRhythmStrength).sort((a, b) => (a.dateKey < b.dateKey ? -1 : 1));
-        const movedDays = [];
+        const placedMissed = [];
         candidates.forEach((day) => {
           if (remaining <= 0) return;
           if (day.sessions.some((s) => s.discipline === 'strength')) return; // already took one this pass
           if (strengthRoomOnDay(day) < DEFAULT_SESSION_MINUTES.strength) return;
-          day.sessions.push({ discipline: 'strength', kind: 'auto', targetAmount: null, unit: '', estMinutes: DEFAULT_SESSION_MINUTES.strength, isBacklog: true });
+          const m = missed[missed.length - remaining];
+          day.sessions.push({ discipline: 'strength', kind: m.dayType, targetAmount: null, unit: '', estMinutes: DEFAULT_SESSION_MINUTES.strength, isBacklog: true });
           day.totalBacklogUsed += DEFAULT_SESSION_MINUTES.strength;
           remaining--;
-          movedDays.push(day.weekday);
+          placedMissed.push({ m, weekday: day.weekday });
         });
-        const placedCount = outstanding.strength.outstandingSessions - remaining;
-        if (placedCount > 0) movedParts.push(placedCount + ' strength session' + (placedCount === 1 ? '' : 's') + ' moved to ' + movedDays.join('/'));
-        if (remaining > 0) cantFit.push({ discipline: 'strength', reason: placedCount + ' of ' + outstanding.strength.outstandingSessions + ' can fit this week.' });
+        if (placedMissed.length) {
+          movedParts.push(placedMissed.map((p) => p.m.dayType + ' (missed ' + (PLAN_CARD_WEEKDAY_SHORT[p.m.weekday] || p.m.weekday) + ') -> ' + (PLAN_CARD_WEEKDAY_SHORT[p.weekday] || p.weekday)).join(', '));
+        }
+        if (remaining > 0) {
+          const leftover = missed.slice(missed.length - remaining);
+          cantFit.push({ discipline: 'strength', reason: leftover.map((m) => m.dayType + ' (missed ' + (PLAN_CARD_WEEKDAY_SHORT[m.weekday] || m.weekday) + ')').join(', ') + ' could not fit this week — no day left both allows strength and has room.' });
+        }
       }
     }
 
@@ -8930,6 +9016,12 @@ img, video, canvas, svg { max-width: 100%; }
       const todayWeekdayForRhythm = AVAIL_WEEKDAY_NAMES[DayLib.parseDateKey(DayLib.effectiveDateKey()).getDay()];
       const rhythmForDay = weeklyRhythm[todayWeekdayForRhythm] || [];
       const rhythmConfigured = !!(weeklyRhythm && Object.keys(weeklyRhythm).some((wd) => Array.isArray(weeklyRhythm[wd]) && weeklyRhythm[wd].length));
+      // BUG FIX (reported) — today's own REAL, already-sized session
+      // from plan.layout (built server-side in mode=plan, including
+      // the km-aware rhythm split) — sent so the backstop can show
+      // the real size ("Run interval 3km") instead of trusting the
+      // model to mention (or get right) a number it was never given.
+      const todayLayoutEntry = (plan && Array.isArray(plan.layout)) ? (plan.layout.find((d) => d.dateKey === DayLib.effectiveDateKey()) || null) : null;
       // Fetched once here and reused for both padel detection and Phase 2's
       // availability/calendar feasibility (see detectPadelToday's and
       // buildTodayFeasibility's own comments) — one gatherTodayContext()
@@ -8964,6 +9056,7 @@ img, video, canvas, svg { max-width: 100%; }
           feasibility,
           rhythmForDay,
           rhythmConfigured,
+          todayLayoutEntry,
           rebalanceToday,
         }),
       });

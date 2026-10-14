@@ -497,6 +497,22 @@ function sanitizeRebalanceToday(raw) {
   if (!sessions.length) return null;
   return { sessions };
 }
+// BUG FIX (reported) — today's own REAL, already-sized session from
+// plan.layout (same sessions shape as rebalanceToday above, just a
+// client-side lookup of today's existing day in the already-generated
+// layout rather than a rebalance pick) — lets describeRhythmEntryForToday
+// show the real size ("Run interval 3km") instead of trusting the
+// model to mention, or correctly state, a number it was never given.
+function sanitizeTodayLayoutEntry(raw) {
+  if (!raw || typeof raw !== 'object' || !Array.isArray(raw.sessions)) return null;
+  const sessions = raw.sessions.slice(0, 10).map((s) => ({
+    discipline: (s && typeof s.discipline === 'string') ? s.discipline.slice(0, 20) : '',
+    targetAmount: (s && typeof s.targetAmount === 'number' && isFinite(s.targetAmount)) ? s.targetAmount : null,
+    unit: (s && typeof s.unit === 'string') ? s.unit.slice(0, 10) : '',
+  })).filter((s) => s.discipline);
+  if (!sessions.length) return null;
+  return { sessions };
+}
 
 // Lists ONLY the already-feasible candidates (computed client-side in
 // code, never asked of the model) and instructs the model to pick
@@ -564,7 +580,15 @@ function applyFeasibilityBackstop(recommendation, feasibility) {
   if (!feasible.length) return 'Rest — nothing in this week\'s plan fits today\'s available time/disciplines';
   return feasible[0].label;
 }
-function describeRhythmEntryForToday(entry) {
+// BUG FIX (reported) — todayLayoutEntry (optional — see
+// sanitizeTodayLayoutEntry's own comment) is today's REAL,
+// already-sized session from plan.layout; when present and it has a
+// matching discipline, its real targetAmount/unit is appended (e.g.
+// "Run interval 3km") instead of a bare kind name. The model is never
+// told this number and can't be trusted to state or guess it, so this
+// is the one place it's guaranteed to show up, independent of
+// whatever the model actually wrote.
+function describeRhythmEntryForToday(entry, todayLayoutEntry) {
   if (entry.discipline === 'rest') return 'Rest';
   if (entry.discipline === 'strength') {
     // A typed day shows its real name directly ("Push", "Explosive"),
@@ -575,7 +599,11 @@ function describeRhythmEntryForToday(entry) {
     return (entry.kind && entry.kind !== 'auto') ? (entry.kind.charAt(0).toUpperCase() + entry.kind.slice(1)) : 'Strength';
   }
   const disc = entry.discipline.charAt(0).toUpperCase() + entry.discipline.slice(1);
-  return disc + (entry.kind ? ' ' + entry.kind : '');
+  const layoutSession = todayLayoutEntry && Array.isArray(todayLayoutEntry.sessions)
+    ? todayLayoutEntry.sessions.find((s) => s.discipline === entry.discipline)
+    : null;
+  const sizeLabel = (layoutSession && layoutSession.targetAmount) ? (' ' + layoutSession.targetAmount + (layoutSession.unit || '')) : '';
+  return disc + (entry.kind ? ' ' + entry.kind : '') + sizeLabel;
 }
 // Phase 4.1 fix (reported contradiction) — matches the model's own
 // "Rest"/"nothing feasible" phrasing (buildTodaySystemPrompt's own
@@ -636,12 +664,20 @@ function buildAllowedRhythmDescriptors(rhythmForDay, rebalanceToday) {
 }
 // Only called once the recommendation has ALREADY been confirmed to
 // mention the rhythm's primary entry (the caller's own fast-path
-// condition) — a single-clause recommendation is that primary entry
-// itself and needs no further splitting; a multi-clause one ("X + Y")
-// gets every clause checked independently against the allowlist.
-function stripUnvalidatedRhythmClauses(recommendation, rhythmForDay, rebalanceToday) {
+// condition). Every "+"-joined clause (the model's own convention) is
+// checked independently against the allowlist; a single-clause
+// recommendation is handled the exact same way (one clause to check).
+// BUG FIX (reported) — the clause matching the PRIMARY rhythm entry is
+// always REPLACED with describeRhythmEntryForToday's own canonical,
+// sized description rather than kept as the model wrote it — the
+// model is never told today's real size, so its own phrasing can't
+// be trusted to include (or get) it; code already knows it from
+// todayLayoutEntry. Any OTHER kept clause (a validated rebalanceToday
+// catch-up session) is left exactly as the model wrote it — those are
+// already told their own real numbers in the prompt.
+function stripUnvalidatedRhythmClauses(recommendation, rhythmForDay, rebalanceToday, todayLayoutEntry) {
   const clauses = recommendation.split(/\s+\+\s+/).map((c) => c.trim()).filter(Boolean);
-  if (clauses.length <= 1) return recommendation;
+  const primaryEntry = rhythmForDay[0];
   const allowed = buildAllowedRhythmDescriptors(rhythmForDay, rebalanceToday);
   const dropped = [];
   const kept = clauses.filter((clause) => {
@@ -649,9 +685,11 @@ function stripUnvalidatedRhythmClauses(recommendation, rhythmForDay, rebalanceTo
     if (!ok) dropped.push(clause);
     return ok;
   });
-  if (!dropped.length) return recommendation;
-  const text = kept.join(' + ') || describeRhythmEntryForToday(rhythmForDay[0]);
-  return text + ' (dropped unscheduled: ' + dropped.join(', ') + ')';
+  const primaryIdx = kept.findIndex((clause) => clauseMatchesDescriptor(clause, primaryEntry.discipline, primaryEntry.kind));
+  const canonicalPrimary = describeRhythmEntryForToday(primaryEntry, todayLayoutEntry);
+  if (primaryIdx !== -1) kept[primaryIdx] = canonicalPrimary;
+  const text = kept.length ? kept.join(' + ') : canonicalPrimary;
+  return dropped.length ? text + ' (dropped unscheduled: ' + dropped.join(', ') + ')' : text;
 }
 // Phase 3.5 — the LAST-resort code check: the prompt already tells
 // the model today's rhythm entry is the default and to only deviate
@@ -663,14 +701,14 @@ function stripUnvalidatedRhythmClauses(recommendation, rhythmForDay, rebalanceTo
 // discipline+kind AND none of those reasons check out, the rhythm
 // entry wins outright — same "never trust the model's pick blindly"
 // discipline as applyFeasibilityBackstop above.
-function applyRhythmBackstop(recommendation, rhythmForDay, feasibility, restrictions, whoopToday, strengthContext, rebalanceToday) {
+function applyRhythmBackstop(recommendation, rhythmForDay, feasibility, restrictions, whoopToday, strengthContext, rebalanceToday, todayLayoutEntry) {
   if (!Array.isArray(rhythmForDay) || !rhythmForDay.length) return recommendation;
   const entry = rhythmForDay[0]; // a second same-day session, if any, is additive on top of the primary one this backstop concerns itself with
   if (entry.discipline === 'rest') return recommendation; // nothing to default to or compare against
   const disciplinePattern = BACKSTOP_DISCIPLINE_PATTERNS[entry.discipline];
   const mentionsDiscipline = disciplinePattern ? disciplinePattern.test(recommendation) : false;
   const mentionsKind = !entry.kind || entry.kind === 'auto' || new RegExp('\\b' + entry.kind + '\\b', 'i').test(recommendation);
-  if (mentionsDiscipline && mentionsKind) return stripUnvalidatedRhythmClauses(recommendation, rhythmForDay, rebalanceToday); // matches the rhythm -- still validate every "+"-joined clause
+  if (mentionsDiscipline && mentionsKind) return stripUnvalidatedRhythmClauses(recommendation, rhythmForDay, rebalanceToday, todayLayoutEntry); // matches the rhythm -- still validate every "+"-joined clause
 
   // Restriction scope values are "running"/"strength"/"padel" (see
   // api/chat.js's propose_restriction tool) — a different vocabulary
@@ -703,10 +741,10 @@ function applyRhythmBackstop(recommendation, rhythmForDay, feasibility, restrict
     if (rebalanceToday && Array.isArray(rebalanceToday.sessions) && rebalanceToday.sessions.length) {
       return describeRebalanceTodayPick(rebalanceToday.sessions);
     }
-    return describeRhythmEntryForToday(entry); // no contradictory "was: Rest" tail
+    return describeRhythmEntryForToday(entry, todayLayoutEntry); // no contradictory "was: Rest" tail
   }
 
-  return describeRhythmEntryForToday(entry) + ' (today\'s rhythm) — was: ' + recommendation;
+  return describeRhythmEntryForToday(entry, todayLayoutEntry) + ' (today\'s rhythm) — was: ' + recommendation;
 }
 
 // ------------------------------------------------------------
@@ -1425,7 +1463,7 @@ function splitRhythmSessionsFixedGrowth(entries, firstWeekKm, weekKm, cap, minSe
     const placed = sizes.reduce((s, v) => s + v, 0);
     const shortfall = Math.max(0, Math.round((weekKm - placed) * 10) / 10);
     return {
-      sessions: entries.map((e, i) => ({ kind: e.kind, dateKey: e.dateKey, km: sizes[i] })),
+      sessions: entries.map((e, i) => ({ kind: e.kind, dateKey: e.dateKey, weekday: e.weekday, km: sizes[i] })),
       dropped: [],
       shortfall,
       cap,
@@ -1433,7 +1471,7 @@ function splitRhythmSessionsFixedGrowth(entries, firstWeekKm, weekKm, cap, minSe
   }
 
   const floor = minSessionKm > 0 ? minSessionKm : 3;
-  let items = entries.map((e, i) => ({ kind: e.kind, dateKey: e.dateKey, share: firstWeekKm ? baselines[i] / firstWeekKm : 0 }));
+  let items = entries.map((e, i) => ({ kind: e.kind, dateKey: e.dateKey, weekday: e.weekday, share: firstWeekKm ? baselines[i] / firstWeekKm : 0 }));
   const dropped = [];
   while (items.length > 1 && weekKm <= items.length * floor) {
     let mi = 0;
@@ -1454,7 +1492,7 @@ function splitRhythmSessionsFixedGrowth(entries, firstWeekKm, weekKm, cap, minSe
     rounded[bi] = round0_5(rounded[bi] + drift);
   }
   return {
-    sessions: items.map((it, i) => ({ kind: it.kind, dateKey: it.dateKey, km: rounded[i] })),
+    sessions: items.map((it, i) => ({ kind: it.kind, dateKey: it.dateKey, weekday: it.weekday, km: rounded[i] })),
     dropped,
     shortfall: 0,
     cap,
@@ -1486,7 +1524,7 @@ function rhythmEntriesForDiscipline(rhythm, weekDates, discipline) {
     if (!dateKey) return;
     (rhythm[wd] || []).forEach((entry) => {
       if (entry.discipline !== discipline) return;
-      out.push({ dateKey, entry: entry.kind ? Object.assign({}, entry, { kind: normalizeRhythmKindForCompat(entry.discipline, entry.kind) }) : entry });
+      out.push({ dateKey, weekday: wd, entry: entry.kind ? Object.assign({}, entry, { kind: normalizeRhythmKindForCompat(entry.discipline, entry.kind) }) : entry });
     });
   });
   return out;
@@ -1516,7 +1554,7 @@ function buildRhythmSessionsForDiscipline(discipline, targets, capacity, rhythm,
       const weekMondayKey = weekDates && weekDates.monday;
       const cap = resolveLongRunCapForWeek(rhythm, weekMondayKey);
       const split = splitRhythmSessionsFixedGrowth(
-        entries.map((e) => ({ kind: e.entry.kind || 'easy', km: e.entry.km, dateKey: e.dateKey })),
+        entries.map((e) => ({ kind: e.entry.kind || 'easy', km: e.entry.km, dateKey: e.dateKey, weekday: e.weekday })),
         firstWeekKm, t.km, cap, RHYTHM_SPLIT_MIN_SESSION_KM
       );
       if (split) {
@@ -1533,7 +1571,7 @@ function buildRhythmSessionsForDiscipline(discipline, targets, capacity, rhythm,
         }
         return split.sessions.map((s, i) => ({
           id: discipline + '-rhythm-' + i, discipline, kind: s.kind, activityTypeId: t.activityTypeId, activityName: t.activityName,
-          targetAmount: s.km, unit: 'km', estMinutes: Math.round(s.km * pace), hard: RHYTHM_HARD_KINDS.has(s.kind), dateKey: s.dateKey,
+          targetAmount: s.km, unit: 'km', estMinutes: Math.round(s.km * pace), hard: RHYTHM_HARD_KINDS.has(s.kind), dateKey: s.dateKey, weekday: s.weekday,
         }));
       }
     }
@@ -1543,7 +1581,7 @@ function buildRhythmSessionsForDiscipline(discipline, targets, capacity, rhythm,
       const km = Math.max(0, Math.round((t.km * (weights[i] / weightSum)) * 10) / 10);
       return {
         id: discipline + '-rhythm-' + i, discipline, kind: e.entry.kind || 'easy', activityTypeId: t.activityTypeId, activityName: t.activityName,
-        targetAmount: km, unit: 'km', estMinutes: Math.round(km * pace), hard: RHYTHM_HARD_KINDS.has(e.entry.kind), dateKey: e.dateKey,
+        targetAmount: km, unit: 'km', estMinutes: Math.round(km * pace), hard: RHYTHM_HARD_KINDS.has(e.entry.kind), dateKey: e.dateKey, weekday: e.weekday,
       };
     });
   }
@@ -1557,7 +1595,7 @@ function buildRhythmSessionsForDiscipline(discipline, targets, capacity, rhythm,
     const est = Math.round((metersPerSession / 100) * pace);
     return entries.map((e, i) => ({
       id: 'swim-rhythm-' + i, discipline: 'swim', kind: e.entry.kind || 'session', activityTypeId: t.activityTypeId, activityName: t.activityName,
-      targetAmount: metersPerSession, unit: 'm', estMinutes: est, hard: RHYTHM_HARD_KINDS.has(e.entry.kind), dateKey: e.dateKey,
+      targetAmount: metersPerSession, unit: 'm', estMinutes: est, hard: RHYTHM_HARD_KINDS.has(e.entry.kind), dateKey: e.dateKey, weekday: e.weekday,
     }));
   }
   if (discipline === 'strength') {
@@ -1574,7 +1612,7 @@ function buildRhythmSessionsForDiscipline(discipline, targets, capacity, rhythm,
     // discipline.
     return entries.map((e, i) => ({
       id: 'strength-rhythm-' + i, discipline: 'strength', kind: e.entry.kind || 'auto', activityTypeId: null, activityName: 'Strength',
-      targetAmount: null, unit: '', estMinutes: 45, hard: RHYTHM_HARD_KINDS.has(e.entry.kind), dateKey: e.dateKey,
+      targetAmount: null, unit: '', estMinutes: 45, hard: RHYTHM_HARD_KINDS.has(e.entry.kind), dateKey: e.dateKey, weekday: e.weekday,
     }));
   }
   return null;
@@ -1690,8 +1728,28 @@ function buildFinalLayout(assignments, sessionsToPlace, perDay, unplacedSeed) {
   assignments.forEach((a) => {
     if (seededIds.has(a.id) || placedIds.has(a.id)) return; // already resolved (seeded-unplaceable, or a duplicate assignment for the same id)
     const session = sessionById[a.id];
-    const day = dayByDate[a.dateKey];
-    if (!session || !day) return;
+    if (!session) return;
+    let day = dayByDate[a.dateKey];
+    if (!day) {
+      // BUG FIX (reported) — capacity.perDay only ever covers TODAY
+      // through Sunday (see buildWeekCapacity), so a rhythm-fixed
+      // session (its own dateKey, set only by buildRhythmSessionsForDiscipline)
+      // on a day strictly BEFORE today — e.g. Monday's Push, checked
+      // on Tuesday — has no matching `day` here at all. This used to
+      // fall all the way through to the generic, unnamed "Could not
+      // be placed — no day both allowed this discipline and had
+      // enough free time" catch-all below, even though capacity
+      // never even considered that day. A past day has already
+      // happened or not; capacity/availability don't apply to it
+      // retroactively — place it directly, no validation, same spirit
+      // as the hard-adjacency exemption a rhythm-fixed session
+      // already gets. A model-placed session (no dateKey) can never
+      // reach this branch at all — sanitizeAssignments already
+      // restricts those to perDay's own validDates.
+      if (!session.dateKey) return;
+      day = { weekday: session.weekday || '', dateKey: a.dateKey, availableMin: Infinity, allowedDisciplines: {}, usedMin: 0, sessions: [] };
+      dayByDate[a.dateKey] = day;
+    }
     // BUG FIX (reported) — session.dateKey (set only by a rhythm-
     // sourced session — see buildRhythmSessionsForDiscipline) means
     // the USER already deliberately placed this discipline on this
@@ -2264,6 +2322,13 @@ async function handleToday(req, res, apiKey, body) {
     // own comment); Tomorrow deliberately gets no missed-session
     // signal, same spirit as it getting no padel/calendar input.
     context.rebalanceToday = sanitizeRebalanceToday(body.rebalanceToday);
+    // BUG FIX (reported) — TODAY only (see sanitizeTodayLayoutEntry's
+    // own comment). Read directly by the backstop below (the actual
+    // guarantee that the final text shows the real size) — it's also
+    // visible to the model as part of context (JSON.stringify'd below
+    // like everything else here), but harmlessly so, since the model
+    // is never asked to restate it itself.
+    context.todayLayoutEntry = sanitizeTodayLayoutEntry(body.todayLayoutEntry);
   }
 
   if (!context.weekPlan) {
@@ -2296,7 +2361,7 @@ async function handleToday(req, res, apiKey, body) {
   // (Tomorrow's own prompt is told not to use it — see
   // buildTomorrowSystemPrompt's own comment), so forTomorrow passes
   // null there, same as the prompt's own recovery-blind framing.
-  recommendation = applyRhythmBackstop(recommendation, context.rhythmForDay, context.feasibility, restrictions, forTomorrow ? null : context.whoopToday, context.strengthContext, context.rebalanceToday);
+  recommendation = applyRhythmBackstop(recommendation, context.rhythmForDay, context.feasibility, restrictions, forTomorrow ? null : context.whoopToday, context.strengthContext, context.rebalanceToday, forTomorrow ? null : context.todayLayoutEntry);
 
   return res.status(200).json({ ok: true, recommendation });
 }
