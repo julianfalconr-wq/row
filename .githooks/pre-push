@@ -12,6 +12,7 @@
 #   - tests/smoke-build-stamp.cjs (footer build stamp on gym.html/main.html/plan.html)
 #   - tests/smoke-availability-rhythm-allowed.cjs (a weekly-rhythm placement always counts as allowed on its own day, regardless of the availability template)
 #   - tests/smoke-rebalance-backlog-named.cjs (backlog = capped by ahead-vs-remaining-target, always named; no generic "could not be placed"/"0 of 1" lines)
+#   - tests/smoke-rhythm-cap-golden.cjs (server/client long-run-cap cross-check across 31 weeks + golden sequence + preview header)
 #
 # Installed via `git config core.hooksPath .githooks` — see this
 # repo's package.json "prepare" script (runs automatically on
@@ -159,6 +160,17 @@ if ! node tests/smoke-rebalance-backlog-named.cjs; then
   echo "pre-push: BLOCKED — tests/smoke-rebalance-backlog-named.cjs failed (see output above)."
   echo "pre-push: fix the reported issue(s), or run it by hand to iterate:"
   echo "pre-push:   node tests/smoke-rebalance-backlog-named.cjs"
+  echo ""
+  exit 1
+fi
+
+echo ""
+echo "pre-push: running tests/smoke-rhythm-cap-golden.cjs ..."
+if ! node tests/smoke-rhythm-cap-golden.cjs; then
+  echo ""
+  echo "pre-push: BLOCKED — tests/smoke-rhythm-cap-golden.cjs failed (see output above)."
+  echo "pre-push: fix the reported issue(s), or run it by hand to iterate:"
+  echo "pre-push:   node tests/smoke-rhythm-cap-golden.cjs"
   echo ""
   exit 1
 fi
