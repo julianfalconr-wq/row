@@ -81,8 +81,15 @@
 //   -> { ok:true, settings: {...} | null }  (null if never saved —
 //      caller falls back to daylib.js's DEFAULT_PROFILE)
 // POST /api/sync-state?secret=...  { resource: "general-settings", settings: {...} }
-//   -> upserts habit_config's "general" row
+//   -> upserts habit_config's "general" row. settings.fueling (FEATURE,
+//      reported) is the one sub-object validated server-side (see
+//      sanitizeFuelingSettings) — numbers only, sane ranges
+//      (gelSizeG 10-60, maxCarbsPerHourG 20-90, bodyWeightKg 30-150,
+//      plus the rest of the editable rules table). Absent/partial is
+//      fine — gym.html's own FUELING_RULES supplies every default;
+//      see that file's own header comment for the full field list.
 //
+
 // -------------------------------------------------------------
 // activity-types (Training/Activities generalization, Phase 1) — the
 // configurable list of loggable cardio/other activity types (Running,
@@ -663,6 +670,36 @@ async function saveConfigRow(id, data) {
 }
 const getHabitConfig = () => getConfigRow('config');
 const saveHabitConfig = (config) => saveConfigRow('config', config);
+// FEATURE (reported) — general-settings itself has NO validation at
+// all today (dayEndTime/timezone/categoryWeights/chatEnabled save
+// verbatim, whatever the client sends) — out of scope to retrofit
+// here. This validates ONLY the new `fueling` sub-object (numbers,
+// sane ranges, per the task's own spec), leaving every other field
+// exactly as permissive as before. A field outside its range, or not
+// a finite number at all, is dropped silently (falls back to
+// gym.html's own FUELING_RULES default for that one field) rather
+// than rejecting the whole save over one bad number.
+function sanitizeNum(v, min, max) {
+  const n = Number(v);
+  return (Number.isFinite(n) && n >= min && n <= max) ? n : undefined;
+}
+function sanitizeFuelingSettings(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const out = {};
+  const fields = {
+    gelSizeG: [10, 60], maxCarbsPerHourG: [20, 90], bodyWeightKg: [30, 150],
+    carbsEasy60to90: [0, 90], carbsHard60to90: [0, 90],
+    carbsEasy90to150: [0, 90], carbsHard90to150: [0, 90], carbsOver150: [0, 90],
+    fluidMlPerHour: [0, 1500], sodiumMinMgPerHour: [0, 2000], sodiumMaxMgPerHour: [0, 2000], sodiumMinSessionMin: [0, 300],
+    beforeCarbsMinG: [0, 100], beforeCarbsMaxG: [0, 100],
+    afterCarbsPerKg: [0, 5], afterProteinPerKg: [0, 2],
+  };
+  Object.keys(fields).forEach((key) => {
+    const v = sanitizeNum(raw[key], fields[key][0], fields[key][1]);
+    if (v !== undefined) out[key] = v;
+  });
+  return Object.keys(out).length ? out : undefined;
+}
 const getGeneralSettings = () => getConfigRow('general');
 const saveGeneralSettings = (settings) => saveConfigRow('general', settings);
 const getActivityTypes = () => getConfigRow('activityTypes');
@@ -820,7 +857,14 @@ export default async function handler(req, res) {
           if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
             return res.status(400).json({ error: 'settings must be a plain object' });
           }
-          await saveGeneralSettings(settings);
+          // FEATURE (reported) — see sanitizeFuelingSettings' own
+          // comment: only this one new sub-object is validated;
+          // everything else in `settings` saves exactly as before.
+          const sanitizedFueling = sanitizeFuelingSettings(settings.fueling);
+          const settingsToSave = Object.assign({}, settings);
+          if (sanitizedFueling) settingsToSave.fueling = sanitizedFueling;
+          else delete settingsToSave.fueling;
+          await saveGeneralSettings(settingsToSave);
           return res.status(200).json({ ok: true });
         }
         return res.status(405).json({ error: 'method not allowed' });

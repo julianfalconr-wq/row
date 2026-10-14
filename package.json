@@ -5,7 +5,7 @@
   "scripts": {
     "prepare": "git config core.hooksPath .githooks || true",
     "build": "node scripts/generate-build-stamp.cjs",
-    "check": "node tests/check-vercel-config.cjs && node tests/lint-gym-html.cjs && node tests/smoke-refresh-buttons.cjs && node tests/smoke-main-todo.cjs && node tests/smoke-weekly-plan-card.cjs && node tests/smoke-fresh-week-rebalance.cjs && node tests/smoke-rhythm-split.cjs && node tests/smoke-today-rhythm-backstop.cjs && node tests/smoke-rhythm-cap-preview.cjs && node tests/smoke-build-stamp.cjs && node tests/smoke-availability-rhythm-allowed.cjs && node tests/smoke-rebalance-backlog-named.cjs && node tests/smoke-rhythm-cap-golden.cjs"
+    "check": "node tests/check-vercel-config.cjs && node tests/lint-gym-html.cjs && node tests/smoke-refresh-buttons.cjs && node tests/smoke-main-todo.cjs && node tests/smoke-weekly-plan-card.cjs && node tests/smoke-fresh-week-rebalance.cjs && node tests/smoke-rhythm-split.cjs && node tests/smoke-today-rhythm-backstop.cjs && node tests/smoke-rhythm-cap-preview.cjs && node tests/smoke-build-stamp.cjs && node tests/smoke-availability-rhythm-allowed.cjs && node tests/smoke-rebalance-backlog-named.cjs && node tests/smoke-rhythm-cap-golden.cjs && node tests/smoke-fueling.cjs"
   },
   "dependencies": {
     "web-push": "^3.6.7"

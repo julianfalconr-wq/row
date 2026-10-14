@@ -53,7 +53,12 @@ node tests/check-vercel-config.cjs    # vercel.json's buildCommand must have a m
 node tests/smoke-availability-rhythm-allowed.cjs # a weekly-rhythm placement always counts as allowed on its own day, regardless of the availability template
 node tests/smoke-rebalance-backlog-named.cjs # backlog = capped by ahead-vs-remaining-target, always named; no generic "could not be placed"/"0 of 1" lines
 node tests/smoke-rhythm-cap-golden.cjs # server/client long-run-cap cross-check across 31 weeks + golden sequence + preview header
+node tests/smoke-fueling.cjs          # Fueling card — computeFueling golden cases, real page render, settings sanitizer
 ```
+
+## Fueling
+
+gym.html's Today's session shows a per-session "Fueling" card (carbs during/before/after, fluid, sodium, gel count, a home gel recipe) for any session 60+ minutes, computed entirely in code from `FUELING_RULES` — no AI call, no new network request beyond the existing `general-settings` fetch for the editable rules. Settings (gel size, max g/h, body weight, and the full rules table) live in General Settings → Fueling, validated server-side in `api/sync-state.js`'s `sanitizeFuelingSettings`.
 
 **Any change to `vercel.json` (buildCommand, outputDirectory, functions, etc.) must go through a Preview deployment first** — push it to a branch, confirm the Preview build succeeds and the live pages/API actually work on the preview URL, and only then merge to `main`. A deploy-config mistake doesn't show up in `npm run check` (it's a Vercel build/serving concern, not something jsdom can exercise) and breaks the LIVE site for everyone the moment `main` deploys — exactly what happened with commit 9b3de4d's missing `outputDirectory`.
 

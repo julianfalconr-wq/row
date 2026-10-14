@@ -1202,6 +1202,10 @@ body {
   width: 64px; background: var(--inset-bg); border: 1px solid var(--line); color: var(--text-primary);
   font-family: inherit; font-size: 13px; padding: 7px 9px; border-radius: 8px; outline: none; -moz-appearance: textfield;
 }
+.gs-fueling-grid { display: flex; flex-direction: column; gap: 2px; }
+.gs-fueling-grid .gs-weight-row { border-bottom: 1px solid var(--line); }
+.gs-fueling-grid .gs-weight-row:last-child { border-bottom: none; }
+.gs-fueling-grid .gs-weight-row label { font-size: 12px; }
 .gs-weight-sum { font-size: 12px; font-weight: 700; margin-top: 8px; color: var(--text-tertiary); }
 .gs-weight-sum.is-bad { color: var(--danger); }
 .gs-weight-sum.is-ok { color: var(--success); }
@@ -1622,6 +1626,26 @@ body {
           <div class="gs-avail-save-status" id="gsRhythmSaveStatus"></div>
           <button type="button" class="hf-advanced-toggle" id="gsRhythmPreviewToggleBtn">Next weeks preview ▾</button>
           <div class="gs-rhythm-preview" id="gsRhythmPreview" hidden></div>
+        </div>
+      </div>
+
+      <div class="set-divider"></div>
+
+      <!-- Fueling (reported feature) — carb/fluid/gel guidance shown
+           on gym.html's Today's session, computed entirely in code
+           (no AI call, no new serverless file — see api/sync-state.js's
+           own "fueling" doc comment under resource=general-settings).
+           Same per-field auto-save convention as Training availability/
+           Weekly rhythm above, for the same reason (not a single atomic
+           form). Backward compatible — a missing/partial settings blob
+           just means gym.html's own FUELING_RULES defaults apply. -->
+      <div class="set-section">
+        <h4>Fueling</h4>
+        <div class="gs-habits-note">Carb/fluid/gel guidance shown on Today's session for sessions 60+ minutes, computed in code — no AI call. Reference estimate only, not medical advice. Changes here save automatically.</div>
+        <button type="button" class="hf-advanced-toggle" id="gsFuelingToggleBtn">Set fueling rules ▾</button>
+        <div class="hf-advanced-body" id="gsFuelingBody" hidden>
+          <div class="gs-fueling-grid" id="gsFuelingGrid"></div>
+          <div class="gs-avail-save-status" id="gsFuelingSaveStatus"></div>
         </div>
       </div>
 
@@ -6131,6 +6155,87 @@ document.addEventListener('DOMContentLoaded', function () {
   const GS_WEEKDAY_KEYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
   const GS_DAY_RING_DEFAULT_WAKE = '08:00';
   const GS_DAY_RING_DEFAULT_SLEEP = '00:00';
+  // Fueling (reported feature) — defaults mirror gym.html's own
+  // FUELING_RULES exactly (same per-file duplication convention as
+  // RHYTHM_KIND_WEIGHT/RHYTHM_KIND_WEIGHT_MAIN elsewhere in this
+  // project) — this is ONLY the settings UI; the actual arithmetic
+  // (computeFueling) lives in gym.html, where the card renders.
+  const FUELING_SETTINGS_DEFAULTS_MAIN = {
+    gelSizeG: 30, maxCarbsPerHourG: 60, bodyWeightKg: 66,
+    carbsEasy60to90: 30, carbsHard60to90: 45,
+    carbsEasy90to150: 45, carbsHard90to150: 60, carbsOver150: 60,
+    fluidMlPerHour: 500, sodiumMinMgPerHour: 300, sodiumMaxMgPerHour: 500, sodiumMinSessionMin: 90,
+    beforeCarbsMinG: 20, beforeCarbsMaxG: 30,
+    afterCarbsPerKg: 1, afterProteinPerKg: 0.3,
+  };
+  const FUELING_SETTINGS_FIELDS_MAIN = [
+    { key: 'gelSizeG', label: 'Gel size (g carbs/gel)', min: 10, max: 60, step: 1 },
+    { key: 'maxCarbsPerHourG', label: 'Max carbs — hard cap (g/h)', min: 20, max: 90, step: 1 },
+    { key: 'bodyWeightKg', label: 'Body weight (kg)', min: 30, max: 150, step: 0.5 },
+    { key: 'carbsEasy60to90', label: 'Carbs 60-90min, easy (g/h)', min: 0, max: 90, step: 1 },
+    { key: 'carbsHard60to90', label: 'Carbs 60-90min, moderate/hard (g/h)', min: 0, max: 90, step: 1 },
+    { key: 'carbsEasy90to150', label: 'Carbs 90-150min, easy (g/h)', min: 0, max: 90, step: 1 },
+    { key: 'carbsHard90to150', label: 'Carbs 90-150min, moderate/hard (g/h)', min: 0, max: 90, step: 1 },
+    { key: 'carbsOver150', label: 'Carbs >150min, any intensity (g/h)', min: 0, max: 90, step: 1 },
+    { key: 'fluidMlPerHour', label: 'Fluid (ml/h)', min: 0, max: 1500, step: 50 },
+    { key: 'sodiumMinMgPerHour', label: 'Sodium, low end (mg/h)', min: 0, max: 2000, step: 50 },
+    { key: 'sodiumMaxMgPerHour', label: 'Sodium, high end (mg/h)', min: 0, max: 2000, step: 50 },
+    { key: 'sodiumMinSessionMin', label: 'Sodium applies from (session min)', min: 0, max: 300, step: 5 },
+    { key: 'beforeCarbsMinG', label: 'Before, carbs low end (g)', min: 0, max: 100, step: 1 },
+    { key: 'beforeCarbsMaxG', label: 'Before, carbs high end (g)', min: 0, max: 100, step: 1 },
+    { key: 'afterCarbsPerKg', label: 'After, carbs (g per kg bodyweight)', min: 0, max: 5, step: 0.1 },
+    { key: 'afterProteinPerKg', label: 'After, protein (g per kg bodyweight)', min: 0, max: 2, step: 0.05 },
+  ];
+  async function fetchFuelingSettingsMain() {
+    const server = await fetchGeneralSettingsFromServer();
+    return Object.assign({}, FUELING_SETTINGS_DEFAULTS_MAIN, (server && server.fueling && typeof server.fueling === 'object') ? server.fueling : {});
+  }
+  // Read-modify-write the WHOLE general-settings blob (dayEndTime/
+  // timezone/categoryWeights/chatEnabled/fueling all live in that one
+  // object) — fetched fresh right before saving so this never clobbers
+  // a field changed elsewhere in this same session (e.g. the big Save
+  // button, or another tab), the same risk window every other
+  // per-field auto-save section in this modal already accepts.
+  async function saveFuelingSettingToServer(fueling) {
+    const current = (await fetchGeneralSettingsFromServer()) || {};
+    await saveGeneralSettingsToServer(Object.assign({}, current, { fueling }));
+  }
+  function setFuelingSaveStatus(ok, errMsg) {
+    const el = $('gsFuelingSaveStatus');
+    el.classList.remove('is-saved', 'is-error');
+    if (ok) { el.textContent = 'Saved ✓'; el.classList.add('is-saved'); setTimeout(() => { if (el.textContent === 'Saved ✓') el.textContent = ''; }, 2000); }
+    else { el.textContent = "Couldn't save: " + (errMsg || 'unknown error'); el.classList.add('is-error'); }
+  }
+  let fuelingDraft = null;
+  async function renderFuelingSettings() {
+    $('gsFuelingGrid').innerHTML = 'Loading…';
+    fuelingDraft = await fetchFuelingSettingsMain();
+    $('gsFuelingGrid').innerHTML = FUELING_SETTINGS_FIELDS_MAIN.map((f) => (
+      '<div class="gs-weight-row"><label for="gsFueling_' + f.key + '">' + escapeHtml(f.label) + '</label>' +
+      '<input type="number" id="gsFueling_' + f.key + '" data-key="' + f.key + '" min="' + f.min + '" max="' + f.max + '" step="' + f.step + '" value="' + fuelingDraft[f.key] + '"></div>'
+    )).join('');
+    $('gsFuelingGrid').querySelectorAll('input[type="number"]').forEach((input) => {
+      input.addEventListener('change', async () => {
+        const field = FUELING_SETTINGS_FIELDS_MAIN.find((f) => f.key === input.dataset.key);
+        const v = Number(input.value);
+        if (!field || !Number.isFinite(v) || v < field.min || v > field.max) {
+          input.value = fuelingDraft[input.dataset.key]; // reject out-of-range, restore the last good value
+          return;
+        }
+        fuelingDraft[input.dataset.key] = v;
+        try { await saveFuelingSettingToServer(fuelingDraft); setFuelingSaveStatus(true); }
+        catch (e) { setFuelingSaveStatus(false, e.message || String(e)); }
+      });
+    });
+    $('gsFuelingBody').hidden = true;
+    $('gsFuelingToggleBtn').textContent = 'Set fueling rules ▾';
+    $('gsFuelingSaveStatus').textContent = '';
+  }
+  $('gsFuelingToggleBtn').addEventListener('click', () => {
+    const body = $('gsFuelingBody');
+    body.hidden = !body.hidden;
+    $('gsFuelingToggleBtn').textContent = 'Set fueling rules ' + (body.hidden ? '▾' : '▴');
+  });
   function openGeneralSettings() {
     const fallbackDefault = { dayEndTime: '00:00', timezone: 'auto', categoryWeights: { habits: 35, training: 20, nutrition: 20, water: 10, dailyStack: 10 }, dayRingSchedule: {}, chatEnabled: true };
     const profile = (typeof window.DayLib !== 'undefined') ? window.DayLib.loadProfile() : fallbackDefault;
@@ -6154,6 +6259,7 @@ document.addEventListener('DOMContentLoaded', function () {
     renderRestrictionsList();
     renderTrainingAvailability();
     renderWeeklyRhythmSection();
+    renderFuelingSettings();
     $('generalSettingsModalBg').classList.add('show');
   }
   $('generalSettingsGearBtn').addEventListener('click', openGeneralSettings);

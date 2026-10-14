@@ -418,6 +418,18 @@ img, video, canvas, svg { max-width: 100%; }
 .th-run-label { font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-3); }
 .tp-today-sub { font-size: 11.5px; color: var(--text-3); margin-top: 8px; }
 
+/* Fueling card (reported feature) — a native <details>/<summary> per
+   session gives the collapse/expand behavior for free, no extra JS. */
+.tt-fueling-block { margin-top: 10px; border-top: 1px dashed var(--border); padding-top: 8px; }
+.tt-fueling-block summary { font-size: 12.5px; font-weight: 600; color: var(--text-2); cursor: pointer; list-style: none; display: flex; align-items: center; gap: 6px; }
+.tt-fueling-block summary::-webkit-details-marker { display: none; }
+.tt-fueling-block summary::before { content: '▸'; font-size: 10px; color: var(--text-3); }
+.tt-fueling-block[open] summary::before { content: '▾'; }
+.tt-fueling-body { font-size: 12px; color: var(--text-2); line-height: 1.6; padding: 8px 2px 2px; }
+.tt-fueling-body h5 { font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-3); margin: 10px 0 3px; }
+.tt-fueling-body h5:first-child { margin-top: 0; }
+.tt-fueling-footer { font-size: 10.5px; color: var(--text-3); margin-top: 10px; font-style: italic; }
+
 /* Collapsed-by-default toggle for the Training History body (bug fix —
    this list was rendering fully expanded, pushing everything below it
    far down the page on a day with several exercises logged). Same
@@ -1895,6 +1907,7 @@ img, video, canvas, svg { max-width: 100%; }
     </div>
     <div class="tp-today-text" id="ttText">Tap refresh for today's pick.</div>
     <div class="tp-today-sub" id="ttSub"></div>
+    <div id="ttFueling"></div>
   </div>
 
   <!-- Training History (Phase E; generalized in Phase 1 of the
@@ -8931,6 +8944,180 @@ img, video, canvas, svg { max-width: 100%; }
     };
   }
 
+  // ---------- Fueling (reported feature) ----------
+  // Deterministic, code-only (no model, no network call for the
+  // arithmetic itself — settings are fetched from the existing
+  // general-settings resource, same "no new serverless file" as
+  // everything else in this file). One block PER SESSION (a day with
+  // more than one discipline — e.g. a brick/race day — gets one block
+  // each, ordered bike -> run -> swim, matching the stated priority:
+  // "fuel on bike mostly, then run; swim = fuel before").
+  //
+  // Every number below is a documented, editable default — see
+  // FUELING_RULES' own fields and General Settings' new "Fueling"
+  // section (saved under general-settings' `fueling` sub-object,
+  // merged onto these defaults so a stale/missing setting never
+  // breaks anything — same backward-compat convention as every other
+  // settings blob in this project).
+  const FUELING_RULES = {
+    gelSizeG: 30,
+    maxCarbsPerHourG: 60, // HARD CAP — never exceeded even if the user raises this setting above 90
+    bodyWeightKg: 66,
+    // Carbs during, g/h, by session length and intensity. Intensity
+    // only ever matters as easy-vs-NOT-easy here (moderate and hard
+    // take the same amount) — see classifyFuelingIntensity's own
+    // comment on why 'moderate' still exists as a separate LABEL.
+    carbsEasy60to90: 30, carbsHard60to90: 45,
+    carbsEasy90to150: 45, carbsHard90to150: 60,
+    carbsOver150: 60,
+    fluidMlPerHour: 500,
+    sodiumMinMgPerHour: 300, sodiumMaxMgPerHour: 500, sodiumMinSessionMin: 90,
+    beforeCarbsMinG: 20, beforeCarbsMaxG: 30,
+    afterCarbsPerKg: 1, afterProteinPerKg: 0.3,
+  };
+  const FUELING_FOOTER_TEXT = 'Reference estimate, not medical advice. Test in training, never debut on race day. Talk to a sports nutritionist.';
+  // 'easy'/'long'/'technique' = easy; 'pace'/'interval' = hard (race
+  // sessions have no dedicated kind of their own in this app's rhythm
+  // model — see this feature's own investigation note — so a
+  // kind-based classification can only ever really distinguish
+  // easy/hard). Anything else (brick, auto, session, unset) defaults
+  // to 'moderate' — a deliberate middle ground, never assumed to be
+  // either extreme just because it's untyped. An explicit HR% target
+  // on the session (not part of this app's current session shape,
+  // but checked first in case a future caller adds one) overrides the
+  // kind entirely, per the task's own rule.
+  function classifyFuelingIntensity(session) {
+    if (session && typeof session.hrPct === 'number') {
+      if (session.hrPct > 85) return 'hard';
+      if (session.hrPct >= 75) return 'moderate';
+      return 'easy';
+    }
+    const kind = (session && session.kind) || '';
+    if (kind === 'easy' || kind === 'long' || kind === 'technique') return 'easy';
+    if (kind === 'pace' || kind === 'interval' || kind === 'race') return 'hard';
+    return 'moderate';
+  }
+  function fuelingCarbsPerHour(minutes, intensity, rules) {
+    if (minutes < 60) return 0;
+    const easy = intensity === 'easy';
+    let gPerHour;
+    if (minutes <= 90) gPerHour = easy ? rules.carbsEasy60to90 : rules.carbsHard60to90;
+    else if (minutes <= 150) gPerHour = easy ? rules.carbsEasy90to150 : rules.carbsHard90to150;
+    else gPerHour = rules.carbsOver150;
+    return Math.min(gPerHour, rules.maxCarbsPerHourG);
+  }
+  // first/step minutes for the "eat every N minutes" timing marks —
+  // run and anything else not explicitly bike/swim share one
+  // convention; swim has none (see computeFueling's own swim branch).
+  const FUELING_TIMING = { run: { first: 35, step: 35 }, bike: { first: 20, step: 25 } };
+  function fuelingTimingMarks(discipline, minutes) {
+    const t = FUELING_TIMING[discipline] || FUELING_TIMING.run;
+    const marks = [];
+    for (let m = t.first; m <= minutes; m += t.step) marks.push(m);
+    return marks;
+  }
+  // Home gel recipe (maltodextrin:fructose 2:1 by weight, water equal
+  // to the maltodextrin's own grams, a pinch of pectin) for N gels of
+  // size S — see this feature's own task comment for the exact ratios.
+  function fuelingGelRecipe(gels, gelSizeG) {
+    if (!gels) return null;
+    const totalCarbsG = gels * gelSizeG;
+    const maltodextrinG = Math.round(gelSizeG * (2 / 3) * gels * 10) / 10;
+    const fructoseG = Math.round(gelSizeG * (1 / 3) * gels * 10) / 10;
+    const waterG = maltodextrinG; // same grams as the maltodextrin, per the task's own rule
+    const pectinTsp = Math.round((totalCarbsG / 90) * 0.25 * 10) / 10; // 1/4 tsp per 90g carbs, optional
+    return { gels, totalCarbsG, maltodextrinG, fructoseG, waterG, pectinTsp, sugarVersionApplicable: totalCarbsG / Math.max(1, gels) <= 60 };
+  }
+  // The one pure function this whole feature is built around:
+  // {discipline, kind, estMinutes, targetAmount?, unit?, hrPct?} + the
+  // (possibly-overridden) rules -> everything the card shows. No
+  // model, no fetch — every number is computed right here.
+  function computeFueling(session, settings) {
+    const rules = Object.assign({}, FUELING_RULES, settings || {});
+    const minutes = Math.max(0, Math.round((session && session.estMinutes) || 0));
+    const discipline = (session && session.discipline) || 'run';
+    const needed = minutes >= 60;
+    const intensity = classifyFuelingIntensity(session);
+    const carbsPerHourG = fuelingCarbsPerHour(minutes, intensity, rules);
+    const hours = minutes / 60;
+    const totalCarbsG = Math.round(carbsPerHourG * hours);
+    const gels = totalCarbsG > 0 ? Math.max(1, Math.round(totalCarbsG / rules.gelSizeG)) : 0;
+    const isSwim = discipline === 'swim';
+    const timingMarks = (!needed || isSwim) ? null : fuelingTimingMarks(discipline, minutes);
+    const timingNote = isSwim
+      ? 'Only practical in a pool at the wall; otherwise fuel before.'
+      : (timingMarks && timingMarks.length ? 'Gel at ' + timingMarks.join(', ') + ' min' : 'No gel timing needed — eat normally.');
+    return {
+      needed, minutes, discipline, intensity,
+      carbsPerHourG, totalCarbsG, gels,
+      timingMarks, timingNote,
+      recipe: fuelingGelRecipe(gels, rules.gelSizeG),
+      sugarVersionG: gels ? gels * rules.gelSizeG : 0,
+      before: needed ? { minG: rules.beforeCarbsMinG, maxG: rules.beforeCarbsMaxG } : null,
+      after: needed ? { carbsG: Math.round(rules.bodyWeightKg * rules.afterCarbsPerKg), proteinG: Math.round(rules.bodyWeightKg * rules.afterProteinPerKg * 10) / 10 } : null,
+      fluidMlPerHour: needed ? Math.round(rules.fluidMlPerHour) : null,
+      sodium: (needed && minutes >= rules.sodiumMinSessionMin) ? { minMg: rules.sodiumMinMgPerHour, maxMg: rules.sodiumMaxMgPerHour } : null,
+      footer: FUELING_FOOTER_TEXT,
+    };
+  }
+  async function fetchFuelingSettings() {
+    const secret = getSecret();
+    if (!secret) return Object.assign({}, FUELING_RULES);
+    try {
+      const r = await fetch('/api/sync-state?resource=general-settings&secret=' + encodeURIComponent(secret));
+      const j = await r.json();
+      const fueling = (j && j.ok && j.settings && j.settings.fueling && typeof j.settings.fueling === 'object') ? j.settings.fueling : {};
+      return Object.assign({}, FUELING_RULES, fueling);
+    } catch (e) { return Object.assign({}, FUELING_RULES); }
+  }
+  const FUELING_DISCIPLINE_ORDER = { bike: 0, run: 1, swim: 2 };
+  function renderFuelingHtml(sessions, settings) {
+    const ordered = sessions.slice().sort((a, b) => (FUELING_DISCIPLINE_ORDER[a.discipline] ?? 9) - (FUELING_DISCIPLINE_ORDER[b.discipline] ?? 9));
+    return ordered.map((session) => {
+      const f = computeFueling(session, settings);
+      const discLabel = f.discipline.charAt(0).toUpperCase() + f.discipline.slice(1);
+      if (!f.needed) {
+        return (
+          '<details class="tt-fueling-block"><summary>Fueling — ' + escapeHtml(discLabel) + ' (' + f.minutes + ' min): no fueling needed</summary>' +
+          '<div class="tt-fueling-body">No need, eat normally.<div class="tt-fueling-footer">' + escapeHtml(f.footer) + '</div></div></details>'
+        );
+      }
+      const recipeHtml = f.recipe
+        ? ('<h5>Home gel recipe (' + f.recipe.gels + ' gel' + (f.recipe.gels === 1 ? '' : 's') + ')</h5>' +
+           'Maltodextrin ' + f.recipe.maltodextrinG + 'g + fructose ' + f.recipe.fructoseG + 'g + water ' + f.recipe.waterG + 'g' +
+           (f.recipe.pectinTsp > 0 ? ' + pectin ' + f.recipe.pectinTsp + ' tsp (optional)' : '') + ' — ' + f.recipe.totalCarbsG + 'g carbs total.<br>' +
+           (f.recipe.sugarVersionApplicable ? 'Sugar version: table sugar ' + settings.gelSizeG + 'g per gel.' : ''))
+        : '';
+      return (
+        '<details class="tt-fueling-block" open><summary>Fueling — ' + escapeHtml(discLabel) + ' (' + f.minutes + ' min, ' + f.intensity + ')</summary>' +
+        '<div class="tt-fueling-body">' +
+          '<h5>During</h5>' +
+          f.carbsPerHourG + 'g/h carbs = ' + f.totalCarbsG + 'g total = ' + f.gels + ' gel' + (f.gels === 1 ? '' : 's') + '.<br>' +
+          escapeHtml(f.timingNote) + '<br>' +
+          'Fluid ~' + f.fluidMlPerHour + 'ml/h.' + (f.sodium ? ' Sodium ~' + f.sodium.minMg + '-' + f.sodium.maxMg + 'mg/h.' : '') +
+          '<h5>Before</h5>' + f.before.minG + '-' + f.before.maxG + 'g carbs 30-60 min before, if it\'s been 2-3h+ since your last meal.' +
+          '<h5>After</h5>' + '~' + f.after.carbsG + 'g carbs + ' + f.after.proteinG + 'g protein within 60 min.' +
+          recipeHtml +
+          '<div class="tt-fueling-footer">' + escapeHtml(f.footer) + '</div>' +
+        '</div></details>'
+      );
+    }).join('');
+  }
+  async function renderTodayFueling() {
+    const el = $$('ttFueling');
+    if (!el) return;
+    try {
+      const stored = loadStoredPlan();
+      const isCurrentWeek = !!(stored && stored.weekStart === thisWeekMondayKey() && stored.plan);
+      const plan = isCurrentWeek ? stored.plan : null;
+      const todayLayoutEntry = (plan && Array.isArray(plan.layout)) ? (plan.layout.find((d) => d.dateKey === DayLib.effectiveDateKey()) || null) : null;
+      const sessions = (todayLayoutEntry && Array.isArray(todayLayoutEntry.sessions)) ? todayLayoutEntry.sessions.filter((s) => s.discipline !== 'strength') : [];
+      if (!sessions.length) { el.innerHTML = ''; return; }
+      const settings = await fetchFuelingSettings();
+      el.innerHTML = renderFuelingHtml(sessions, settings);
+    } catch (e) { el.innerHTML = ''; }
+  }
+
   // ---------- today's recommendation cache ----------
   // Was calling api/training.js?mode=today automatically on every page
   // load/navigation — burning an Anthropic API call every time and
@@ -8962,6 +9149,11 @@ img, video, canvas, svg { max-width: 100%; }
       $$('ttText').textContent = 'Tap refresh for today\'s pick.';
       $$('ttSub').textContent = '';
     }
+    // Fueling (reported feature) — purely a function of today's
+    // already-stored plan.layout + settings, never the recommendation
+    // text itself, so it renders on page load regardless of whether
+    // Today's session has a cached pick yet.
+    renderTodayFueling();
   }
 
   async function generateTodayRecommendation() {
@@ -9092,6 +9284,21 @@ img, video, canvas, svg { max-width: 100%; }
 
       $$('ttText').textContent = json.recommendation;
       $$('ttSub').textContent = subText;
+      // Fueling (reported feature) — todayLayoutEntry is already
+      // resolved above for the backstop; reused here directly rather
+      // than re-deriving it inside renderTodayFueling a second time.
+      try {
+        const fuelingSessions = (todayLayoutEntry && Array.isArray(todayLayoutEntry.sessions)) ? todayLayoutEntry.sessions.filter((s) => s.discipline !== 'strength') : [];
+        const fuelingEl = $$('ttFueling');
+        if (fuelingEl) {
+          if (fuelingSessions.length) {
+            const fuelingSettings = await fetchFuelingSettings();
+            fuelingEl.innerHTML = renderFuelingHtml(fuelingSessions, fuelingSettings);
+          } else {
+            fuelingEl.innerHTML = '';
+          }
+        }
+      } catch (e) {}
     } catch (e) {
       $$('ttText').textContent = 'Could not get a recommendation: ' + (e.message || String(e));
     } finally {
