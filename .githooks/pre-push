@@ -15,6 +15,7 @@
 #   - tests/smoke-rhythm-cap-golden.cjs (server/client long-run-cap cross-check across 31 weeks + golden sequence + preview header)
 #   - tests/smoke-fueling.cjs (Fueling card — computeFueling golden cases, real page render, settings sanitizer)
 #   - tests/smoke-strength-core-extra.cjs (strength core-vs-optional-extra rebalance priority — classifyWeeklyStrengthRhythm, buildRebalanceLayout's STRENGTH block, todayStrengthDisplacement)
+#   - tests/smoke-activity-kind.cjs (optional run/swim activity `kind` tagging — sanitizeActivityKind, computeClaimedKindSlots, suggestActivityKindForLog, the layout strike-through)
 #
 # Installed via `git config core.hooksPath .githooks` — see this
 # repo's package.json "prepare" script (runs automatically on
@@ -195,6 +196,17 @@ if ! node tests/smoke-strength-core-extra.cjs; then
   echo "pre-push: BLOCKED — tests/smoke-strength-core-extra.cjs failed (see output above)."
   echo "pre-push: fix the reported issue(s), or run it by hand to iterate:"
   echo "pre-push:   node tests/smoke-strength-core-extra.cjs"
+  echo ""
+  exit 1
+fi
+
+echo ""
+echo "pre-push: running tests/smoke-activity-kind.cjs ..."
+if ! node tests/smoke-activity-kind.cjs; then
+  echo ""
+  echo "pre-push: BLOCKED — tests/smoke-activity-kind.cjs failed (see output above)."
+  echo "pre-push: fix the reported issue(s), or run it by hand to iterate:"
+  echo "pre-push:   node tests/smoke-activity-kind.cjs"
   echo ""
   exit 1
 fi

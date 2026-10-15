@@ -2483,6 +2483,10 @@ img, video, canvas, svg { max-width: 100%; }
             <input type="text" id="runPaceDisplay" placeholder="—" disabled>
           </div>
         </div>
+        <div class="run-field" id="runKindField" style="margin-bottom:14px" hidden>
+          <label>Kind (optional)</label>
+          <select id="runKindSelect"></select>
+        </div>
         <div class="run-field" style="margin-bottom:14px">
           <label>Perceived effort (1–5)</label>
           <div class="run-effort-row" id="runEffortRow">
@@ -5117,6 +5121,19 @@ img, video, canvas, svg { max-width: 100%; }
     }
     return null;
   }
+  // FEATURE (reported, part 1 of 2) — optional, user-settable `kind`
+  // on a run/swim activity entry, used ONLY for the layout strike-
+  // through (tpLayoutDays/computeClaimedKindSlots below); the
+  // rebalancer (computeOutstandingByDiscipline) stays entirely
+  // untouched — oldest-first chronological, exactly as before (part
+  // 2's own scope). Strength and every other discipline never get a
+  // kind — strength already matches by day-type.
+  const ACTIVITY_KIND_VALUES = { run: ['easy', 'interval', 'pace', 'long'], swim: ['technique', 'long', 'pace'] };
+  function sanitizeActivityKind(discipline, kind) {
+    const allowed = ACTIVITY_KIND_VALUES[discipline];
+    if (!allowed || typeof kind !== 'string') return '';
+    return allowed.indexOf(kind) !== -1 ? kind : '';
+  }
 
   // ============================================================
   // DUPLICATE ACTIVITY DETECTION (reported) — WHOOP auto-import and
@@ -5487,11 +5504,27 @@ img, video, canvas, svg { max-width: 100%; }
             ).join('') + '</div>' +
           '</div>'
         : '';
+      // FEATURE (reported, part 1 of 2) — same Kind selector + same
+      // pre-select rule as the manual form (suggestActivityKindForLog),
+      // scoped to run/swim drafts only. Never applied for a 'merge'
+      // draft here — a merge keeps the EXISTING entry's own kind
+      // untouched unless the user explicitly sets one (see
+      // confirmWhoopImport below), same "don't change merge behavior"
+      // rule as duration/distance already follow.
+      const draftDiscipline = disciplineForActivityType(d.type.id);
+      const kindAllowed = ACTIVITY_KIND_VALUES[draftDiscipline];
+      if (kindAllowed && d.kind === undefined) d.kind = suggestActivityKindForLog(draftDiscipline, d.dateKey);
+      const kindBlock = kindAllowed
+        ? '<select class="whoop-import-kind" data-kind-idx="' + i + '"><option value="">Kind —</option>' +
+            kindAllowed.map((k) => '<option value="' + k + '"' + (d.kind === k ? ' selected' : '') + '>' + k.charAt(0).toUpperCase() + k.slice(1) + '</option>').join('') +
+          '</select>'
+        : '';
       return '<div class="whoop-import-row">' +
         (d.duplicateOf ? '' : '<input type="checkbox" class="whoop-import-check" data-idx="' + i + '"' + (d.include ? ' checked' : '') + '>') +
         '<div class="whoop-import-main">' +
           '<div class="whoop-import-title">' + escapeHtml(d.type.name) + (d.isNew ? '<span class="whoop-import-new-badge">New type</span>' : '') + '</div>' +
           '<div class="whoop-import-sub">' + escapeHtml(d.dateKey) + ' · ' + escapeHtml(stats) + '</div>' +
+          kindBlock +
           dupBlock +
         '</div></div>';
     }).join('');
@@ -5504,6 +5537,12 @@ img, video, canvas, svg { max-width: 100%; }
         d.duplicateAction = btn.dataset.dupChoice;
         d.include = d.duplicateAction !== 'skip';
         renderWhoopImportList();
+      });
+    });
+    $$('whoopImportList').querySelectorAll('[data-kind-idx]').forEach((sel) => {
+      sel.addEventListener('change', () => {
+        const d = whoopImportDrafts[Number(sel.dataset.kindIdx)];
+        d.kind = sanitizeActivityKind(disciplineForActivityType(d.type.id), sel.value);
       });
     });
   }
@@ -5583,6 +5622,11 @@ img, video, canvas, svg { max-width: 100%; }
           const idx = activityEntries.findIndex((a) => a.id === d.duplicateOf.id);
           if (idx !== -1) {
             activityEntries[idx] = mergeActivityEntries(activityEntries[idx], { whoopId: d.whoopId, durationMin: d.durationMin, distanceKm: d.distanceKm, whoopHeartRate: d.heartRate, whoopStrain: d.strain });
+            // FEATURE (reported, part 1 of 2) — set ONLY if the user
+            // actually picked one here; never erases an existing tag
+            // on the entry being merged into, same "don't change merge
+            // behavior" rule as duration/distance above.
+            if (d.kind) activityEntries[idx].kind = d.kind;
             mergedCount++;
           }
           return;
@@ -5599,6 +5643,7 @@ img, video, canvas, svg { max-width: 100%; }
         };
         if (d.type.unitKind === 'distance' && d.distanceKm != null) entry.distanceKm = d.distanceKm;
         if (d.durationMin != null) entry.durationMin = d.durationMin;
+        if (d.kind) entry.kind = d.kind;
         activityEntries.push(entry);
         addedCount++;
         // BUG FIX (reported duplicates) — "Keep both" is remembered:
@@ -5724,6 +5769,25 @@ img, video, canvas, svg { max-width: 100%; }
     sel.value = activityTypes.some((t) => t.id === prev) ? prev : ((activityTypes[0] && activityTypes[0].id) || '');
     updateLogFormFieldsForType();
   }
+  // FEATURE (reported, part 1 of 2) — Kind selector: shown only for a
+  // run/swim activity type, options scoped to that discipline's own
+  // allowed kinds (ACTIVITY_KIND_VALUES), pre-selected ONLY per
+  // suggestActivityKindForLog's own "exactly one unmet slot" rule —
+  // never guessed from pace/duration. Re-run on both type AND date
+  // change (the rule is "for the logged date").
+  function updateRunKindField() {
+    const type = activityTypeById($$('runActivityTypeSelect').value);
+    const discipline = disciplineForActivityType(type.id);
+    const field = $$('runKindField');
+    const sel = $$('runKindSelect');
+    const allowed = ACTIVITY_KIND_VALUES[discipline];
+    if (!allowed) { field.hidden = true; sel.innerHTML = ''; return; }
+    field.hidden = false;
+    const dk = $$('runDateInput').value || DayLib.effectiveDateKey();
+    const suggested = suggestActivityKindForLog(discipline, dk);
+    sel.innerHTML = '<option value="">—</option>' + allowed.map((k) => '<option value="' + k + '">' + k.charAt(0).toUpperCase() + k.slice(1) + '</option>').join('');
+    sel.value = suggested;
+  }
   function updateLogFormFieldsForType() {
     const type = activityTypeById($$('runActivityTypeSelect').value);
     $$('runDistanceField').hidden = type.unitKind !== 'distance';
@@ -5731,6 +5795,7 @@ img, video, canvas, svg { max-width: 100%; }
     $$('runPaceField').hidden = type.unitKind !== 'distance';
     if (type.unitKind === 'distance') $$('runDistanceLabel').textContent = 'Distance (' + (type.unit || 'km') + ')';
     if (type.unitKind === 'count') $$('runCountLabel').textContent = 'Count' + (type.unit ? ' (' + type.unit + ')' : '');
+    updateRunKindField();
     updatePacePreview();
   }
 
@@ -5818,12 +5883,38 @@ img, video, canvas, svg { max-width: 100%; }
     const dayActivities = activityEntries.filter((a) => a && a.dateKey === trainingViewDateKey);
     dayActivities.forEach((a) => {
       const type = activityTypeById(a.activityTypeId);
+      // FEATURE (reported, part 1 of 2) — "Set kind" action: edits
+      // ONLY the kind field of this existing entry (no delete, no
+      // other edit) — a live select, same lightweight pattern as the
+      // log form's own Kind selector, applied immediately on change.
+      // Scoped to run/swim only (ACTIVITY_KIND_VALUES has no entry for
+      // any other discipline, so the select is simply omitted for
+      // strength/other types).
+      const discipline = disciplineForActivityType(a.activityTypeId);
+      const allowed = ACTIVITY_KIND_VALUES[discipline];
+      const kindHtml = allowed
+        ? '<select class="th-kind-select" data-activity-id="' + escapeHtml(a.id) + '"><option value="">Kind —</option>' +
+            allowed.map((k) => '<option value="' + k + '"' + (a.kind === k ? ' selected' : '') + '>' + k.charAt(0).toUpperCase() + k.slice(1) + '</option>').join('') +
+          '</select>'
+        : '';
       html += '<div class="th-run-row"><span><span class="th-run-label">' + escapeHtml(type.name) + '</span><br>' +
         escapeHtml(activityStatsLine(a)) + '</span>' +
+        kindHtml +
         (a.effort != null ? '<span>RPE ' + a.effort + '</span>' : '') + '</div>';
     });
 
     $$('trainingHistoryBody').innerHTML = html || '<div class="th-empty">Nothing logged this day.</div>';
+    $$('trainingHistoryBody').querySelectorAll('.th-kind-select').forEach((sel) => {
+      sel.addEventListener('change', () => {
+        const entry = activityEntries.find((a) => a.id === sel.dataset.activityId);
+        if (!entry) return;
+        const kind = sanitizeActivityKind(disciplineForActivityType(entry.activityTypeId), sel.value);
+        if (kind) entry.kind = kind; else delete entry.kind;
+        activitySave(activityEntries);
+        renderTrainingHistory();
+        renderWeeklyProgress();
+      });
+    });
 
     const itemCount = exerciseCount + dayActivities.length;
     $$('trainingHistoryToggleBtn').hidden = itemCount === 0;
@@ -5877,6 +5968,7 @@ img, video, canvas, svg { max-width: 100%; }
   runDistanceInput.addEventListener('input', updatePacePreview);
   runDurationInput.addEventListener('input', updatePacePreview);
   runActivityTypeSelect.addEventListener('change', updateLogFormFieldsForType);
+  runDateInput.addEventListener('change', updateRunKindField);
 
   $$('runSaveBtn').addEventListener('click', () => {
     const type = activityTypeById(runActivityTypeSelect.value);
@@ -5889,6 +5981,8 @@ img, video, canvas, svg { max-width: 100%; }
       effort: selectedEffort,
       notes: runNotesInput.value.trim(),
     };
+    const kind = sanitizeActivityKind(disciplineForActivityType(type.id), $$('runKindSelect').value);
+    if (kind) entry.kind = kind;
     if (type.unitKind === 'count') {
       const cnt = parseFloat(runCountInput.value);
       if (!cnt || cnt <= 0) { alert('Enter a count first.'); return; }
@@ -5949,6 +6043,7 @@ img, video, canvas, svg { max-width: 100%; }
     runNotesInput.value = ''; selectedEffort = null;
     document.querySelectorAll('.run-effort-pill').forEach((p) => p.classList.remove('active'));
     runDateInput.value = DayLib.effectiveDateKey();
+    updateRunKindField();
   }
 
   populateActivityTypeSelect();
@@ -6105,6 +6200,65 @@ img, video, canvas, svg { max-width: 100%; }
     } catch (e) { return null; }
   }
   function saveStoredPlan(p) { try { localStorage.setItem(PLAN_KEY, JSON.stringify(p)); } catch (e) {} }
+  // FEATURE (reported, part 1 of 2) — the Kind selector's pre-select
+  // rule: ONLY when exactly one of this week's rhythm slots for this
+  // discipline is still unmet (today's own plain same-discipline-any-
+  // date definition, same as tpLayoutDays' existing isDone below —
+  // never a kind-aware count, since no kind history should bias this
+  // decision), suggest THAT slot's kind; otherwise leave blank. Never
+  // guesses from pace/duration. Returns '' when the logged date's week
+  // isn't the currently stored plan at all (nothing reliable to count).
+  function suggestActivityKindForLog(discipline, dateKeyStr) {
+    if (discipline !== 'run' && discipline !== 'swim') return '';
+    const stored = loadStoredPlan();
+    if (!stored || !stored.plan || !Array.isArray(stored.plan.layout)) return '';
+    const weekMonday = dateKey(mondayOf(DayLib.parseDateKey(dateKeyStr)));
+    if (stored.weekStart !== weekMonday) return '';
+    const unmet = [];
+    stored.plan.layout.forEach((day) => {
+      (day.sessions || []).forEach((s) => {
+        if (s.discipline !== discipline || !s.kind) return;
+        const isDone = activityEntries.some((a) => a.dateKey === day.dateKey && disciplineForActivityType(a.activityTypeId) === discipline);
+        if (!isDone) unmet.push(s.kind);
+      });
+    });
+    return unmet.length === 1 ? unmet[0] : '';
+  }
+  // FEATURE (reported, part 1 of 2) — greedy, one-activity-per-slot
+  // allocation: a TAGGED activity (has .kind) only ever satisfies a
+  // SAME-discipline-SAME-kind rhythm slot — preferring the exact date
+  // it was logged on, else the earliest still-unmet same-kind slot
+  // this week (processed oldest-logged-activity-first for determinism).
+  // An UNTAGGED activity never enters this allocation at all — it
+  // keeps tpLayoutDays' own plain same-discipline-any-date check,
+  // completely unchanged (see that function's own isDone computation,
+  // which ORs this allocation's result in). Returns the Set of
+  // session objects (by reference, straight from plan.layout) this
+  // allocation marks done.
+  function computeClaimedKindSlots(planLayout, entries) {
+    const claimed = new Set();
+    const slotsByDiscKind = {};
+    (planLayout || []).forEach((day) => {
+      (day.sessions || []).forEach((s) => {
+        if (!s.kind) return;
+        const key = s.discipline + '|' + s.kind;
+        (slotsByDiscKind[key] || (slotsByDiscKind[key] = [])).push({ dateKey: day.dateKey, session: s });
+      });
+    });
+    Object.keys(slotsByDiscKind).forEach((key) => slotsByDiscKind[key].sort((a, b) => (a.dateKey < b.dateKey ? -1 : 1)));
+    (entries || [])
+      .filter((a) => a && a.kind)
+      .map((a) => ({ a, discipline: disciplineForActivityType(a.activityTypeId) }))
+      .filter((x) => x.discipline === 'run' || x.discipline === 'swim')
+      .sort((x, y) => (x.a.dateKey < y.a.dateKey ? -1 : 1))
+      .forEach(({ a, discipline }) => {
+        const candidates = slotsByDiscKind[discipline + '|' + a.kind] || [];
+        let pick = candidates.find((c) => c.dateKey === a.dateKey && !claimed.has(c.session));
+        if (!pick) pick = candidates.find((c) => !claimed.has(c.session));
+        if (pick) claimed.add(pick.session);
+      });
+    return claimed;
+  }
   // Discipline classification (DISCIPLINE_NAME_PATTERNS/disciplineFor
   // ActivityType) and the duplicate-activity-detection helpers that
   // depend on it have been moved up near activityTypeById's own
@@ -6531,13 +6685,20 @@ img, video, canvas, svg { max-width: 100%; }
         pcDays = Array.isArray(pcState.days) ? pcState.days : [];
       } catch (e) {}
       const WEEKDAY_SHORT = { sunday: 'Sun', monday: 'Mon', tuesday: 'Tue', wednesday: 'Wed', thursday: 'Thu', friday: 'Fri', saturday: 'Sat' };
+      // FEATURE (reported, part 1 of 2) — kind-aware strike-through.
+      // claimedKindSlots (computeClaimedKindSlots) covers every slot a
+      // TAGGED activity matched by kind; a kind-less activity still
+      // falls through to the plain same-discipline-any-date check
+      // below, completely unchanged — so an untagged log behaves
+      // exactly as it always has.
+      const claimedKindSlots = computeClaimedKindSlots(plan.layout, activityEntries);
       $$('tpLayoutDays').innerHTML = plan.layout.map((day) => {
         const sessionsHtml = day.sessions.map((s) => {
           let isDone;
           if (s.discipline === 'strength') {
             isDone = !!doneDaysMap[day.dateKey];
           } else {
-            isDone = activityEntries.some((a) => a.dateKey === day.dateKey && disciplineForActivityType(a.activityTypeId) === s.discipline);
+            isDone = claimedKindSlots.has(s) || activityEntries.some((a) => a.dateKey === day.dateKey && !a.kind && disciplineForActivityType(a.activityTypeId) === s.discipline);
           }
           // BUG FIX (reported) — names the real kind (easy/pace/long/
           // interval/technique) and, for strength, the real day-type

@@ -55,6 +55,7 @@ node tests/smoke-rebalance-backlog-named.cjs # backlog = capped by ahead-vs-rema
 node tests/smoke-rhythm-cap-golden.cjs # server/client long-run-cap cross-check across 31 weeks + golden sequence + preview header
 node tests/smoke-fueling.cjs          # Fueling card — computeFueling golden cases, real page render, settings sanitizer
 node tests/smoke-strength-core-extra.cjs # strength core (push/pull/legs) vs optional-extra (Explosive) rebalance priority — never dropped silently
+node tests/smoke-activity-kind.cjs    # optional run/swim activity `kind` tag, used only for the layout strike-through (part 1 of 2 — the rebalancer is untouched)
 ```
 
 ## Fueling
