@@ -649,6 +649,29 @@ function clauseMatchesDescriptor(clause, discipline, kind) {
   if (!kind || kind === 'auto') return true;
   return new RegExp('\\b' + kind + '\\b', 'i').test(clause);
 }
+// The model's own convention is "+"-joined clauses (buildTodaySystemPrompt's
+// own example); "," and " and " are tolerated defensively for the same
+// split, never required.
+function splitRecommendationClauses(text) {
+  return (text || '').split(/\s*\+\s*|\s*,\s*|\s+and\s+/i).map((c) => c.trim()).filter(Boolean);
+}
+// BUG FIX (reported) — a "(dropped unscheduled: ...)" annotation (this
+// file's own tail, appended below) or a retired "— was: ..." tail is
+// dead text, never a live clause — matching against it (as the old
+// whole-string ensureExhaustiveTodaySessions used to) let an invented
+// or discarded mention of a REAL session's own words fool the
+// "already mentioned" check. Both are stripped here before any clause
+// matching; the dropped-unscheduled tail is reattached verbatim after
+// appending (it's still true and still worth keeping); the retired
+// "— was:" tail is simply dropped — it was always the OVERRIDDEN
+// text, never meant to persist.
+function splitRecommendationTail(text) {
+  let m = (text || '').match(/\s\(dropped unscheduled:[^)]*\)$/);
+  if (m) return { core: text.slice(0, m.index), tail: m[0] };
+  m = (text || '').match(/\s—\swas:\s[\s\S]*$/);
+  if (m) return { core: text.slice(0, m.index), tail: '' };
+  return { core: text || '', tail: '' };
+}
 function buildAllowedRhythmDescriptors(rhythmForDay, rebalanceToday) {
   const allowed = (rhythmForDay || []).filter((e) => e.discipline !== 'rest').map((e) => ({ discipline: e.discipline, kind: e.kind }));
   if (rebalanceToday && Array.isArray(rebalanceToday.sessions)) {
@@ -662,35 +685,6 @@ function buildAllowedRhythmDescriptors(rhythmForDay, rebalanceToday) {
   }
   return allowed;
 }
-// Only called once the recommendation has ALREADY been confirmed to
-// mention the rhythm's primary entry (the caller's own fast-path
-// condition). Every "+"-joined clause (the model's own convention) is
-// checked independently against the allowlist; a single-clause
-// recommendation is handled the exact same way (one clause to check).
-// BUG FIX (reported) — the clause matching the PRIMARY rhythm entry is
-// always REPLACED with describeRhythmEntryForToday's own canonical,
-// sized description rather than kept as the model wrote it — the
-// model is never told today's real size, so its own phrasing can't
-// be trusted to include (or get) it; code already knows it from
-// todayLayoutEntry. Any OTHER kept clause (a validated rebalanceToday
-// catch-up session) is left exactly as the model wrote it — those are
-// already told their own real numbers in the prompt.
-function stripUnvalidatedRhythmClauses(recommendation, rhythmForDay, rebalanceToday, todayLayoutEntry) {
-  const clauses = recommendation.split(/\s+\+\s+/).map((c) => c.trim()).filter(Boolean);
-  const primaryEntry = rhythmForDay[0];
-  const allowed = buildAllowedRhythmDescriptors(rhythmForDay, rebalanceToday);
-  const dropped = [];
-  const kept = clauses.filter((clause) => {
-    const ok = allowed.some((d) => clauseMatchesDescriptor(clause, d.discipline, d.kind));
-    if (!ok) dropped.push(clause);
-    return ok;
-  });
-  const primaryIdx = kept.findIndex((clause) => clauseMatchesDescriptor(clause, primaryEntry.discipline, primaryEntry.kind));
-  const canonicalPrimary = describeRhythmEntryForToday(primaryEntry, todayLayoutEntry);
-  if (primaryIdx !== -1) kept[primaryIdx] = canonicalPrimary;
-  const text = kept.length ? kept.join(' + ') : canonicalPrimary;
-  return dropped.length ? text + ' (dropped unscheduled: ' + dropped.join(', ') + ')' : text;
-}
 // Phase 3.5 — the LAST-resort code check: the prompt already tells
 // the model today's rhythm entry is the default and to only deviate
 // for a short, specific list of checkable reasons (buildRhythm
@@ -699,16 +693,32 @@ function stripUnvalidatedRhythmClauses(recommendation, rhythmForDay, rebalanceTo
 // never from the model's own text, which could just assert a reason
 // that isn't real. If the model's recommendation names a different
 // discipline+kind AND none of those reasons check out, the rhythm
-// entry wins outright — same "never trust the model's pick blindly"
-// discipline as applyFeasibilityBackstop above.
+// entry's own canonical description is appended outright — same
+// "never trust the model's pick blindly" discipline as
+// applyFeasibilityBackstop above.
+//
+// BUG FIX (reported) — this used to compare the model's WHOLE text
+// against ONLY rhythmForDay[0] (today's first rhythm entry) and, on a
+// mismatch, replace the ENTIRE recommendation with that one entry's
+// own description plus a " — was: <original>" tail — discarding
+// everything else the model said (e.g. a real missed-strength pick
+// AND a real backlog chunk) into dead text no later pass ever read
+// back out of. Every "+"-joined clause is now validated independently
+// against the FULL allowed set (every rhythmForDay entry PLUS every
+// rebalanceToday session — a missed/displaced strength pick, a
+// backlog chunk, anything buildTodayRebalancePick computed), exactly
+// like stripUnvalidatedRhythmClauses already did for the "mentions
+// primary" fast path — there is no separate fast path anymore, this
+// is now the one and only path. A clause naming something not in that
+// set is dropped (named in "(dropped unscheduled: ...)", unchanged
+// format). The whole text is only ever replaced wholesale when NO
+// valid clause survives at all; otherwise today's primary rhythm
+// entry (if missing and not excused by one of the checkable reasons
+// below) is simply APPENDED, never used to blow away everything else.
 function applyRhythmBackstop(recommendation, rhythmForDay, feasibility, restrictions, whoopToday, strengthContext, rebalanceToday, todayLayoutEntry) {
   if (!Array.isArray(rhythmForDay) || !rhythmForDay.length) return recommendation;
   const entry = rhythmForDay[0]; // a second same-day session, if any, is additive on top of the primary one this backstop concerns itself with
   if (entry.discipline === 'rest') return recommendation; // nothing to default to or compare against
-  const disciplinePattern = BACKSTOP_DISCIPLINE_PATTERNS[entry.discipline];
-  const mentionsDiscipline = disciplinePattern ? disciplinePattern.test(recommendation) : false;
-  const mentionsKind = !entry.kind || entry.kind === 'auto' || new RegExp('\\b' + entry.kind + '\\b', 'i').test(recommendation);
-  if (mentionsDiscipline && mentionsKind) return stripUnvalidatedRhythmClauses(recommendation, rhythmForDay, rebalanceToday, todayLayoutEntry); // matches the rhythm -- still validate every "+"-joined clause
 
   // Restriction scope values are "running"/"strength"/"padel" (see
   // api/chat.js's propose_restriction tool) — a different vocabulary
@@ -725,7 +735,7 @@ function applyRhythmBackstop(recommendation, rhythmForDay, feasibility, restrict
   const recoveryPct = whoopToday && typeof whoopToday.recoveryPct === 'number' ? whoopToday.recoveryPct : null;
   const recoveryLow = recoveryPct != null && recoveryPct < 34 && RHYTHM_HARD_KINDS.has(entry.kind);
   const hasMissedCatchUp = entry.discipline === 'strength' && !!(strengthContext && Array.isArray(strengthContext.missedDayTypes) && strengthContext.missedDayTypes.length);
-  if (isRestricted || feasibilityKillsIt || recoveryLow || hasMissedCatchUp) return recommendation; // a real, code-checkable reason exists -- trust the model's own call
+  const primarySkipExcused = isRestricted || feasibilityKillsIt || recoveryLow || hasMissedCatchUp;
 
   // Phase 4.1 fix (reported contradiction) — the model may answer
   // "Rest"/"nothing feasible" only for one of the code-provable
@@ -733,23 +743,37 @@ function applyRhythmBackstop(recommendation, rhythmForDay, feasibility, restrict
   // so if the model STILL said Rest, trust CODE's own already-
   // validated rebalance pick (missed strength day-type / backlog
   // chunk, already capacity- and cap-checked by buildRebalanceLayout)
-  // instead of blindly restoring the raw rhythm entry — and never
-  // phrase the override as "X (today's rhythm) — was: Rest", which
-  // reads as self-contradictory (naming a real session right next to
-  // the model's own "nothing is feasible" claim).
+  // instead of blindly restoring the raw rhythm entry.
   if (REST_TEXT_RE.test(recommendation.trim())) {
+    if (primarySkipExcused) return recommendation; // a real, code-checkable reason exists -- trust the model's own "nothing feasible" call as-is
     if (rebalanceToday && Array.isArray(rebalanceToday.sessions) && rebalanceToday.sessions.length) {
       return describeRebalanceTodayPick(rebalanceToday.sessions);
     }
-    return describeRhythmEntryForToday(entry, todayLayoutEntry); // no contradictory "was: Rest" tail
+    return describeRhythmEntryForToday(entry, todayLayoutEntry);
   }
 
-  return describeRhythmEntryForToday(entry, todayLayoutEntry) + ' (today\'s rhythm) — was: ' + recommendation;
+  const allowed = buildAllowedRhythmDescriptors(rhythmForDay, rebalanceToday);
+  const clauses = splitRecommendationClauses(recommendation);
+  const dropped = [];
+  const kept = clauses.filter((clause) => {
+    const ok = allowed.some((d) => clauseMatchesDescriptor(clause, d.discipline, d.kind));
+    if (!ok) dropped.push(clause);
+    return ok;
+  });
+  const primaryIdx = kept.findIndex((clause) => clauseMatchesDescriptor(clause, entry.discipline, entry.kind));
+  const canonicalPrimary = describeRhythmEntryForToday(entry, todayLayoutEntry);
+  if (primaryIdx !== -1) {
+    kept[primaryIdx] = canonicalPrimary; // the model is never told the real size -- code's own canonical, sized text always wins for this one clause
+  } else if (!primarySkipExcused) {
+    kept.push(canonicalPrimary); // missing and not excused -- append it; never replace an otherwise-valid text wholesale
+  }
+  const text = kept.length ? kept.join(' + ') : canonicalPrimary;
+  return dropped.length ? text + ' (dropped unscheduled: ' + dropped.join(', ') + ')' : text;
 }
 // FEATURE (reported) — the title above is the model's own free text,
-// validated by applyRhythmBackstop ONLY to never invent a session
-// (stripUnvalidatedRhythmClauses) — it was never required to be
-// EXHAUSTIVE. A model may legitimately mention the primary entry plus
+// validated by applyRhythmBackstop ONLY to never invent a session —
+// it was never required to be EXHAUSTIVE. A model may legitimately
+// mention the primary entry plus
 // one more and silently omit a third same-day session, even though
 // renderTodayFueling (gym.html) reads the exact same todayLayoutEntry/
 // rebalanceToday sources and shows every one of them. This appends
@@ -786,12 +810,25 @@ function buildExhaustiveTodaySessionDescriptors(rhythmForDay, rebalanceToday, to
   });
   return out;
 }
+// BUG FIX (reported) — used to check the model's text against the
+// WHOLE final recommendation string, which can already contain a
+// "(dropped unscheduled: ...)" tail (or, before applyRhythmBackstop's
+// own fix above, a dead "— was: ..." tail) naming a REAL session's
+// own words in dead text — e.g. "Push (missed Monday)" sitting inside
+// that tail satisfied this check even though the live part of the
+// text never actually mentioned Push, so it was never appended.
+// splitRecommendationTail strips either tail off first (and
+// reattaches the dropped-unscheduled one verbatim afterward — it's
+// still true); matching itself is per CLAUSE (splitRecommendationClauses),
+// same convention applyRhythmBackstop now uses, not a whole-string test.
 function ensureExhaustiveTodaySessions(recommendation, rhythmForDay, rebalanceToday, todayLayoutEntry) {
   if (!Array.isArray(rhythmForDay) || !rhythmForDay.length) return recommendation;
+  const { core, tail } = splitRecommendationTail(recommendation);
+  const clauses = splitRecommendationClauses(core);
   const missing = buildExhaustiveTodaySessionDescriptors(rhythmForDay, rebalanceToday, todayLayoutEntry)
-    .filter((d) => !clauseMatchesDescriptor(recommendation, d.discipline, d.kind));
+    .filter((d) => !clauses.some((clause) => clauseMatchesDescriptor(clause, d.discipline, d.kind)));
   if (!missing.length) return recommendation;
-  return recommendation + ' + ' + missing.map((d) => d.text).join(' + ');
+  return core + ' + ' + missing.map((d) => d.text).join(' + ') + tail;
 }
 
 // ------------------------------------------------------------
@@ -2162,9 +2199,9 @@ function buildRebalanceTodayPromptSection(rebalanceToday) {
 // rhythm is only Push (the first run isn't until Tuesday): the model
 // correctly named Push from the rhythm, then ALSO added an interval
 // session because weekPlan.cardio.interval still had a nonzero
-// target for the week. See applyRhythmBackstop's own
-// stripUnvalidatedRhythmClauses for the code-level backstop on top of
-// this prompt-level fix.
+// target for the week. See applyRhythmBackstop's own per-clause
+// validation for the code-level backstop on top of this prompt-level
+// fix.
 function buildCardioLegacySkipNote(dayLabel) {
   return (
     'CARDIO — a weekly rhythm is configured, which is the sole source of truth for which cardio session ' +

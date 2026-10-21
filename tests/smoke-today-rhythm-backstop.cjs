@@ -42,8 +42,9 @@ const block = [
   extractConst('BACKSTOP_DISCIPLINE_PATTERNS'),
   extractFn('describeRhythmEntryForToday'),
   extractFn('clauseMatchesDescriptor'),
+  extractFn('splitRecommendationClauses'),
+  extractFn('splitRecommendationTail'),
   extractFn('buildAllowedRhythmDescriptors'),
-  extractFn('stripUnvalidatedRhythmClauses'),
   extractFn('applyRhythmBackstop'),
   extractConst('RHYTHM_HARD_KINDS'),
   extractConst('REST_TEXT_RE'),
@@ -138,6 +139,64 @@ if (r !== 'Push (missed Monday) + Swim pace 1300m + Run easy 5km') {
 r = ensureExhaustiveTodaySessions('Push (missed Monday) + Swim pace 1300m + Run easy 5km', rhythmWedLive, rebalanceTodayLive, todayLayoutEntryLive);
 if (r !== 'Push (missed Monday) + Swim pace 1300m + Run easy 5km') fail('an already-complete title must be unchanged, got ' + JSON.stringify(r));
 else ok('an already-complete title is left unchanged (no duplicate appended)');
+
+// ---- THE EXACT REPORTED LIVE CASE (this fix) — rhythmForDay's FIRST
+// entry is Swim (not Run/Strength this time); the model's own text
+// ("Push (missed Monday) + Run easy") never mentions it. Before this
+// fix, applyRhythmBackstop compared the WHOLE text against ONLY
+// rhythmForDay[0] (swim), found no match, and replaced the ENTIRE
+// recommendation with "Swim pace 1300m (today's rhythm) — was: Push
+// (missed Monday) + Run easy" — silently demoting Push/Run to dead
+// text. Every clause is now validated independently: Push and Run
+// easy both survive (they're real — Push via rebalanceToday, Run via
+// the rhythm's own entry), and Swim (missing, not excused by any
+// checkable reason) is simply APPENDED, never used to blow away the
+// rest. ----
+const rhythmWedSwimFirst = [{ discipline: 'swim', kind: 'pace' }, { discipline: 'run', kind: 'easy' }, { discipline: 'strength', kind: 'pull' }];
+// rebalanceToday also carries a real run backlog chunk for today
+// (interval catch-up, always typed kind:'easy' by buildRebalanceLayout
+// — see smoke-rebalance-same-discipline.cjs) alongside the missed
+// Push pick, exactly as the report describes.
+const rebalanceTodaySwimFirst = { sessions: [
+  { discipline: 'strength', kind: 'auto', dayType: 'Push', weekday: 'Monday' },
+  { discipline: 'run', kind: 'easy', targetAmount: 3, unit: 'km', activityName: 'Running' },
+] };
+const todayLayoutEntrySwimFirst = { sessions: [{ discipline: 'swim', targetAmount: 1300, unit: 'm' }] };
+
+r = applyRhythmBackstop('Push (missed Monday) + Run easy', rhythmWedSwimFirst, { configured: false }, [], null, null, rebalanceTodaySwimFirst, todayLayoutEntrySwimFirst);
+if (r !== 'Push (missed Monday) + Run easy + Swim pace 1300m') {
+  fail('THE EXACT ASSERTION REQUESTED (live case): expected "Push (missed Monday) + Run easy + Swim pace 1300m" with NO "— was:" tail, got ' + JSON.stringify(r));
+} else {
+  ok('live case: the backstop APPENDS the missing primary (Swim) instead of replacing the whole text — ' + JSON.stringify(r));
+}
+if (/— was:/.test(r)) fail('THE EXACT ASSERTION REQUESTED: no "— was:" tail must ever appear again, got ' + JSON.stringify(r));
+else ok('live case: no "— was:" tail — Push and Run easy both survive in the live title');
+
+// The exhaustive pass confirms the title is already complete. (Note:
+// "Run easy" stays exactly as the model wrote it, not upgraded to the
+// backlog chunk's own sized "Running 3km" — both are the SAME
+// discipline/kind, so the existing dedup-by-discipline convention
+// (buildExhaustiveTodaySessionDescriptors, untouched) treats either
+// one as satisfying the other; re-typing/re-sizing a kept clause is
+// explicitly out of scope for this fix.)
+r = ensureExhaustiveTodaySessions(r, rhythmWedSwimFirst, rebalanceTodaySwimFirst, todayLayoutEntrySwimFirst);
+if (r !== 'Push (missed Monday) + Run easy + Swim pace 1300m') {
+  fail('live case: the exhaustive pass must leave an already-complete title unchanged, got ' + JSON.stringify(r));
+} else {
+  ok('live case: exhaustive pass confirms the title is already complete — ' + JSON.stringify(r));
+}
+
+// A "— was:" style tail (the now-retired format, or any other stray
+// occurrence) must be IGNORED for matching — words sitting inside it
+// (here "Push (missed Monday)" and "Run easy") must never count as
+// already covering those real sessions, and the tail itself must
+// never survive into the final text.
+r = ensureExhaustiveTodaySessions('Swim pace 1300m (today\'s rhythm) — was: Push (missed Monday) + Run easy', rhythmWedSwimFirst, rebalanceTodaySwimFirst, todayLayoutEntrySwimFirst);
+if (!/Push \(missed Monday\)/.test(r) || !/Running 3km/.test(r) || /— was:/.test(r)) {
+  fail('THE EXACT ASSERTION REQUESTED: a "— was:" tail must be ignored for matching (Push/the run backlog chunk still get appended as real, live clauses) and must never survive into the output, got ' + JSON.stringify(r));
+} else {
+  ok('a "— was:" style tail is ignored for matching — Push and the run backlog chunk are correctly appended as live clauses, the tail itself is dropped: ' + JSON.stringify(r));
+}
 
 // A title mentioning a session NOT in the layout must still be
 // stripped by the EXISTING backstop (anti-invention rule, untouched);
