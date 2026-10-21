@@ -7429,12 +7429,31 @@ img, video, canvas, svg { max-width: 100%; }
   // which original session(s) (kind/weekday/amount) the reported
   // backlog actually came from, for the rebalancer to name in its own
   // moved/can't-fit lines instead of a generic count/message.
-  function computeOutstandingByDiscipline(activeWeekDisciplines, todayKeyStr, weeklyRhythm, planLayout, missedStrengthDayTypes) {
+  function computeOutstandingByDiscipline(activeWeekDisciplines, todayKeyStr, weeklyRhythm, planLayout, missedStrengthDayTypes, planUnplaced) {
     const hasRealRhythm = !!(weeklyRhythm && Object.keys(weeklyRhythm).some((wd) => Array.isArray(weeklyRhythm[wd]) && weeklyRhythm[wd].length));
     if (!hasRealRhythm || !Array.isArray(planLayout) || !planLayout.length) {
       return computeOutstandingByDisciplineLegacy(activeWeekDisciplines, todayKeyStr);
     }
     const monday = thisWeekMondayKey();
+    // FEATURE (reported) — a TRULY old-format unplaced entry (saved
+    // before this fix shipped: just {id, reason}, no dateKey at all)
+    // still carries two recoverable signals: the id's own
+    // "<discipline>-rhythm-<i>" prefix (buildRhythmSessionsForDiscipline's
+    // own id convention, api/training.js) names the discipline, and
+    // the reason text's own weekday mention (e.g. "...tuesday's
+    // available time...", both the old and new reason wording say
+    // this) names the day — mapped onto THIS week's own real Monday,
+    // since plan.unplaced only ever describes the single currently-
+    // stored week. Never applied once a real dateKey is already
+    // present (new-format entries, or an already-correct old one).
+    const unplacedNormalized = (planUnplaced || []).map((u) => {
+      if (!u || u.dateKey || !u.id || typeof u.reason !== 'string') return u;
+      const discMatch = ['run', 'bike', 'swim'].find((x) => u.id.indexOf(x + '-rhythm-') === 0);
+      const wdMatch = u.reason.match(/\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i);
+      if (!discMatch || !wdMatch) return u;
+      const offset = { monday: 0, tuesday: 1, wednesday: 2, thursday: 3, friday: 4, saturday: 5, sunday: 6 }[wdMatch[1].toLowerCase()];
+      return Object.assign({}, u, { discipline: u.discipline || discMatch, dateKey: addDaysKey(monday, offset) });
+    });
     const soFar = activityEntries.filter((a) => a.dateKey >= monday && a.dateKey <= todayKeyStr);
     const todayWindowOver = Date.now() >= resolveTodayBedtimeMs();
     const pastCutoffKey = todayWindowOver ? todayKeyStr : addDaysKey(todayKeyStr, -1);
@@ -7446,14 +7465,52 @@ img, video, canvas, svg { max-width: 100%; }
       return soFar.filter((a) => disciplineForActivityType(a.activityTypeId) === disc)
         .reduce((s, a) => s + (Number(a.distanceKm) || 0), 0);
     }
-    // Past rhythm sessions for a discipline, sized straight from the
-    // layout, oldest first — the exact pool this discipline's logged
-    // total is consumed against below.
-    function pastRhythmSessions(disc) {
-      return planLayout
+    // Past rhythm sessions for a discipline, oldest first — the exact
+    // pool this discipline's logged total is consumed against below.
+    // BUG FIX (reported) — a session the server couldn't place at
+    // generation time (plan.unplaced) never has a plan.layout entry,
+    // so it used to vanish from this pool entirely: a past-day rhythm
+    // session that was genuinely missed (never even attempted,
+    // calendar-wise) read as if it never existed. Each plan.unplaced
+    // entry with a real dateKey (set only for a rhythm-fixed session —
+    // see buildFinalLayout/api/training.js) in the past, not already
+    // covered by a REAL layout session that same day+discipline
+    // (never double counted), is folded in here too — sized from its
+    // own targetAmount (the server now sends this; see buildFinalLayout's
+    // own comment) or, for an OLDER stored plan saved before that fix,
+    // derived from weeklyRhythm's own entry for that weekday as a
+    // fallback. amountMatters (false for swim, a session-COUNT
+    // discipline that never reads `amount` at all) means an
+    // undeterminable size is never silently dropped for run/bike —
+    // it's returned separately as `unresolved` so the caller can
+    // report it by name instead of guessing a number.
+    function pastRhythmSessions(disc, amountMatters) {
+      const fromLayout = planLayout
         .filter((day) => day.dateKey <= pastCutoffKey)
-        .flatMap((day) => (day.sessions || []).filter((s) => s.discipline === disc).map((s) => ({ dateKey: day.dateKey, weekday: day.weekday, kind: s.kind, amount: Number(s.targetAmount) || 0 })))
-        .sort((a, b) => (a.dateKey < b.dateKey ? -1 : 1));
+        .flatMap((day) => (day.sessions || []).filter((s) => s.discipline === disc).map((s) => ({ dateKey: day.dateKey, weekday: day.weekday, kind: s.kind, amount: Number(s.targetAmount) || 0 })));
+      const coveredDates = new Set(fromLayout.map((s) => s.dateKey));
+      const sessions = fromLayout.slice();
+      const unresolved = [];
+      unplacedNormalized.forEach((u) => {
+        if (!u || !u.dateKey || u.discipline !== disc) return;
+        if (u.dateKey > pastCutoffKey) return; // not past yet -- never backlog
+        if (coveredDates.has(u.dateKey)) return; // a real layout session already covers this day+discipline -- never double counted
+        coveredDates.add(u.dateKey);
+        const weekdayKey = AVAIL_WEEKDAY_NAMES[DayLib.parseDateKey(u.dateKey).getDay()];
+        let amount = Number(u.targetAmount) || 0;
+        let kind = u.kind;
+        if (!amount && amountMatters) {
+          const rhythmEntry = ((weeklyRhythm && weeklyRhythm[weekdayKey]) || []).find((e) => e.discipline === disc);
+          if (rhythmEntry) { kind = kind || rhythmEntry.kind; amount = Number(rhythmEntry.km) || 0; }
+        }
+        if (amountMatters && !amount) {
+          unresolved.push({ dateKey: u.dateKey, weekday: weekdayKey, kind: kind || disc });
+          return;
+        }
+        sessions.push({ dateKey: u.dateKey, weekday: weekdayKey, kind, amount });
+      });
+      sessions.sort((a, b) => (a.dateKey < b.dateKey ? -1 : 1));
+      return { sessions, unresolved };
     }
     // This week's remaining rhythm sessions for a discipline (today
     // through Sunday, today only while its own window hasn't closed
@@ -7470,8 +7527,16 @@ img, video, canvas, svg { max-width: 100%; }
     ['run', 'bike'].forEach((disc) => {
       const t = d[disc];
       if (!t || !t.activityTypeId || !Number(t.km)) return; // disabled or no real target -- ignored everywhere, never backlog
-      const missedSessions = pastRhythmSessions(disc);
-      if (!missedSessions.length) return; // the rhythm hasn't placed anything on a past day yet -- nothing can be behind
+      const past = pastRhythmSessions(disc, true);
+      const missedSessions = past.sessions;
+      function withUnresolved(obj) {
+        if (past.unresolved.length) obj.unresolvedUnplaced = past.unresolved;
+        return obj;
+      }
+      if (!missedSessions.length) {
+        if (past.unresolved.length) out[disc] = withUnresolved({ targetKm: Number(t.km), doneKm: Math.round(loggedTotalFor(disc) * 10) / 10, outstandingKm: 0, activityTypeId: t.activityTypeId, activityName: t.activityName || '', missed: [] });
+        return; // the rhythm hasn't placed anything on a past day yet -- nothing else can be behind
+      }
       let pool = loggedTotalFor(disc);
       let missedKm = 0;
       const missedAmounts = []; // {dateKey, weekday, kind, amount} -- amount still unconsumed by logged volume, per original session
@@ -7483,13 +7548,19 @@ img, video, canvas, svg { max-width: 100%; }
         pool = 0;
       });
       missedKm = Math.round(missedKm * 10) / 10;
-      if (missedKm <= 0) return;
       const doneKm = Math.round(loggedTotalFor(disc) * 10) / 10;
+      if (missedKm <= 0) {
+        if (past.unresolved.length) out[disc] = withUnresolved({ targetKm: Number(t.km), doneKm, outstandingKm: 0, activityTypeId: t.activityTypeId, activityName: t.activityName || '', missed: [] });
+        return;
+      }
       const remaining = Math.max(0, Number(t.km) - doneKm);
       const aheadKm = aheadRhythmSessions(disc).reduce((s, s2) => s + (Number(s2.targetAmount) || 0), 0);
       const shortfall = Math.max(0, Math.round((remaining - aheadKm) * 10) / 10);
       const backlogKm = Math.min(missedKm, shortfall);
-      if (backlogKm <= 0) return; // ahead alone already covers what's left of the target -- the missed session is real but never becomes backlog
+      if (backlogKm <= 0) {
+        if (past.unresolved.length) out[disc] = withUnresolved({ targetKm: Number(t.km), doneKm, outstandingKm: 0, activityTypeId: t.activityTypeId, activityName: t.activityName || '', missed: [] });
+        return; // ahead alone already covers what's left of the target -- the missed session is real but never becomes backlog
+      }
       // Oldest-missed-first, up to backlogKm — names exactly which
       // original session(s) the (possibly capped) backlog came from.
       let remainingBacklog = backlogKm;
@@ -7500,14 +7571,14 @@ img, video, canvas, svg { max-width: 100%; }
         if (take > 0) missed.push({ dateKey: m.dateKey, weekday: m.weekday, kind: m.kind, amount: take });
         remainingBacklog = Math.round((remainingBacklog - take) * 10) / 10;
       }
-      out[disc] = { targetKm: Number(t.km), doneKm, outstandingKm: backlogKm, activityTypeId: t.activityTypeId, activityName: t.activityName || '', missed };
+      out[disc] = withUnresolved({ targetKm: Number(t.km), doneKm, outstandingKm: backlogKm, activityTypeId: t.activityTypeId, activityName: t.activityName || '', missed });
     });
     if (d.swim && d.swim.activityTypeId && Number(d.swim.sessions) > 0) {
       // Swim's own unit is a discrete SESSION, not a km pool — each
       // past rhythm swim session consumes exactly one logged swim
       // session (by discipline, not exact date), same chronological
       // oldest-first order.
-      const missedSessions = pastRhythmSessions('swim');
+      const missedSessions = pastRhythmSessions('swim', false).sessions;
       if (missedSessions.length) {
         let loggedSessions = soFar.filter((a) => disciplineForActivityType(a.activityTypeId) === 'swim').length;
         const missedList = [];
@@ -7855,6 +7926,14 @@ img, video, canvas, svg { max-width: 100%; }
     // first (the one existing precedent for "long" sessions), then a
     // day the rhythm already runs on, then earliest date. ---
     if (outstanding.run) {
+      // FEATURE (reported) — an unplaced-at-generation past session
+      // whose size couldn't be determined even from the weekly rhythm
+      // fallback (computeOutstandingByDiscipline's own comment) is
+      // never guessed at and never silent — named here directly,
+      // independent of whatever real km backlog exists below.
+      (outstanding.run.unresolvedUnplaced || []).forEach((u) => {
+        cantFit.push({ discipline: 'run', reason: (u.kind || 'run') + ' (missed ' + (PLAN_CARD_WEEKDAY_SHORT[u.weekday] || u.weekday) + ') — size unknown, check your weekly rhythm.' });
+      });
       let remainingKm = outstanding.run.outstandingKm;
       // BUG FIX (reported) — outstanding.run.missed (see
       // computeOutstandingByDiscipline's own comment) names exactly
@@ -8210,7 +8289,7 @@ img, video, canvas, svg { max-width: 100%; }
         }
       }
 
-      const outstanding = computeOutstandingByDiscipline(activeWeekDisciplines, todayKeyStr, weeklyRhythm, stored.plan.layout, missedDayTypes);
+      const outstanding = computeOutstandingByDiscipline(activeWeekDisciplines, todayKeyStr, weeklyRhythm, stored.plan.layout, missedDayTypes, stored.plan.unplaced);
       // BUG FIX (reported) — a SEPARATE, rhythm-INDEPENDENT "is the
       // week's target already fully met" check (the plain legacy
       // week-to-date aggregate), used only to decide whether TODAY's

@@ -57,6 +57,7 @@ node tests/smoke-fueling.cjs          # Fueling card — computeFueling golden c
 node tests/smoke-strength-core-extra.cjs # strength core (push/pull/legs) vs optional-extra (Explosive) rebalance priority — never dropped silently
 node tests/smoke-activity-kind.cjs    # optional run/swim activity `kind` tag, used only for the layout strike-through (part 1 of 2 — the rebalancer is untouched)
 node tests/smoke-today-card-staleness.cjs # Today's session card staleness — "Outdated" note after logging/retro-tagging, "Done for today", no AI call on its own
+node tests/smoke-unplaced-backlog.cjs # a past-day session unplaced at plan generation still becomes backlog instead of silently vanishing
 ```
 
 ## Fueling

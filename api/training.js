@@ -1747,6 +1747,16 @@ function buildLayoutPromptSection(sessionsToPlace, capacity) {
   );
 }
 const HARD_ADJACENT_MS = 86400000;
+// FEATURE (reported) — a short, named label for an unplaced session
+// ("interval 3km", "Push", "Swim technique 1300m") — same spirit as
+// gym.html's buildLayoutSessionLabel, used in the reason string below
+// so a generic "Does not fit Tuesday's available time" line always
+// names what didn't fit.
+function describeUnplacedSession(session) {
+  const amount = session.targetAmount ? (' ' + session.targetAmount + (session.unit || '')) : '';
+  const kindLabel = (session.kind && session.kind !== 'auto') ? session.kind : session.discipline;
+  return kindLabel + amount;
+}
 function sanitizeAssignments(raw, sessionsToPlace, perDay) {
   const validIds = new Set(sessionsToPlace.map((s) => s.id));
   const validDates = new Set(perDay.map((d) => d.dateKey));
@@ -1809,11 +1819,29 @@ function buildFinalLayout(assignments, sessionsToPlace, perDay, unplacedSeed) {
     // would already say true here in practice — this is the server's
     // own independent re-validation never trusting the client blindly.
     if (!session.dateKey && day.allowedDisciplines[session.discipline] === false) {
-      unplaced.push({ id: a.id, reason: session.discipline + ' is not allowed on ' + day.weekday + '.' });
+      unplaced.push({
+        id: a.id, reason: session.discipline + ' is not allowed on ' + day.weekday + '.',
+        discipline: session.discipline, kind: session.kind, targetAmount: session.targetAmount, unit: session.unit, dateKey: session.dateKey || null,
+      });
       return;
     }
     if (day.usedMin + session.estMinutes > day.availableMin) {
-      unplaced.push({ id: a.id, reason: 'Does not fit ' + day.weekday + '\'s available time (' + day.availableMin + ' min).' });
+      // FEATURE (reported) — names the session (e.g. "interval 3km")
+      // instead of a bare day+minutes line, and — when this IS a
+      // rhythm-fixed session (its own real dateKey, set only by
+      // buildRhythmSessionsForDiscipline) — carries its already-
+      // computed discipline/kind/targetAmount/unit/dateKey so gym.html's
+      // rebalancer can treat a PAST day's unplaced session as missed
+      // backlog instead of silently losing it (it never had anywhere
+      // else to look: plan.layout simply has no entry for it). A
+      // model-placed session (no dateKey) sends dateKey:null — the
+      // client only ever uses this for a day it doesn't already have
+      // a real layout entry for, which a model-placed session was
+      // never tied to in the first place.
+      unplaced.push({
+        id: a.id, reason: describeUnplacedSession(session) + ' — does not fit ' + day.weekday + '\'s available time (' + day.availableMin + ' min).',
+        discipline: session.discipline, kind: session.kind, targetAmount: session.targetAmount, unit: session.unit, dateKey: session.dateKey || null,
+      });
       return;
     }
     if (session.hard) {
@@ -1831,7 +1859,10 @@ function buildFinalLayout(assignments, sessionsToPlace, perDay, unplacedSeed) {
       // hardDates below, though — a model-placed hard session must
       // still avoid landing next to it.
       if (adjacent && !session.dateKey) {
-        unplaced.push({ id: a.id, reason: 'Would stack two demanding sessions on back-to-back days.' });
+        unplaced.push({
+          id: a.id, reason: describeUnplacedSession(session) + ' — would stack two demanding sessions on back-to-back days.',
+          discipline: session.discipline, kind: session.kind, targetAmount: session.targetAmount, unit: session.unit, dateKey: session.dateKey || null,
+        });
         return;
       }
       hardDates.add(a.dateKey);
@@ -1848,7 +1879,10 @@ function buildFinalLayout(assignments, sessionsToPlace, perDay, unplacedSeed) {
   // and one whose assignment got dropped by the validation above.
   sessionsToPlace.forEach((s) => {
     if (!placedIds.has(s.id) && !seededIds.has(s.id) && !unplaced.some((u) => u.id === s.id)) {
-      unplaced.push({ id: s.id, reason: 'Could not be placed — no day both allowed this discipline and had enough free time.' });
+      unplaced.push({
+        id: s.id, reason: describeUnplacedSession(s) + ' — could not be placed, no day both allowed this discipline and had enough free time.',
+        discipline: s.discipline, kind: s.kind, targetAmount: s.targetAmount, unit: s.unit, dateKey: s.dateKey || null,
+      });
     }
   });
 
