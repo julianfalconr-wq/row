@@ -119,6 +119,24 @@ function buildHtml() {
   return html;
 }
 function wait(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+// BUG FIX (reported) — this test's own comments assume "today" is
+// Monday (WEEK_PLAN's Monday session, rhythm's Push-only day) but
+// never pinned the clock, relying on the real wall-clock date. Once
+// real time moved off Monday, "today" silently became whatever
+// weekday it actually was — the assertions happened to still pass
+// (candidateKeys legitimately excluded run/interval either way) but
+// for a drifted reason, no longer the scenario this test documents.
+// Same pinClock/FixedDate technique as every other real-page test in
+// this suite that depends on "today" being a specific day.
+function pinClock(win, isoString) {
+  const FIXED_NOW = new win.Date(isoString);
+  const RealDate = win.Date;
+  class FixedDate extends RealDate {
+    constructor(...args) { return args.length ? new RealDate(...args) : new RealDate(FIXED_NOW); }
+    static now() { return FIXED_NOW.getTime(); }
+  }
+  win.Date = FixedDate;
+}
 
 const WEEK_PLAN = {
   targets: { run: { km: 20, activityTypeId: 'run1', activityName: 'Running' } },
@@ -143,9 +161,10 @@ async function runRealPageCheck() {
   const dom = new JSDOM(html, {
     url: 'https://row.test/gym.html', runScripts: 'dangerously', pretendToBeVisual: true, virtualConsole,
     beforeParse(win) {
+      pinClock(win, '2026-10-12T12:00:00Z'); // Monday, pinned regardless of actual wall-clock date
       win.localStorage.setItem('dashboard:secret', 'test-secret');
       win.sessionStorage.setItem('dashboard:unlocked', '1');
-      win.localStorage.setItem('po_coach_weekly_plan_v1', JSON.stringify({ weekStart: '2026-10-12', plan: WEEK_PLAN, generatedAt: new Date().toISOString() }));
+      win.localStorage.setItem('po_coach_weekly_plan_v1', JSON.stringify({ weekStart: '2026-10-12', plan: WEEK_PLAN, generatedAt: new win.Date().toISOString() }));
     },
   });
   const { window } = dom;
