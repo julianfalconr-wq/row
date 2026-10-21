@@ -1908,6 +1908,7 @@ img, video, canvas, svg { max-width: 100%; }
     </div>
     <div class="tp-today-text" id="ttText">Tap refresh for today's pick.</div>
     <div class="tp-today-sub" id="ttSub"></div>
+    <div class="tp-capacity-trim-note" id="ttOutdated" style="display:none">Outdated — tap refresh to update.</div>
     <div id="ttFueling"></div>
   </div>
 
@@ -5340,6 +5341,14 @@ img, video, canvas, svg { max-width: 100%; }
     try { localStorage.setItem(ACTIVITY_KEY, JSON.stringify(arr)); } catch (e) {}
     runEntries = deriveRunEntries(arr);
     try { localStorage.setItem(RUN_KEY, JSON.stringify(runEntries)); } catch (e) {}
+    // FEATURE (reported) — every activity-affecting write (manual
+    // save, WHOOP merge/import, History's "Set kind", delete) goes
+    // through this one function, so re-checking the Today card's
+    // staleness here — rather than at each of those call sites
+    // individually — covers all of them at once, present and future,
+    // with nothing to miss. Never calls the AI itself; see
+    // showCachedTodayRecommendationOrPrompt's own comment.
+    try { showCachedTodayRecommendationOrPrompt(); } catch (e) {}
   }
 
   let activityEntries = activityLoad();
@@ -6072,6 +6081,13 @@ img, video, canvas, svg { max-width: 100%; }
     // Re-rendering here, now that the real types are in, fixes the bars
     // regardless of fingerprint staleness.
     renderWeeklyProgress();
+    // FEATURE (reported) — same race, same fix, for Today's own card:
+    // its "done for today" / staleness check (showCachedTodayRecommendationOrPrompt)
+    // also runs synchronously at page-load time, before real types
+    // land, so an activity logged under a non-"Running"-id type could
+    // misread as not-done on the very first render and never
+    // self-correct once the real types arrive.
+    showCachedTodayRecommendationOrPrompt();
   });
 
   // ============================================================
@@ -9442,14 +9458,85 @@ img, video, canvas, svg { max-width: 100%; }
     }
     return cached;
   }
+  // FEATURE (reported) — a cheap, synchronous fingerprint of
+  // everything the cached text actually depends on: today's own
+  // activities (by id+kind, so a retro-tag changes it too), this
+  // week's total activity count, and the stored plan's own version
+  // (bumped by every new generation AND every rebalance). Never
+  // touches the network/rhythm resource — "cheap" means no AI call on
+  // its own, matching the task's own requirement. A mismatch means
+  // the cached TEXT may no longer reflect reality; it does not by
+  // itself trigger a new AI call (see showCachedTodayRecommendationOrPrompt
+  // below) — only an explicit refresh does that, same as before this
+  // feature existed.
+  function computeTodayCardSignature(stored) {
+    const todayKey = DayLib.effectiveDateKey();
+    const monday = thisWeekMondayKey();
+    const todayActs = activityEntries.filter((a) => a.dateKey === todayKey).map((a) => a.id + ':' + (a.kind || '')).sort().join(',');
+    const weekCount = activityEntries.filter((a) => a.dateKey >= monday).length;
+    const planVersion = stored ? ((stored.generatedAt || '') + '|' + (stored.plan && stored.plan.rebalance ? stored.plan.rebalance.computedForDateKey : '')) : '';
+    return todayActs + '||' + weekCount + '||' + planVersion;
+  }
+  // FEATURE (reported) — the exact same isDone definition tpLayoutDays
+  // already renders with (claimedKindSlots for a kind-tagged activity,
+  // the plain same-discipline-any-date check otherwise; doneDaysMap
+  // for strength) — reused here, not reinvented, so "done for today"
+  // can never disagree with what the layout section itself shows
+  // struck through.
+  function isLayoutDayFullyDone(day, claimedKindSlots, doneDaysMap) {
+    if (!day || !Array.isArray(day.sessions) || !day.sessions.length) return false;
+    return day.sessions.every((s) => {
+      if (s.discipline === 'strength') return !!doneDaysMap[day.dateKey];
+      return claimedKindSlots.has(s) || activityEntries.some((a) => a.dateKey === day.dateKey && !a.kind && disciplineForActivityType(a.activityTypeId) === s.discipline);
+    });
+  }
+  function describeFirstSessionOnDate(planLayout, dateKeyStr, pcDays) {
+    const day = (planLayout || []).find((d) => d.dateKey === dateKeyStr);
+    if (!day || !Array.isArray(day.sessions) || !day.sessions.length) return null;
+    return buildLayoutSessionLabel(day.sessions[0], pcDays);
+  }
   function showCachedTodayRecommendationOrPrompt() {
-    const cached = loadCachedTodayRecommendation();
-    if (cached) {
-      $$('ttText').textContent = cached.recommendation;
-      $$('ttSub').textContent = cached.sub || '';
-    } else {
-      $$('ttText').textContent = 'Tap refresh for today\'s pick.';
+    const stored = loadStoredPlan();
+    const isCurrentWeek = !!(stored && stored.weekStart === thisWeekMondayKey() && stored.plan && Array.isArray(stored.plan.layout));
+    const todayKey = DayLib.effectiveDateKey();
+    const todayLayoutEntry = isCurrentWeek ? (stored.plan.layout.find((d) => d.dateKey === todayKey) || null) : null;
+    let doneDaysMap = {};
+    let pcDays = [];
+    try {
+      const pcState = (window.PoCoach && window.PoCoach.getState()) || {};
+      doneDaysMap = (window.PoCoach && window.PoCoach.getDoneDays()) || {};
+      pcDays = Array.isArray(pcState.days) ? pcState.days : [];
+    } catch (e) {}
+    const claimedKindSlots = isCurrentWeek ? computeClaimedKindSlots(stored.plan.layout, activityEntries) : new Set();
+
+    if (isCurrentWeek && isLayoutDayFullyDone(todayLayoutEntry, claimedKindSlots, doneDaysMap)) {
+      // FEATURE (reported) — every one of today's real sessions is
+      // already done: a code-only, always-fresh state that outranks
+      // whatever's cached (which could only ever be stale here, since
+      // it was generated before all of this got logged).
+      const tomorrowKey = addDaysKey(todayKey, 1);
+      const tomorrowLabel = describeFirstSessionOnDate(stored.plan.layout, tomorrowKey, pcDays);
+      $$('ttText').textContent = 'Done for today!' + (tomorrowLabel ? ' Tomorrow: ' + tomorrowLabel + '.' : '');
       $$('ttSub').textContent = '';
+      $$('ttOutdated').style.display = 'none';
+    } else {
+      const cached = loadCachedTodayRecommendation();
+      if (cached) {
+        $$('ttText').textContent = cached.recommendation;
+        $$('ttSub').textContent = cached.sub || '';
+        // FEATURE (reported) — the cached TEXT can only ever go stale
+        // by the things computeTodayCardSignature tracks; a mismatch
+        // never triggers a new AI call on its own (that would just
+        // reintroduce the exact per-visit-API-call cost this cache was
+        // built to avoid) — it only flags that tapping refresh would
+        // likely change the pick.
+        const currentSig = computeTodayCardSignature(stored);
+        $$('ttOutdated').style.display = (cached.signature && cached.signature !== currentSig) ? 'block' : 'none';
+      } else {
+        $$('ttText').textContent = 'Tap refresh for today\'s pick.';
+        $$('ttSub').textContent = '';
+        $$('ttOutdated').style.display = 'none';
+      }
     }
     // Fueling (reported feature) — purely a function of today's
     // already-stored plan.layout + settings, never the recommendation
@@ -9580,12 +9667,18 @@ img, video, canvas, svg { max-width: 100%; }
             sub: subText,
             dateKey: DayLib.effectiveDateKey(),
             generatedAt: new Date().toISOString(),
+            // FEATURE (reported) — see computeTodayCardSignature's own
+            // comment; lets a later load/activity-save detect that
+            // this cached text may no longer reflect reality.
+            signature: computeTodayCardSignature(stored),
           }));
         } catch (e) {}
       }
 
       $$('ttText').textContent = json.recommendation;
       $$('ttSub').textContent = subText;
+      // A fresh refresh is, by definition, never stale.
+      $$('ttOutdated').style.display = 'none';
       // Fueling (reported feature) — todayLayoutEntry is already
       // resolved above for the backstop; reused here directly rather
       // than re-deriving it inside renderTodayFueling a second time.

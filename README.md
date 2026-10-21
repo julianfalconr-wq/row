@@ -56,6 +56,7 @@ node tests/smoke-rhythm-cap-golden.cjs # server/client long-run-cap cross-check 
 node tests/smoke-fueling.cjs          # Fueling card — computeFueling golden cases, real page render, settings sanitizer
 node tests/smoke-strength-core-extra.cjs # strength core (push/pull/legs) vs optional-extra (Explosive) rebalance priority — never dropped silently
 node tests/smoke-activity-kind.cjs    # optional run/swim activity `kind` tag, used only for the layout strike-through (part 1 of 2 — the rebalancer is untouched)
+node tests/smoke-today-card-staleness.cjs # Today's session card staleness — "Outdated" note after logging/retro-tagging, "Done for today", no AI call on its own
 ```
 
 ## Fueling
