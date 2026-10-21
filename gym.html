@@ -7742,6 +7742,25 @@ img, video, canvas, svg { max-width: 100%; }
     return o.outstandingSessions + ' session' + (o.outstandingSessions === 1 ? '' : 's');
   }
 
+  // BUG FIX (reported) — a backlog chunk must never stack a SECOND
+  // session of its OWN discipline onto a day that already has one:
+  // an ACTIVITY already logged that day (any kind, tagged or not;
+  // run/bike/swim via activityEntries, strength via the "done"
+  // workout flag) counts exactly the same as a native rhythm entry or
+  // a session this same rebalance pass already placed there (both
+  // checked separately, by the caller, via hasRhythmFor/day.sessions)
+  // — this function covers only the THIRD source, real logged
+  // volume. Different disciplines the same day are untouched (e.g.
+  // Run + Legs) — this never blocks that.
+  function dayHasLoggedActivity(dk, disc) {
+    if (disc === 'strength') {
+      let doneDays = {};
+      try { doneDays = (window.PoCoach && window.PoCoach.getDoneDays()) || {}; } catch (e) {}
+      return !!doneDays[dk];
+    }
+    return activityEntries.some((a) => a.dateKey === dk && disciplineForActivityType(a.activityTypeId) === disc);
+  }
+
   // The placement engine itself. Deterministic, code-only (see this
   // section's own header comment) -- every session placed here is
   // backlog CATCH-UP volume layered on top of whatever the weekly
@@ -7779,9 +7798,20 @@ img, video, canvas, svg { max-width: 100%; }
       return Object.assign({}, d, {
         rhythmMinutes: r.minutes, isPadel: padel, backlogBudget, backlogUsed: 0, totalBacklogUsed: 0, hasRhythmStrength, sessions: [],
         hasRhythmFor(disc) { return ((weeklyRhythm && weeklyRhythm[this.weekday]) || []).some((e) => e.discipline === disc); },
+        hasLoggedFor(disc) { return dayHasLoggedActivity(this.dateKey, disc); },
       });
     });
     const tomorrowDay = perDay[1] || null; // perDay[0] is always today itself (buildWeekCapacity starts there)
+    // BUG FIX (reported) — the SAME discipline must never be placed
+    // twice on one day: native rhythm, a session this pass already
+    // placed there, or a real logged activity (any kind) all count
+    // as "already has one". DIFFERENT disciplines the same day (even
+    // two hard ones, e.g. Run + Legs) are unaffected — this is
+    // intentionally discipline-scoped, never a general hard-session
+    // stacking rule.
+    function dayAlreadyHasDiscipline(day, disc) {
+      return day.hasRhythmFor(disc) || day.hasLoggedFor(disc) || day.sessions.some((s) => s.discipline === disc);
+    }
 
     const runPace = (outstanding.run && (recentAvgPaceMinPerKm(outstanding.run.activityTypeId) || GENERIC_FALLBACK_PACE_MIN_PER_KM)) || GENERIC_FALLBACK_PACE_MIN_PER_KM;
     const swimPace = (outstanding.swim && (recentAvgSwimPaceMinPer100m(outstanding.swim.activityTypeId) || BASIC_SWIMMER_PACE_MIN_PER_100M)) || BASIC_SWIMMER_PACE_MIN_PER_100M;
@@ -7892,7 +7922,7 @@ img, video, canvas, svg { max-width: 100%; }
         cantFit.push({ discipline: 'strength', reason: 'Strength is currently restricted — ' + displacedQueue.map((d) => d.dayType + ' (from ' + (PLAN_CARD_WEEKDAY_SHORT[d.weekday.toLowerCase()] || d.weekday) + ')').join(', ') + ' could not be rescheduled.' });
       } else {
         const todayDateKey = perDay.length ? perDay[0].dateKey : null;
-        const candidates = perDay.filter((d) => d.dateKey !== todayDateKey && d.allowedDisciplines.strength !== false && (!d.hasRhythmStrength || extraWeekdaySet.has(d.weekday))).sort((a, b) => (a.dateKey < b.dateKey ? -1 : 1));
+        const candidates = perDay.filter((d) => d.dateKey !== todayDateKey && d.allowedDisciplines.strength !== false && (!d.hasRhythmStrength || extraWeekdaySet.has(d.weekday)) && !d.hasLoggedFor('strength')).sort((a, b) => (a.dateKey < b.dateKey ? -1 : 1));
         const placed = [];
         candidates.forEach((day) => {
           if (!displacedQueue.length) return;
@@ -7923,8 +7953,13 @@ img, video, canvas, svg { max-width: 100%; }
 
     // --- RUN: one continuous pool, split across however many
     // remaining days it takes. Prefers capacity.preferredLongDay
-    // first (the one existing precedent for "long" sessions), then a
-    // day the rhythm already runs on, then earliest date. ---
+    // first (the one existing precedent for "long" sessions), then
+    // earliest date. BUG FIX (reported) — a day that already has a
+    // run (native rhythm, a session already logged today of ANY
+    // kind, or a session this same pass already placed there) is
+    // never a candidate at all — it used to be the PREFERRED one
+    // (stacking a second run on top of it), which is exactly the
+    // reported bug. ---
     if (outstanding.run) {
       // FEATURE (reported) — an unplaced-at-generation past session
       // whose size couldn't be determined even from the weekly rhythm
@@ -7945,11 +7980,10 @@ img, video, canvas, svg { max-width: 100%; }
         cantFit.push({ discipline: 'run', reason: 'Running is currently restricted — ' + (runOrigin || (remainingKm + 'km')) + ' could not be rescheduled.' });
       } else {
         const preferredDay = capacity.preferredLongDay;
-        const candidates = perDay.filter((d) => d.allowedDisciplines.run !== false).sort((a, b) => {
+        const allowedCandidates = perDay.filter((d) => d.allowedDisciplines.run !== false);
+        const candidates = allowedCandidates.filter((d) => !dayAlreadyHasDiscipline(d, 'run')).sort((a, b) => {
           const aPref = a.weekday === preferredDay ? 1 : 0, bPref = b.weekday === preferredDay ? 1 : 0;
           if (aPref !== bPref) return bPref - aPref;
-          const aRhy = a.hasRhythmFor('run') ? 1 : 0, bRhy = b.hasRhythmFor('run') ? 1 : 0;
-          if (aRhy !== bRhy) return bRhy - aRhy;
           return a.dateKey < b.dateKey ? -1 : 1;
         });
         // Chunks are tracked (not finalized into movedParts/cantFit)
@@ -8018,21 +8052,29 @@ img, video, canvas, svg { max-width: 100%; }
         // days/budget" reads like a capacity/scheduling failure even
         // when the REAL reason is that the user's own availability
         // template simply doesn't allow running on any day still left
-        // this week (candidates is empty) — a config fact, not a bug.
-        // Distinguished here so the card never misrepresents one as
-        // the other.
+        // this week (allowedCandidates is empty), OR that every
+        // remaining allowed day already has a run of its own
+        // (candidates is empty despite allowedCandidates not being) —
+        // neither is a bug. Distinguished here so the card never
+        // misrepresents one as the other.
         if (remainingKm > 0) {
-          cantFit.push(candidates.length
-            ? { discipline: 'run', reason: (runOrigin || (remainingKm + 'km')) + ' could not fit this week’s remaining days/budget.' }
-            : { discipline: 'run', reason: (runOrigin || (remainingKm + 'km')) + ' could not be rescheduled — running isn’t allowed on any remaining day this week per your availability template.' });
+          cantFit.push(!allowedCandidates.length
+            ? { discipline: 'run', reason: (runOrigin || (remainingKm + 'km')) + ' could not be rescheduled — running isn’t allowed on any remaining day this week per your availability template.' }
+            : !candidates.length
+              ? { discipline: 'run', reason: (runOrigin || (remainingKm + 'km')) + ' — every remaining day already has a run.' }
+              : { discipline: 'run', reason: (runOrigin || (remainingKm + 'km')) + ' could not fit this week’s remaining days/budget.' });
         }
       }
     }
 
     // --- SWIM: discrete sessions, at most one placed per candidate
-    // day per pass (guarantees spreading rather than stacking),
-    // preferring a day the rhythm already swims on. Swim has no
-    // restriction scope of its own (see restrictionBlocksDiscipline). ---
+    // day per pass (guarantees spreading rather than stacking). Swim
+    // has no restriction scope of its own (see
+    // restrictionBlocksDiscipline). BUG FIX (reported) — a day that
+    // already has a swim (native rhythm, a session already logged
+    // today of ANY kind, or a session this same pass already placed
+    // there) is never a candidate at all — it used to be the
+    // PREFERRED one (stacking a second swim on top of it). ---
     if (outstanding.swim) {
       // BUG FIX (reported) — outstanding.swim.missed (oldest first —
       // see computeOutstandingByDiscipline's own comment) names
@@ -8041,11 +8083,8 @@ img, video, canvas, svg { max-width: 100%; }
       // kind + original weekday instead of a generic count.
       const missed = outstanding.swim.missed || [];
       let remaining = missed.length;
-      const candidates = perDay.filter((d) => d.allowedDisciplines.swim !== false).sort((a, b) => {
-        const aRhy = a.hasRhythmFor('swim') ? 1 : 0, bRhy = b.hasRhythmFor('swim') ? 1 : 0;
-        if (aRhy !== bRhy) return bRhy - aRhy;
-        return a.dateKey < b.dateKey ? -1 : 1;
-      });
+      const allowedCandidates = perDay.filter((d) => d.allowedDisciplines.swim !== false);
+      const candidates = allowedCandidates.filter((d) => !dayAlreadyHasDiscipline(d, 'swim')).sort((a, b) => (a.dateKey < b.dateKey ? -1 : 1));
       const placedMissed = [];
       candidates.forEach((day) => {
         if (remaining <= 0) return;
@@ -8060,15 +8099,19 @@ img, video, canvas, svg { max-width: 100%; }
       if (placedMissed.length) {
         movedParts.push(placedMissed.map((p) => 'Swim ' + (p.m.kind || 'session') + ' (missed ' + (PLAN_CARD_WEEKDAY_SHORT[p.m.weekday] || p.m.weekday) + ') -> ' + (PLAN_CARD_WEEKDAY_SHORT[p.weekday] || p.weekday)).join(', '));
       }
-      // BUG FIX (reported) — same distinction as run above: no day
-      // left this week allowing swim per the availability template is
-      // a config fact, not a scheduling/capacity bug.
+      // BUG FIX (reported) — same three-way distinction as run above:
+      // no day left this week allowing swim per the availability
+      // template, vs. every remaining allowed day already having a
+      // swim of its own, vs. a genuine capacity/budget shortfall —
+      // none of the first two is a scheduling/capacity bug.
       if (remaining > 0) {
         const leftover = missed.slice(missed.length - remaining);
         const names = leftover.map((m) => 'Swim ' + (m.kind || 'session') + ' (missed ' + (PLAN_CARD_WEEKDAY_SHORT[m.weekday] || m.weekday) + ')').join(', ');
-        cantFit.push(candidates.length
-          ? { discipline: 'swim', reason: names + ' could not fit this week.' }
-          : { discipline: 'swim', reason: names + ' could not be rescheduled — swim isn’t allowed on any remaining day this week per your availability template.' });
+        cantFit.push(!allowedCandidates.length
+          ? { discipline: 'swim', reason: names + ' could not be rescheduled — swim isn’t allowed on any remaining day this week per your availability template.' }
+          : !candidates.length
+            ? { discipline: 'swim', reason: names + ' — every remaining day already has a swim.' }
+            : { discipline: 'swim', reason: names + ' could not fit this week.' });
       }
     }
 

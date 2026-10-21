@@ -167,6 +167,7 @@ function runPart2() {
     extractFn('rhythmMinutesForDay'),
     extractFn('restrictionBlocksDiscipline'),
     extractFn('describeOutstanding'),
+    extractFn('dayHasLoggedActivity'),
     extractFn('buildRebalanceLayout'),
   ].join('\n');
   vm.runInContext(block + '\nthis.buildRebalanceLayout = buildRebalanceLayout;', sandbox);

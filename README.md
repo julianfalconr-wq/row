@@ -58,6 +58,7 @@ node tests/smoke-strength-core-extra.cjs # strength core (push/pull/legs) vs opt
 node tests/smoke-activity-kind.cjs    # optional run/swim activity `kind` tag, used only for the layout strike-through (part 1 of 2 — the rebalancer is untouched)
 node tests/smoke-today-card-staleness.cjs # Today's session card staleness — "Outdated" note after logging/retro-tagging, "Done for today", no AI call on its own
 node tests/smoke-unplaced-backlog.cjs # a past-day session unplaced at plan generation still becomes backlog instead of silently vanishing
+node tests/smoke-rebalance-same-discipline.cjs # the rebalancer never places two sessions of the SAME discipline on one day — different disciplines the same day stay allowed
 ```
 
 ## Fueling
