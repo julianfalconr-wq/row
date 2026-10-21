@@ -67,6 +67,8 @@ function runPart1() {
     extractConst('AVAIL_WEEKDAY_NAMES'),
     extractFn('dateKey'),
     extractFn('addDaysKey'),
+    extractFn('mondayOf'),
+    extractFn('computeClaimedKindSlots'),
     extractFn('computeOutstandingByDisciplineLegacy'),
     extractFn('computeOutstandingByDiscipline'),
   ].join('\n');

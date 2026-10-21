@@ -55,7 +55,7 @@ function runExtractedChecks() {
   vm.createContext(sandbox);
   vm.runInContext(daylibSrc, sandbox);
   sandbox.DayLib = sandbox.window.DayLib;
-  const block = [extractFn('dateKey'), extractFn('addDaysKey'), extractFn('computeOutstandingByDisciplineLegacy'), extractFn('computeOutstandingByDiscipline')].join('\n');
+  const block = [extractFn('dateKey'), extractFn('addDaysKey'), extractFn('mondayOf'), extractFn('computeClaimedKindSlots'), extractFn('computeOutstandingByDisciplineLegacy'), extractFn('computeOutstandingByDiscipline')].join('\n');
   vm.runInContext(block + '\nthis.computeOutstandingByDiscipline = computeOutstandingByDiscipline;', sandbox);
   const computeOutstandingByDiscipline = sandbox.computeOutstandingByDiscipline;
 

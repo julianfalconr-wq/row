@@ -6251,8 +6251,17 @@ img, video, canvas, svg { max-width: 100%; }
   // which ORs this allocation's result in). Returns the Set of
   // session objects (by reference, straight from plan.layout) this
   // allocation marks done.
+  // Returns { sessions, activityIds }: sessions is the Set of real
+  // plan.layout session objects a tagged activity claimed (the layout
+  // strike-through's own original contract, unchanged); activityIds
+  // is the Set of logged-activity ids that DID the claiming — added
+  // for computeOutstandingByDiscipline (Phase 4.2, reported) so it can
+  // tell a claimed activity's km apart from one still generically
+  // available to the oldest-missed-session pool, without re-deriving
+  // the match itself a second time.
   function computeClaimedKindSlots(planLayout, entries) {
     const claimed = new Set();
+    const claimedActivityIds = new Set();
     const slotsByDiscKind = {};
     // BUG FIX (reported) — "this week" in the comment above was never
     // actually enforced: entries were matched by kind alone, with no
@@ -6284,9 +6293,9 @@ img, video, canvas, svg { max-width: 100%; }
         const candidates = slotsByDiscKind[discipline + '|' + a.kind] || [];
         let pick = candidates.find((c) => c.dateKey === a.dateKey && !claimed.has(c.session));
         if (!pick) pick = candidates.find((c) => !claimed.has(c.session));
-        if (pick) claimed.add(pick.session);
+        if (pick) { claimed.add(pick.session); claimedActivityIds.add(a.id); }
       });
-    return claimed;
+    return { sessions: claimed, activityIds: claimedActivityIds };
   }
   // Discipline classification (DISCIPLINE_NAME_PATTERNS/disciplineFor
   // ActivityType) and the duplicate-activity-detection helpers that
@@ -6720,7 +6729,7 @@ img, video, canvas, svg { max-width: 100%; }
       // falls through to the plain same-discipline-any-date check
       // below, completely unchanged — so an untagged log behaves
       // exactly as it always has.
-      const claimedKindSlots = computeClaimedKindSlots(plan.layout, activityEntries);
+      const claimedKindSlots = computeClaimedKindSlots(plan.layout, activityEntries).sessions;
       $$('tpLayoutDays').innerHTML = plan.layout.map((day) => {
         const sessionsHtml = day.sessions.map((s) => {
           let isDone;
@@ -7461,8 +7470,35 @@ img, video, canvas, svg { max-width: 100%; }
     // today's own window hasn't closed yet, otherwise tomorrow — so
     // past/ahead never overlap and never double-count the same day.
     const aheadCutoffKey = addDaysKey(pastCutoffKey, 1);
+    // BUG FIX (reported, part 2 of 2) — the SAME week-scoped kind
+    // allocation the layout's own strike-through already uses
+    // (computeClaimedKindSlots): a tagged activity claims a same-kind
+    // slot (same date preferred, else the earliest unmet same-kind
+    // slot this week) and that slot is then DONE — excluded from both
+    // the past-missed pool (pastRhythmSessions below) and the
+    // remaining/upcoming pool (aheadRhythmSessions below), exactly
+    // like a real layout session already covers a day. The claiming
+    // activity's own km is already spent on that slot, so it must
+    // never ALSO be subtracted again from the generic oldest-missed
+    // pool (unclaimedLoggedTotalFor) — that would double-count it
+    // against a DIFFERENT, unrelated missed session, which is the
+    // exact reported bug (a logged Pace run silently absorbing a
+    // missed Interval it was never meant to satisfy). `doneKm`/
+    // `doneSessions` below still read the UNFILTERED total — a
+    // claimed activity still counts toward real progress, it's only
+    // the consumption pool that must not double-spend it. Untagged
+    // activities are never claimed (computeClaimedKindSlots' own
+    // `if (!s.kind) return` upstream), so they keep the exact old
+    // flat oldest-first behavior.
+    const claimedKind = computeClaimedKindSlots(planLayout, activityEntries);
+    const claimedSessions = claimedKind.sessions;
+    const claimedActivityIds = claimedKind.activityIds;
     function loggedTotalFor(disc) {
       return soFar.filter((a) => disciplineForActivityType(a.activityTypeId) === disc)
+        .reduce((s, a) => s + (Number(a.distanceKm) || 0), 0);
+    }
+    function unclaimedLoggedTotalFor(disc) {
+      return soFar.filter((a) => disciplineForActivityType(a.activityTypeId) === disc && !claimedActivityIds.has(a.id))
         .reduce((s, a) => s + (Number(a.distanceKm) || 0), 0);
     }
     // Past rhythm sessions for a discipline, oldest first — the exact
@@ -7485,10 +7521,15 @@ img, video, canvas, svg { max-width: 100%; }
     // it's returned separately as `unresolved` so the caller can
     // report it by name instead of guessing a number.
     function pastRhythmSessions(disc, amountMatters) {
-      const fromLayout = planLayout
-        .filter((day) => day.dateKey <= pastCutoffKey)
-        .flatMap((day) => (day.sessions || []).filter((s) => s.discipline === disc).map((s) => ({ dateKey: day.dateKey, weekday: day.weekday, kind: s.kind, amount: Number(s.targetAmount) || 0 })));
-      const coveredDates = new Set(fromLayout.map((s) => s.dateKey));
+      const pastDays = planLayout.filter((day) => day.dateKey <= pastCutoffKey);
+      // coveredDates is built from EVERY real session (claimed or
+      // not) — a claimed (done) session still covers its own
+      // day+discipline for the unplaced-fallback check just below,
+      // same as before this fix; only the MISSED pool itself
+      // (fromLayout) excludes a claimed session, since it's done,
+      // never missed.
+      const coveredDates = new Set(pastDays.flatMap((day) => (day.sessions || []).filter((s) => s.discipline === disc).map(() => day.dateKey)));
+      const fromLayout = pastDays.flatMap((day) => (day.sessions || []).filter((s) => s.discipline === disc && !claimedSessions.has(s)).map((s) => ({ dateKey: day.dateKey, weekday: day.weekday, kind: s.kind, amount: Number(s.targetAmount) || 0 })));
       const sessions = fromLayout.slice();
       const unresolved = [];
       unplacedNormalized.forEach((u) => {
@@ -7516,11 +7557,14 @@ img, video, canvas, svg { max-width: 100%; }
     // through Sunday, today only while its own window hasn't closed
     // yet), sized straight from the layout — what's still scheduled
     // to cover the remaining target, regardless of whether it's been
-    // logged yet (it hasn't happened yet by definition).
+    // logged yet (it hasn't happened yet by definition) — EXCEPT a
+    // session a tagged activity already claimed (claimedSessions): a
+    // claimed slot is done, not remaining, same as pastRhythmSessions
+    // above.
     function aheadRhythmSessions(disc) {
       return planLayout
         .filter((day) => day.dateKey >= aheadCutoffKey)
-        .flatMap((day) => (day.sessions || []).filter((s) => s.discipline === disc));
+        .flatMap((day) => (day.sessions || []).filter((s) => s.discipline === disc && !claimedSessions.has(s)));
     }
     const d = activeWeekDisciplines || {};
     const out = {};
@@ -7537,7 +7581,7 @@ img, video, canvas, svg { max-width: 100%; }
         if (past.unresolved.length) out[disc] = withUnresolved({ targetKm: Number(t.km), doneKm: Math.round(loggedTotalFor(disc) * 10) / 10, outstandingKm: 0, activityTypeId: t.activityTypeId, activityName: t.activityName || '', missed: [] });
         return; // the rhythm hasn't placed anything on a past day yet -- nothing else can be behind
       }
-      let pool = loggedTotalFor(disc);
+      let pool = unclaimedLoggedTotalFor(disc);
       let missedKm = 0;
       const missedAmounts = []; // {dateKey, weekday, kind, amount} -- amount still unconsumed by logged volume, per original session
       missedSessions.forEach((sess) => {
@@ -7580,7 +7624,10 @@ img, video, canvas, svg { max-width: 100%; }
       // oldest-first order.
       const missedSessions = pastRhythmSessions('swim', false).sessions;
       if (missedSessions.length) {
-        let loggedSessions = soFar.filter((a) => disciplineForActivityType(a.activityTypeId) === 'swim').length;
+        // Same claimed-vs-generic split as run/bike's pool above — a
+        // swim activity that already claimed its OWN kind-slot never
+        // also consumes a different, unrelated missed session here.
+        let loggedSessions = soFar.filter((a) => disciplineForActivityType(a.activityTypeId) === 'swim' && !claimedActivityIds.has(a.id)).length;
         const missedList = [];
         missedSessions.forEach((sess) => { if (loggedSessions > 0) loggedSessions--; else missedList.push(sess); });
         if (missedList.length) {
@@ -9629,7 +9676,7 @@ img, video, canvas, svg { max-width: 100%; }
       doneDaysMap = (window.PoCoach && window.PoCoach.getDoneDays()) || {};
       pcDays = Array.isArray(pcState.days) ? pcState.days : [];
     } catch (e) {}
-    const claimedKindSlots = isCurrentWeek ? computeClaimedKindSlots(stored.plan.layout, activityEntries) : new Set();
+    const claimedKindSlots = isCurrentWeek ? computeClaimedKindSlots(stored.plan.layout, activityEntries).sessions : new Set();
 
     if (isCurrentWeek && isLayoutDayFullyDone(todayLayoutEntry, claimedKindSlots, doneDaysMap)) {
       // FEATURE (reported) — every one of today's real sessions is

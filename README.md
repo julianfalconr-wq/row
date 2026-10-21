@@ -59,6 +59,7 @@ node tests/smoke-activity-kind.cjs    # optional run/swim activity `kind` tag, u
 node tests/smoke-today-card-staleness.cjs # Today's session card staleness — "Outdated" note after logging/retro-tagging, "Done for today", no AI call on its own
 node tests/smoke-unplaced-backlog.cjs # a past-day session unplaced at plan generation still becomes backlog instead of silently vanishing
 node tests/smoke-rebalance-same-discipline.cjs # the rebalancer never places two sessions of the SAME discipline on one day — different disciplines the same day stay allowed
+node tests/smoke-rebalance-kind-claimed.cjs # a tagged activity's km claims its own kind-slot and is never ALSO double counted against an unrelated missed session
 ```
 
 ## Fueling
