@@ -7731,7 +7731,17 @@ img, video, canvas, svg { max-width: 100%; }
     // any cardio catch-up at once, which is not what "bounded
     // increase" was meant to prevent.
     function cardioRoomOnDay(day) {
-      let room = day.backlogBudget - day.backlogUsed;
+      // BUG FIX (reported) — backlogBudget is a fixed ceiling computed
+      // once up front; it never shrank when a displaced CORE strength
+      // session claimed real time on this SAME day (STRENGTH now runs
+      // first — see below), so cardio could still "see" its full
+      // budget and hog a day strength already needed. Bounded here by
+      // the day's actual remaining minutes after EVERYTHING already
+      // placed (native rhythm + strength + cardio so far), the same
+      // raw-room expression strengthRoomOnDay already uses — not just
+      // on "tomorrow" (the tomorrow-cap clamp below is a separate,
+      // additional bound, not a substitute for this one).
+      let room = Math.min(day.backlogBudget - day.backlogUsed, day.availableMin - day.rhythmMinutes - day.totalBacklogUsed);
       if (tomorrowDay && day.dateKey === tomorrowDay.dateKey) room = Math.min(room, tomorrowCapMin - day.totalBacklogUsed);
       return Math.max(0, room);
     }
@@ -7744,6 +7754,85 @@ img, video, canvas, svg { max-width: 100%; }
     const cantFit = [];
     const movedParts = [];
     const skippedParts = [];
+
+    // --- STRENGTH: discrete sessions, at most ONE per day overall
+    // (never on a day the rhythm already has strength -- that would
+    // stack two strength sessions the same day). FEATURE (reported) —
+    // core (push/pull/legs, or whatever isn't Explosive) vs optional-
+    // extra (Explosive, or any core-kind day beyond this week's own
+    // target — classifyWeeklyStrengthRhythm) split. Index 0 of
+    // outstanding.strength.missed is always TODAY's own pick (see
+    // computeOutstandingByDiscipline's own comment: it can only be set
+    // when missedDayTypes.length > 0, and that pick IS missedDayTypes[0]
+    // — buildTodayRebalancePick/Today's card already has it) so only
+    // anything BEYOND it still needs a slot here. todayStrengthDisplacement
+    // additionally carries today's own NATIVE rhythm entry when the pick
+    // above evicted it: a core entry needing a new slot (prepended —
+    // most urgent, it's being bumped right now), or an extra simply
+    // dropped as a neutral "skipped" note, never counted as missed. A
+    // displaced CORE entry's new slot is, in date order: the optional
+    // extra's own day (dropping it, same neutral note), otherwise the
+    // next day with no rhythm strength entry at all — never a day the
+    // rhythm already has a real (not-displaced) CORE session. Nothing
+    // left over is ever silently dropped — unplaceable, it's named in
+    // cantFit instead.
+    // BUG FIX (reported) — PRIORITY ORDER: this block now runs BEFORE
+    // run/swim cardio backlog (below), not after. A displaced CORE
+    // strength session is a forced, indivisible 45-min placement with
+    // nowhere else to go once bumped; cardio backlog is elastic (it
+    // shrinks/splits across days, see the RUN block's own chunking).
+    // Letting cardio claim a day's room FIRST could eat the exact slot
+    // (often the optional extra's own day) a displaced core session
+    // needed, silently pushing it to cantFit even though the day had
+    // room before cardio took it. Running strength first and then
+    // having cardioRoomOnDay (above) read whatever strength already
+    // used makes cardio correctly see less room on that day and shrink
+    // or spill to the next eligible day instead — native rhythm >
+    // displaced core strength > cardio backlog. ---
+    const extraWeekdaySet = new Set((strengthClassification || []).filter((e) => e.isExtra).map((e) => e.weekday));
+    const extraDayTypeByWeekday = {};
+    (strengthClassification || []).forEach((e) => { if (e.isExtra) extraDayTypeByWeekday[e.weekday] = e.dayType; });
+    if (todayStrengthDisplacement && todayStrengthDisplacement.skippedToday) {
+      skippedParts.push(todayStrengthDisplacement.skippedToday.dayType + ' skipped: weekly strength target covered');
+    }
+    const displacedQueue = [];
+    if (todayStrengthDisplacement && todayStrengthDisplacement.displacedToday) displacedQueue.push(todayStrengthDisplacement.displacedToday);
+    if (outstanding.strength) {
+      (outstanding.strength.missed || []).slice(1).forEach((m) => displacedQueue.push({ dayType: m.dayType, weekday: m.weekday }));
+    }
+    if (displacedQueue.length) {
+      if (restrictionBlocksDiscipline(restrictions, 'strength')) {
+        cantFit.push({ discipline: 'strength', reason: 'Strength is currently restricted — ' + displacedQueue.map((d) => d.dayType + ' (from ' + (PLAN_CARD_WEEKDAY_SHORT[d.weekday.toLowerCase()] || d.weekday) + ')').join(', ') + ' could not be rescheduled.' });
+      } else {
+        const todayDateKey = perDay.length ? perDay[0].dateKey : null;
+        const candidates = perDay.filter((d) => d.dateKey !== todayDateKey && d.allowedDisciplines.strength !== false && (!d.hasRhythmStrength || extraWeekdaySet.has(d.weekday))).sort((a, b) => (a.dateKey < b.dateKey ? -1 : 1));
+        const placed = [];
+        candidates.forEach((day) => {
+          if (!displacedQueue.length) return;
+          if (day.sessions.some((s) => s.discipline === 'strength')) return; // already took one this pass
+          // Landing on the optional extra's OWN day is a straight swap
+          // (that day already budgeted a strength slot — the extra's —
+          // so this adds no NEW load to it): the tomorrow-cap, meant to
+          // bound how much ADDITIONAL backlog tomorrow can absorb,
+          // doesn't apply. A genuinely free day (no rhythm strength at
+          // all) IS new load, so it still goes through the normal,
+          // capped strengthRoomOnDay.
+          const room = extraWeekdaySet.has(day.weekday) ? (day.availableMin - day.rhythmMinutes - day.totalBacklogUsed) : strengthRoomOnDay(day);
+          if (room < DEFAULT_SESSION_MINUTES.strength) return;
+          const item = displacedQueue.shift();
+          day.sessions.push({ discipline: 'strength', kind: item.dayType, targetAmount: null, unit: '', estMinutes: DEFAULT_SESSION_MINUTES.strength, isBacklog: true });
+          day.totalBacklogUsed += DEFAULT_SESSION_MINUTES.strength;
+          placed.push({ item, day });
+          if (extraWeekdaySet.has(day.weekday)) skippedParts.push(extraDayTypeByWeekday[day.weekday] + ' skipped: weekly strength target covered');
+        });
+        if (placed.length) {
+          movedParts.push(placed.map((p) => p.item.dayType + ' (moved from ' + (PLAN_CARD_WEEKDAY_SHORT[p.item.weekday.toLowerCase()] || p.item.weekday) + ' to ' + (PLAN_CARD_WEEKDAY_SHORT[p.day.weekday] || p.day.weekday) + ')').join(', '));
+        }
+        if (displacedQueue.length) {
+          cantFit.push({ discipline: 'strength', reason: displacedQueue.map((d) => d.dayType + ' (from ' + (PLAN_CARD_WEEKDAY_SHORT[d.weekday.toLowerCase()] || d.weekday) + ')').join(', ') + ' could not fit this week — no day left both allows strength and has room.' });
+        }
+      }
+    }
 
     // --- RUN: one continuous pool, split across however many
     // remaining days it takes. Prefers capacity.preferredLongDay
@@ -7885,72 +7974,6 @@ img, video, canvas, svg { max-width: 100%; }
         cantFit.push(candidates.length
           ? { discipline: 'swim', reason: names + ' could not fit this week.' }
           : { discipline: 'swim', reason: names + ' could not be rescheduled — swim isn’t allowed on any remaining day this week per your availability template.' });
-      }
-    }
-
-    // --- STRENGTH: discrete sessions, at most ONE per day overall
-    // (never on a day the rhythm already has strength -- that would
-    // stack two strength sessions the same day). FEATURE (reported) —
-    // core (push/pull/legs, or whatever isn't Explosive) vs optional-
-    // extra (Explosive, or any core-kind day beyond this week's own
-    // target — classifyWeeklyStrengthRhythm) split. Index 0 of
-    // outstanding.strength.missed is always TODAY's own pick (see
-    // computeOutstandingByDiscipline's own comment: it can only be set
-    // when missedDayTypes.length > 0, and that pick IS missedDayTypes[0]
-    // — buildTodayRebalancePick/Today's card already has it) so only
-    // anything BEYOND it still needs a slot here. todayStrengthDisplacement
-    // additionally carries today's own NATIVE rhythm entry when the pick
-    // above evicted it: a core entry needing a new slot (prepended —
-    // most urgent, it's being bumped right now), or an extra simply
-    // dropped as a neutral "skipped" note, never counted as missed. A
-    // displaced CORE entry's new slot is, in date order: the optional
-    // extra's own day (dropping it, same neutral note), otherwise the
-    // next day with no rhythm strength entry at all — never a day the
-    // rhythm already has a real (not-displaced) CORE session. Nothing
-    // left over is ever silently dropped — unplaceable, it's named in
-    // cantFit instead. ---
-    const extraWeekdaySet = new Set((strengthClassification || []).filter((e) => e.isExtra).map((e) => e.weekday));
-    const extraDayTypeByWeekday = {};
-    (strengthClassification || []).forEach((e) => { if (e.isExtra) extraDayTypeByWeekday[e.weekday] = e.dayType; });
-    if (todayStrengthDisplacement && todayStrengthDisplacement.skippedToday) {
-      skippedParts.push(todayStrengthDisplacement.skippedToday.dayType + ' skipped: weekly strength target covered');
-    }
-    const displacedQueue = [];
-    if (todayStrengthDisplacement && todayStrengthDisplacement.displacedToday) displacedQueue.push(todayStrengthDisplacement.displacedToday);
-    if (outstanding.strength) {
-      (outstanding.strength.missed || []).slice(1).forEach((m) => displacedQueue.push({ dayType: m.dayType, weekday: m.weekday }));
-    }
-    if (displacedQueue.length) {
-      if (restrictionBlocksDiscipline(restrictions, 'strength')) {
-        cantFit.push({ discipline: 'strength', reason: 'Strength is currently restricted — ' + displacedQueue.map((d) => d.dayType + ' (from ' + (PLAN_CARD_WEEKDAY_SHORT[d.weekday.toLowerCase()] || d.weekday) + ')').join(', ') + ' could not be rescheduled.' });
-      } else {
-        const todayDateKey = perDay.length ? perDay[0].dateKey : null;
-        const candidates = perDay.filter((d) => d.dateKey !== todayDateKey && d.allowedDisciplines.strength !== false && (!d.hasRhythmStrength || extraWeekdaySet.has(d.weekday))).sort((a, b) => (a.dateKey < b.dateKey ? -1 : 1));
-        const placed = [];
-        candidates.forEach((day) => {
-          if (!displacedQueue.length) return;
-          if (day.sessions.some((s) => s.discipline === 'strength')) return; // already took one this pass
-          // Landing on the optional extra's OWN day is a straight swap
-          // (that day already budgeted a strength slot — the extra's —
-          // so this adds no NEW load to it): the tomorrow-cap, meant to
-          // bound how much ADDITIONAL backlog tomorrow can absorb,
-          // doesn't apply. A genuinely free day (no rhythm strength at
-          // all) IS new load, so it still goes through the normal,
-          // capped strengthRoomOnDay.
-          const room = extraWeekdaySet.has(day.weekday) ? (day.availableMin - day.rhythmMinutes - day.totalBacklogUsed) : strengthRoomOnDay(day);
-          if (room < DEFAULT_SESSION_MINUTES.strength) return;
-          const item = displacedQueue.shift();
-          day.sessions.push({ discipline: 'strength', kind: item.dayType, targetAmount: null, unit: '', estMinutes: DEFAULT_SESSION_MINUTES.strength, isBacklog: true });
-          day.totalBacklogUsed += DEFAULT_SESSION_MINUTES.strength;
-          placed.push({ item, day });
-          if (extraWeekdaySet.has(day.weekday)) skippedParts.push(extraDayTypeByWeekday[day.weekday] + ' skipped: weekly strength target covered');
-        });
-        if (placed.length) {
-          movedParts.push(placed.map((p) => p.item.dayType + ' (moved from ' + (PLAN_CARD_WEEKDAY_SHORT[p.item.weekday.toLowerCase()] || p.item.weekday) + ' to ' + (PLAN_CARD_WEEKDAY_SHORT[p.day.weekday] || p.day.weekday) + ')').join(', '));
-        }
-        if (displacedQueue.length) {
-          cantFit.push({ discipline: 'strength', reason: displacedQueue.map((d) => d.dayType + ' (from ' + (PLAN_CARD_WEEKDAY_SHORT[d.weekday.toLowerCase()] || d.weekday) + ')').join(', ') + ' could not fit this week — no day left both allows strength and has room.' });
-        }
       }
     }
 

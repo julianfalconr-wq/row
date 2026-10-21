@@ -146,7 +146,7 @@ function runPart1() {
 // ---------------------------------------------------------------
 function runPart2() {
   const sandbox = buildSandbox();
-  sandbox.recentAvgPaceMinPerKm = () => null;
+  sandbox.recentAvgPaceMinPerKm = () => 6.25; // 45min budget = exactly 7.2km, matching the reported live case
   sandbox.recentAvgSwimPaceMinPer100m = () => null;
   const block = [
     extractConst('WEEK_DATES_WEEKDAY_ORDER'),
@@ -265,6 +265,78 @@ function runPart2() {
     }
     if (result.movedNote) fail('Case D: expected no movedNote (nothing could actually move), got ' + JSON.stringify(result.movedNote));
     else ok('Case D: no movedNote (nothing could actually move)');
+  }
+
+  // --- Case E (THE LIVE CASE) — Wed today (its own window already
+  // closed), Mon Push missed, Wed Pull evicted by Push -> needs a new
+  // slot. SAME day, an 8km run backlog (interval 3km missed Tue, easy
+  // 5km missed Wed) also wants Thursday. Before the fix, cardio ran
+  // first and consumed the whole day (45min = 7.2km) before strength
+  // ever got a chance, so Pull had nowhere left and went to cantFit.
+  // After the fix: Pull claims Thu (Explosive's slot) FIRST; cardio
+  // then correctly sees less room there and shrinks/spills onto Fri
+  // instead of monopolizing the day. ---
+  {
+    const RHYTHM = {
+      monday: [{ discipline: 'strength', kind: 'push' }],
+      wednesday: [{ discipline: 'strength', kind: 'pull' }],
+      thursday: [{ discipline: 'strength', kind: 'explosive' }],
+      saturday: [{ discipline: 'strength', kind: 'legs' }],
+    };
+    // Wednesday's own window is already closed (0 min left today) —
+    // "after the day's training," matching the live case; every other
+    // day is wide open.
+    const perDay = [
+      { weekday: 'wednesday', dateKey: '2026-10-14', availableMin: 0, allowedDisciplines: { run: true, bike: true, swim: true, strength: true } },
+      { weekday: 'thursday', dateKey: '2026-10-15', availableMin: 300, allowedDisciplines: { run: true, bike: true, swim: true, strength: true } },
+      { weekday: 'friday', dateKey: '2026-10-16', availableMin: 300, allowedDisciplines: { run: true, bike: true, swim: true, strength: true } },
+      { weekday: 'saturday', dateKey: '2026-10-17', availableMin: 300, allowedDisciplines: { run: true, bike: true, swim: true, strength: true } },
+      { weekday: 'sunday', dateKey: '2026-10-18', availableMin: 300, allowedDisciplines: { run: true, bike: true, swim: true, strength: true } },
+    ];
+    const outstanding = {
+      strength: { targetSessions: 3, doneSessions: 0, outstandingSessions: 1, missed: [{ dayType: 'Push', weekday: 'Monday' }] },
+      run: {
+        targetKm: 20, doneKm: 0, outstandingKm: 8, activityTypeId: 'run1', activityName: 'Running',
+        missed: [{ dateKey: '2026-10-13', weekday: 'tuesday', kind: 'interval', amount: 3 }, { dateKey: '2026-10-14', weekday: 'wednesday', kind: 'easy', amount: 5 }],
+      },
+    };
+    const todayStrengthDisplacement = { displacedToday: { dayType: 'Pull', weekday: 'Wednesday' }, skippedToday: null };
+    const strengthClassification = sandbox.classifyWeeklyStrengthRhythm(RHYTHM, DAYS, 3);
+    const result = buildRebalanceLayout(outstanding, capacityFrom(perDay), RHYTHM, [], {}, false, todayStrengthDisplacement, strengthClassification);
+
+    console.log('\n--- Case E (live case) Rest of week text dump ---');
+    console.log('moved=' + JSON.stringify(result.movedNote) + ' skipped=' + JSON.stringify(result.skippedNote) + ' cantFit=' + JSON.stringify(result.cantFit) + ' layout=' + JSON.stringify(result.layout));
+
+    if (!result.movedNote.includes('Pull (moved from Wed to Thu)')) {
+      fail('THE EXACT ASSERTION REQUESTED: Case E — Pull must still be placed in Thu/Explosive\'s slot despite the run backlog also wanting it, got ' + JSON.stringify(result.movedNote));
+    } else {
+      ok('Case E: Pull is placed in Thu (Explosive\'s slot) despite the competing run backlog');
+    }
+    if (result.skippedNote !== 'Explosive skipped: weekly strength target covered') {
+      fail('Case E: expected Explosive skipped, got ' + JSON.stringify(result.skippedNote));
+    } else {
+      ok('Case E: Explosive is still dropped as a neutral skip');
+    }
+    const thuDay = result.layout.find((d) => d.weekday === 'thursday');
+    const thuRunSession = thuDay && thuDay.sessions.find((s) => s.discipline === 'run');
+    if (!thuRunSession || thuRunSession.targetAmount >= 7.2) {
+      fail('THE EXACT ASSERTION REQUESTED: Case E — the run backlog on Thu must shrink below its old 7.2km (cardio no longer monopolizes the day), got ' + JSON.stringify(thuRunSession));
+    } else {
+      ok('Case E: the run backlog on Thu shrinks to ' + thuRunSession.targetAmount + 'km instead of monopolizing the day (was 7.2km before the fix)');
+    }
+    const friDay = result.layout.find((d) => d.weekday === 'friday');
+    const friRunSession = friDay && friDay.sessions.find((s) => s.discipline === 'run');
+    if (!friRunSession) {
+      fail('THE EXACT ASSERTION REQUESTED: Case E — the rest of the run backlog must spill onto Friday, got no Friday run session');
+    } else {
+      ok('Case E: the rest of the run backlog spills onto Friday — ' + friRunSession.targetAmount + 'km');
+    }
+    const totalRunKm = (thuRunSession ? thuRunSession.targetAmount : 0) + (friRunSession ? friRunSession.targetAmount : 0);
+    if (Math.abs(totalRunKm - 8) > 0.01) {
+      fail('Case E: the full 8km backlog should be accounted for (placed + cantFit), got ' + totalRunKm + 'km placed and cantFit=' + JSON.stringify(result.cantFit));
+    } else {
+      ok('Case E: the full 8km run backlog is accounted for — nothing lost, nothing silent (' + totalRunKm + 'km placed, cantFit=' + JSON.stringify(result.cantFit) + ')');
+    }
   }
 }
 
