@@ -49,11 +49,22 @@ const block = [
   extractConst('REST_TEXT_RE'),
   extractFn('describeRebalanceTodayPick'),
   extractFn('restrictedScopeSet'),
+  extractFn('buildExhaustiveTodaySessionDescriptors'),
+  extractFn('ensureExhaustiveTodaySessions'),
 ].join('\n');
 const sandbox = {};
 vm.createContext(sandbox);
-vm.runInContext(block + '\nthis.applyRhythmBackstop = applyRhythmBackstop;', sandbox);
+vm.runInContext(block + '\nthis.applyRhythmBackstop = applyRhythmBackstop; this.ensureExhaustiveTodaySessions = ensureExhaustiveTodaySessions;', sandbox);
 const applyRhythmBackstop = sandbox.applyRhythmBackstop;
+const ensureExhaustiveTodaySessions = sandbox.ensureExhaustiveTodaySessions;
+// Same two-step pipeline the mode=today handler itself runs (api/
+// training.js's one call site): the backstop first (anti-invention,
+// unchanged), then this feature strictly after it (exhaustiveness,
+// append-only).
+function todayTitle(recommendation, rhythmForDay, rebalanceToday, todayLayoutEntry) {
+  const backstopped = applyRhythmBackstop(recommendation, rhythmForDay, { configured: false }, [], null, null, rebalanceToday, todayLayoutEntry);
+  return ensureExhaustiveTodaySessions(backstopped, rhythmForDay, rebalanceToday, todayLayoutEntry);
+}
 
 let failures = 0;
 function fail(msg) { failures++; console.log('FAIL:', msg); }
@@ -98,6 +109,52 @@ const rebalanceToday = { sessions: [{ discipline: 'run', kind: 'easy', targetAmo
 r = applyRhythmBackstop('Push + Running easy 6km', rhythmMonday, { configured: false }, [], null, null, rebalanceToday);
 if (r !== 'Push + Running easy 6km') fail('a real rebalanceToday catch-up session must survive untouched, got ' + JSON.stringify(r));
 else ok('a real rebalanceToday catch-up session survives untouched: ' + JSON.stringify(r));
+
+// ---- exhaustive title (FEATURE, reported) — the title must list
+// every session in today's layout entry, same sources Fueling reads. ----
+// THE EXACT LIVE CASE: Wed rhythm = Pull (strength, primary) + Run
+// easy + Swim pace; Pull is evicted by a missed Monday Push catch-up
+// (strengthContext.missedDayTypes), so the backstop's own code-
+// checkable "hasMissedCatchUp" bypass trusts the model's text as-is —
+// "Push (missed Monday) + Swim pace 1300m" — leaving Run entirely
+// unmentioned. ensureExhaustiveTodaySessions must append it.
+const rhythmWedLive = [{ discipline: 'strength', kind: 'pull' }, { discipline: 'run', kind: 'easy' }, { discipline: 'swim', kind: 'pace' }];
+const rebalanceTodayLive = { sessions: [{ discipline: 'strength', kind: 'auto', dayType: 'Push', weekday: 'Monday' }] };
+const todayLayoutEntryLive = { sessions: [{ discipline: 'run', targetAmount: 5, unit: 'km' }, { discipline: 'swim', targetAmount: 1300, unit: 'm' }] };
+const strengthContextLive = { missedDayTypes: [{ dayType: 'Push', weekday: 'Monday' }] };
+
+r = applyRhythmBackstop('Push (missed Monday) + Swim pace 1300m', rhythmWedLive, { configured: false }, [], null, strengthContextLive, rebalanceTodayLive, todayLayoutEntryLive);
+if (r !== 'Push (missed Monday) + Swim pace 1300m') fail('setup: the backstop itself must trust this text as-is (hasMissedCatchUp bypass), got ' + JSON.stringify(r));
+else ok('setup: backstop trusts "Push (missed Monday) + Swim pace 1300m" as-is (missed catch-up bypass)');
+
+r = ensureExhaustiveTodaySessions(r, rhythmWedLive, rebalanceTodayLive, todayLayoutEntryLive);
+if (r !== 'Push (missed Monday) + Swim pace 1300m + Run easy 5km') {
+  fail('THE EXACT ASSERTION REQUESTED (live case): title must become exhaustive, got ' + JSON.stringify(r));
+} else {
+  ok('live case: title becomes exhaustive — ' + JSON.stringify(r));
+}
+
+// Title already complete -> unchanged (no duplicate appended).
+r = ensureExhaustiveTodaySessions('Push (missed Monday) + Swim pace 1300m + Run easy 5km', rhythmWedLive, rebalanceTodayLive, todayLayoutEntryLive);
+if (r !== 'Push (missed Monday) + Swim pace 1300m + Run easy 5km') fail('an already-complete title must be unchanged, got ' + JSON.stringify(r));
+else ok('an already-complete title is left unchanged (no duplicate appended)');
+
+// A title mentioning a session NOT in the layout must still be
+// stripped by the EXISTING backstop (anti-invention rule, untouched);
+// the exhaustiveness pass runs after and must not reintroduce it or
+// interfere with the strip.
+const rhythmRunOnly = [{ discipline: 'run', kind: 'easy' }];
+r = todayTitle('Run easy 5km + Bike ride 10km', rhythmRunOnly, null, { sessions: [{ discipline: 'run', targetAmount: 5, unit: 'km' }] });
+if (!/^Run easy 5km \(dropped unscheduled: Bike ride 10km\)$/.test(r)) {
+  fail('THE EXACT ASSERTION REQUESTED: an invented session (Bike ride) must still be stripped by the backstop (named only in the dropped tail, never as a live clause), got ' + JSON.stringify(r));
+} else {
+  ok('an invented session not in today\'s layout is still stripped by the backstop: ' + JSON.stringify(r));
+}
+
+// Rest day -> unchanged.
+r = todayTitle('Rest', [{ discipline: 'rest' }], null, null);
+if (r !== 'Rest') fail('a rest day must be left unchanged, got ' + JSON.stringify(r));
+else ok('a rest day is left unchanged: ' + JSON.stringify(r));
 
 // ---- real-page half: gym.html must never OFFER an unscheduled
 // cardio candidate to the model in the first place when a rhythm is

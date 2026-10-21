@@ -746,6 +746,53 @@ function applyRhythmBackstop(recommendation, rhythmForDay, feasibility, restrict
 
   return describeRhythmEntryForToday(entry, todayLayoutEntry) + ' (today\'s rhythm) — was: ' + recommendation;
 }
+// FEATURE (reported) — the title above is the model's own free text,
+// validated by applyRhythmBackstop ONLY to never invent a session
+// (stripUnvalidatedRhythmClauses) — it was never required to be
+// EXHAUSTIVE. A model may legitimately mention the primary entry plus
+// one more and silently omit a third same-day session, even though
+// renderTodayFueling (gym.html) reads the exact same todayLayoutEntry/
+// rebalanceToday sources and shows every one of them. This appends
+// (never replaces or re-validates) any REAL session those same
+// sources carry for today that the text doesn't already mention,
+// using the identical sizing/naming convention describeRhythmEntryForToday/
+// describeRebalanceTodayPick already use elsewhere for this exact
+// page — never inventing a number, never touching the anti-invention
+// rule above. Keyed by discipline (never more than one real session
+// per discipline today, same invariant buildTodayRebalancePick
+// itself relies on) so a displacement-aware pick (e.g. a missed Push
+// catch-up) always wins over a stale native rhythm entry for the same
+// discipline (e.g. today's own, since-evicted Pull).
+function buildExhaustiveTodaySessionDescriptors(rhythmForDay, rebalanceToday, todayLayoutEntry) {
+  const out = [];
+  const seen = new Set();
+  const rebalanceSessions = (rebalanceToday && Array.isArray(rebalanceToday.sessions)) ? rebalanceToday.sessions : [];
+  rebalanceSessions.forEach((s) => {
+    // A missed-strength-day-type pick names its real day type
+    // (dayType); a cardio backlog chunk carries its real targetAmount.
+    // A plain "today's rhythm" pick (buildTodayRebalancePick's own
+    // tier 3) carries neither — it falls through to the rhythmForDay
+    // backfill below instead of being described bare ("Strength"/no
+    // amount).
+    const hasRealNaming = s.discipline === 'strength' ? !!s.dayType : (s.targetAmount != null);
+    if (!hasRealNaming || seen.has(s.discipline)) return;
+    out.push({ discipline: s.discipline, kind: s.kind, text: describeRebalanceTodayPick([s]) });
+    seen.add(s.discipline);
+  });
+  (rhythmForDay || []).forEach((entry) => {
+    if (entry.discipline === 'rest' || seen.has(entry.discipline)) return;
+    out.push({ discipline: entry.discipline, kind: entry.kind, text: describeRhythmEntryForToday(entry, todayLayoutEntry) });
+    seen.add(entry.discipline);
+  });
+  return out;
+}
+function ensureExhaustiveTodaySessions(recommendation, rhythmForDay, rebalanceToday, todayLayoutEntry) {
+  if (!Array.isArray(rhythmForDay) || !rhythmForDay.length) return recommendation;
+  const missing = buildExhaustiveTodaySessionDescriptors(rhythmForDay, rebalanceToday, todayLayoutEntry)
+    .filter((d) => !clauseMatchesDescriptor(recommendation, d.discipline, d.kind));
+  if (!missing.length) return recommendation;
+  return recommendation + ' + ' + missing.map((d) => d.text).join(' + ');
+}
 
 // ------------------------------------------------------------
 // MODE: plan
@@ -2362,6 +2409,12 @@ async function handleToday(req, res, apiKey, body) {
   // buildTomorrowSystemPrompt's own comment), so forTomorrow passes
   // null there, same as the prompt's own recovery-blind framing.
   recommendation = applyRhythmBackstop(recommendation, context.rhythmForDay, context.feasibility, restrictions, forTomorrow ? null : context.whoopToday, context.strengthContext, context.rebalanceToday, forTomorrow ? null : context.todayLayoutEntry);
+  // FEATURE (reported) — TODAY only (Fueling/todayLayoutEntry are a
+  // today-specific concept); makes the title exhaustive over the same
+  // sources Fueling already reads, see ensureExhaustiveTodaySessions's
+  // own comment. Runs strictly after the backstop above, which has
+  // already stripped anything invented — this only ever appends.
+  if (!forTomorrow) recommendation = ensureExhaustiveTodaySessions(recommendation, context.rhythmForDay, context.rebalanceToday, context.todayLayoutEntry);
 
   return res.status(200).json({ ok: true, recommendation });
 }
