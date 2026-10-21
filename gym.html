@@ -6238,6 +6238,19 @@ img, video, canvas, svg { max-width: 100%; }
   function computeClaimedKindSlots(planLayout, entries) {
     const claimed = new Set();
     const slotsByDiscKind = {};
+    // BUG FIX (reported) — "this week" in the comment above was never
+    // actually enforced: entries were matched by kind alone, with no
+    // date bound, so a PRIOR week's tagged activity could claim a slot
+    // on a day it was never logged anywhere near (the fallback is
+    // "earliest unmet same-kind slot," not "earliest this week"
+    // unless the pool is pre-filtered to the week). Bounded here to
+    // the layout's own full Monday..Sunday (derived from mondayOf() on
+    // any one of its own days, not from "today" and not from just the
+    // min/max of days that happen to HAVE a session — a week with no
+    // session on, say, Monday must still exclude a Monday activity
+    // from a different week, not silently widen its own bound).
+    const weekMin = (planLayout && planLayout.length) ? dateKey(mondayOf(DayLib.parseDateKey(planLayout[0].dateKey))) : null;
+    const weekMax = weekMin ? addDaysKey(weekMin, 6) : null;
     (planLayout || []).forEach((day) => {
       (day.sessions || []).forEach((s) => {
         if (!s.kind) return;
@@ -6247,7 +6260,7 @@ img, video, canvas, svg { max-width: 100%; }
     });
     Object.keys(slotsByDiscKind).forEach((key) => slotsByDiscKind[key].sort((a, b) => (a.dateKey < b.dateKey ? -1 : 1)));
     (entries || [])
-      .filter((a) => a && a.kind)
+      .filter((a) => a && a.kind && weekMin !== null && a.dateKey >= weekMin && a.dateKey <= weekMax)
       .map((a) => ({ a, discipline: disciplineForActivityType(a.activityTypeId) }))
       .filter((x) => x.discipline === 'run' || x.discipline === 'swim')
       .sort((x, y) => (x.a.dateKey < y.a.dateKey ? -1 : 1))

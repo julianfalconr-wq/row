@@ -114,8 +114,16 @@ function pinClock(win, isoString) {
   win.Date = FixedDate;
 }
 
-function weekPlanWithRunLayout(sessionsByWeekday) {
-  const DATE_KEYS = { monday: '2026-10-12', tuesday: '2026-10-13', wednesday: '2026-10-14', thursday: '2026-10-15', friday: '2026-10-16', saturday: '2026-10-17', sunday: '2026-10-18' };
+function addDaysKeyPlain(dateKeyStr, n) {
+  const d = new Date(dateKeyStr + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+function weekPlanWithRunLayout(sessionsByWeekday, weekMonday) {
+  const monday = weekMonday || '2026-10-12';
+  const WEEKDAY_OFFSET = { monday: 0, tuesday: 1, wednesday: 2, thursday: 3, friday: 4, saturday: 5, sunday: 6 };
+  const DATE_KEYS = {};
+  Object.keys(WEEKDAY_OFFSET).forEach((wd) => { DATE_KEYS[wd] = addDaysKeyPlain(monday, WEEKDAY_OFFSET[wd]); });
   const layout = Object.keys(sessionsByWeekday).map((wd) => ({
     weekday: wd, dateKey: DATE_KEYS[wd],
     sessions: sessionsByWeekday[wd].map((kind) => ({ discipline: 'run', kind, activityTypeId: 'run1', activityName: 'Running', targetAmount: 5, unit: 'km', estMinutes: 30 })),
@@ -128,7 +136,10 @@ function weekPlanWithRunLayout(sessionsByWeekday) {
   };
 }
 
-async function loadPage(weekPlan, activities) {
+async function loadPage(weekPlan, activities, options) {
+  const opts = options || {};
+  const weekStart = opts.weekStart || '2026-10-12';
+  const pinDate = opts.pinDate || '2026-10-14T12:00:00Z'; // Wednesday of that week, by default
   const html = buildHtml();
   const consoleErrors = [];
   const virtualConsole = new VirtualConsole();
@@ -137,10 +148,10 @@ async function loadPage(weekPlan, activities) {
   const dom = new JSDOM(html, {
     url: 'https://row.test/gym.html', runScripts: 'dangerously', pretendToBeVisual: true, virtualConsole,
     beforeParse(win) {
-      pinClock(win, '2026-10-14T12:00:00Z'); // Wednesday, pinned regardless of actual wall-clock date
+      pinClock(win, pinDate); // pinned regardless of actual wall-clock date
       win.localStorage.setItem('dashboard:secret', 'test-secret');
       win.sessionStorage.setItem('dashboard:unlocked', '1');
-      win.localStorage.setItem('po_coach_weekly_plan_v1', JSON.stringify({ weekStart: '2026-10-12', plan: weekPlan, generatedAt: new win.Date().toISOString() }));
+      win.localStorage.setItem('po_coach_weekly_plan_v1', JSON.stringify({ weekStart, plan: weekPlan, generatedAt: new win.Date().toISOString() }));
       win.localStorage.setItem('po_coach_activities', JSON.stringify(activities));
       // Installed in beforeParse (BEFORE any inline <script> runs) —
       // fetchActivityTypes() is called from top-level, synchronous
@@ -244,6 +255,61 @@ async function runPart2() {
     else ok('Case 4: Wed\'s easy slot (same date, preferred) is struck');
     if (friDone) fail('THE EXACT ASSERTION REQUESTED: Case 4 — Fri\'s easy slot must NOT also be struck (one activity per slot), got done=' + friDone);
     else ok('Case 4: Fri\'s easy slot stays unmet — one activity per slot, not both struck');
+  }
+
+  // --- Case 4b (THE LIVE CASE) — layout week Mon 2026-10-19..Sun
+  // 2026-10-25, a Sunday Long slot, ZERO activities logged this week.
+  // A `long`-tagged run from the PREVIOUS week (Sun 2026-10-18) must
+  // never claim it. ---
+  {
+    const plan = weekPlanWithRunLayout({ sunday: ['long'] }, '2026-10-19');
+    const activities = [{ id: 'a1', dateKey: '2026-10-18', activityTypeId: 'run1', distanceKm: 9, durationMin: 54, effort: null, notes: '', kind: 'long' }];
+    const { window, consoleErrors } = await loadPage(plan, activities, { weekStart: '2026-10-19', pinDate: '2026-10-21T12:00:00Z' });
+    if (consoleErrors.length) fail('Case 4b (live case): page load produced console error(s): ' + consoleErrors.join(' | '));
+    else ok('Case 4b (live case): page loaded with zero console errors');
+    console.log('\n--- Live case (cross-week): "This week\'s layout" text dump ---');
+    console.log(window.document.getElementById('tpLayoutDays').textContent.replace(/\s+/g, ' ').trim());
+    const sunDone = window.document.querySelector('#tpLayoutDays .tp-layout-session').classList.contains('is-done');
+    if (sunDone) fail('THE EXACT ASSERTION REQUESTED: a previous week\'s long-tagged activity (2026-10-18) must NOT claim this week\'s Sunday Long slot, got struck=' + sunDone);
+    else ok('Case 4b (live case): Sunday Long is NOT struck — last week\'s tagged activity never crosses the week boundary');
+  }
+
+  // --- Case 4c — same layout/week, the long run is logged ON this
+  // week's own Sunday (2026-10-25) -> struck. ---
+  {
+    const plan = weekPlanWithRunLayout({ sunday: ['long'] }, '2026-10-19');
+    const activities = [{ id: 'a1', dateKey: '2026-10-25', activityTypeId: 'run1', distanceKm: 9, durationMin: 54, effort: null, notes: '', kind: 'long' }];
+    const { window, consoleErrors } = await loadPage(plan, activities, { weekStart: '2026-10-19', pinDate: '2026-10-21T12:00:00Z' });
+    if (consoleErrors.length) fail('Case 4c: page load produced console error(s): ' + consoleErrors.join(' | '));
+    const sunDone = window.document.querySelector('#tpLayoutDays .tp-layout-session').classList.contains('is-done');
+    if (!sunDone) fail('Case 4c: a long run logged on this week\'s own Sunday (2026-10-25) must strike the Sunday Long slot, got struck=' + sunDone);
+    else ok('Case 4c: a long run logged on this week\'s own Sunday strikes the Long slot');
+  }
+
+  // --- Case 4d — same layout/week, the long run is logged on a
+  // DIFFERENT day THIS SAME WEEK (Wed 2026-10-21, no Wed slot exists)
+  // -> falls back to this week's only unmet Long slot (Sunday), as
+  // designed (the fallback is scoped to the week, not unbounded). ---
+  {
+    const plan = weekPlanWithRunLayout({ sunday: ['long'] }, '2026-10-19');
+    const activities = [{ id: 'a1', dateKey: '2026-10-21', activityTypeId: 'run1', distanceKm: 9, durationMin: 54, effort: null, notes: '', kind: 'long' }];
+    const { window, consoleErrors } = await loadPage(plan, activities, { weekStart: '2026-10-19', pinDate: '2026-10-21T12:00:00Z' });
+    if (consoleErrors.length) fail('Case 4d: page load produced console error(s): ' + consoleErrors.join(' | '));
+    const sunDone = window.document.querySelector('#tpLayoutDays .tp-layout-session').classList.contains('is-done');
+    if (!sunDone) fail('THE EXACT ASSERTION REQUESTED: Case 4d — a same-week long run on a different day must fall back to this week\'s own unmet Long slot, got struck=' + sunDone);
+    else ok('Case 4d: a same-week long run (different day, no slot of its own) falls back to this week\'s own Long slot');
+  }
+
+  // --- Case 4e — a `long`-tagged run from the week AFTER the layout
+  // week (2026-11-01) must never claim it either. ---
+  {
+    const plan = weekPlanWithRunLayout({ sunday: ['long'] }, '2026-10-19');
+    const activities = [{ id: 'a1', dateKey: '2026-11-01', activityTypeId: 'run1', distanceKm: 9, durationMin: 54, effort: null, notes: '', kind: 'long' }];
+    const { window, consoleErrors } = await loadPage(plan, activities, { weekStart: '2026-10-19', pinDate: '2026-10-21T12:00:00Z' });
+    if (consoleErrors.length) fail('Case 4e: page load produced console error(s): ' + consoleErrors.join(' | '));
+    const sunDone = window.document.querySelector('#tpLayoutDays .tp-layout-session').classList.contains('is-done');
+    if (sunDone) fail('THE EXACT ASSERTION REQUESTED: Case 4e — a long-tagged activity from the week AFTER must never claim this week\'s slot, got struck=' + sunDone);
+    else ok('Case 4e: a long-tagged activity from the week AFTER never claims this week\'s slot');
   }
 
   // --- Case 5 — retro-tag via the History list's "Set kind" select:
