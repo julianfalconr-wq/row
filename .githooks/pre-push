@@ -20,6 +20,7 @@
 #   - tests/smoke-unplaced-backlog.cjs (a past-day session unplaced at generation time still becomes backlog — pastRhythmSessions/computeOutstandingByDiscipline, buildFinalLayout's enriched plan.unplaced)
 #   - tests/smoke-rebalance-same-discipline.cjs (the rebalancer never places two sessions of the SAME discipline on one day — buildRebalanceLayout's dayAlreadyHasDiscipline/dayHasLoggedActivity)
 #   - tests/smoke-rebalance-kind-claimed.cjs (computeOutstandingByDiscipline's kind-aware consumption pool — a tagged activity's km is never double counted against an unrelated missed session, reusing computeClaimedKindSlots)
+#   - tests/smoke-sync-merge.cjs (sync.js's push/pull merge — read-merge-CAS per key, never a blind whole-blob overwrite; a deleted item never reappears via a stale push from another device/tab)
 #
 # Installed via `git config core.hooksPath .githooks` — see this
 # repo's package.json "prepare" script (runs automatically on
@@ -255,6 +256,17 @@ if ! node tests/smoke-rebalance-kind-claimed.cjs; then
   echo "pre-push: BLOCKED — tests/smoke-rebalance-kind-claimed.cjs failed (see output above)."
   echo "pre-push: fix the reported issue(s), or run it by hand to iterate:"
   echo "pre-push:   node tests/smoke-rebalance-kind-claimed.cjs"
+  echo ""
+  exit 1
+fi
+
+echo ""
+echo "pre-push: running tests/smoke-sync-merge.cjs ..."
+if ! node tests/smoke-sync-merge.cjs; then
+  echo ""
+  echo "pre-push: BLOCKED — tests/smoke-sync-merge.cjs failed (see output above)."
+  echo "pre-push: fix the reported issue(s), or run it by hand to iterate:"
+  echo "pre-push:   node tests/smoke-sync-merge.cjs"
   echo ""
   exit 1
 fi

@@ -60,6 +60,7 @@ node tests/smoke-today-card-staleness.cjs # Today's session card staleness — "
 node tests/smoke-unplaced-backlog.cjs # a past-day session unplaced at plan generation still becomes backlog instead of silently vanishing
 node tests/smoke-rebalance-same-discipline.cjs # the rebalancer never places two sessions of the SAME discipline on one day — different disciplines the same day stay allowed
 node tests/smoke-rebalance-kind-claimed.cjs # a tagged activity's km claims its own kind-slot and is never ALSO double counted against an unrelated missed session
+node tests/smoke-sync-merge.cjs # sync.js's push/pull merge — read-merge-CAS per key, never a blind whole-blob overwrite; a deleted item never reappears via a stale push from another device/tab
 ```
 
 ## Fueling
