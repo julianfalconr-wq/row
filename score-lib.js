@@ -270,6 +270,26 @@
       },
     });
   }
+  // Sums plan.layout's own already-scheduled sessions (weekMonday
+  // through datePlainKey inclusive) whose activityTypeId is one
+  // computeCardioCategory's own kmDone already counts — i.e. exactly
+  // the SAME run/bike type(s) assigned to longSession/easyVolume,
+  // never swim (swim's own unit is meters, and its activityTypeId is
+  // never in assignedTypeIds in the first place, so it's excluded by
+  // construction, not a special case here). Returns null (never 0)
+  // when planLayout itself is missing/unusable — the caller's own
+  // signal to fall back to the old blind proration instead.
+  function expectedCardioKmFromLayout(planLayout, assignedTypeIds, weekMondayPlainKey, datePlainKey) {
+    if (!Array.isArray(planLayout) || !planLayout.length) return null;
+    let sum = 0;
+    planLayout.forEach((day) => {
+      if (!day || !day.dateKey || day.dateKey < weekMondayPlainKey || day.dateKey > datePlainKey) return;
+      (day.sessions || []).forEach((s) => {
+        if (s && assignedTypeIds.has(s.activityTypeId)) sum += Number(s.targetAmount) || 0;
+      });
+    });
+    return Math.round(sum * 10) / 10;
+  }
   function computeCardioCategory(datePlainKey, weekMondayPlainKey) {
     let activities = [];
     try { activities = JSON.parse(localStorage.getItem('po_coach_activities')) || []; } catch (e) { activities = []; }
@@ -313,10 +333,36 @@
     if (!kmTarget) return { available: false, reason: 'no cardio target this week' };
     const soFar = activities.filter((a) => a && assignedTypeIds.has(a.activityTypeId) && a.dateKey >= weekMondayPlainKey && a.dateKey <= datePlainKey);
     const kmDone = Math.round(soFar.reduce((s, a) => s + (Number(a.distanceKm) || 0), 0) * 10) / 10;
+    // BUG FIX (reported) — the OLD "expected" was a blind calendar-day
+    // proration (kmTarget * (dayIdx+1)/7) that owed an equal 1/7th
+    // share of the WEEKLY target on every day regardless of which
+    // days the real rhythm actually schedules cardio on — a Monday
+    // with no cardio at all (e.g. rhythm = Strength only, first run
+    // Tuesday) still "owed" 1/7 of the week's km and scored Cardio 0
+    // even though nothing was actually missed yet. expectedCardioKm
+    // (below) sums plan.layout's own already-scheduled run/bike
+    // sessions through today instead — the SAME source
+    // computeOutstandingByDiscipline (gym.html) already treats as
+    // ground truth for "what's actually due by now" — so a day with
+    // nothing scheduled correctly expects 0 (falling through to the
+    // existing expected>0?...:1 fallback for full credit), not a
+    // fraction of the week's total. Swim sessions are deliberately
+    // excluded (their own unit is meters, never mixed into this km
+    // figure) — matches assignedTypeIds above, which was never
+    // populated from swim either. Falls back to the OLD proration
+    // only when plan.layout itself is missing/unusable for this week
+    // (an older plan generated before the layout feature existed, or
+    // one whose own generation never got a layout) — the SAME
+    // weekStart gate just above already guarantees any layout found
+    // here is for the right week.
     const dayIdx = mondayBasedDayIndex(datePlainKey);
-    const expected = kmTarget * ((dayIdx + 1) / 7);
+    const layoutExpected = expectedCardioKmFromLayout(plan.plan.layout, assignedTypeIds, weekMondayPlainKey, datePlainKey);
+    const expected = layoutExpected != null ? layoutExpected : kmTarget * ((dayIdx + 1) / 7);
     const fraction = expected > 0 ? Math.min(1, kmDone / expected) : 1;
-    return { available: true, fraction, label: 'Cardio pace', detail: kmDone + ' / ' + kmTarget + ' km this week' };
+    const detail = layoutExpected != null
+      ? kmDone + ' / ' + expected + ' km so far (' + kmTarget + ' this week)'
+      : kmDone + ' / ' + kmTarget + ' km this week';
+    return { available: true, fraction, label: 'Cardio pace', detail };
   }
   function combineTrainingFraction(strength, cardio, whoopStrainToday) {
     if (whoopStrainToday && whoopStrainToday.available && whoopStrainToday.strain >= 18) {
