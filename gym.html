@@ -6717,8 +6717,9 @@ img, video, canvas, svg { max-width: 100%; }
       $$('tpLayoutSection').style.display = 'block';
       let doneDaysMap = {};
       let pcDays = [];
+      let pcState = {};
       try {
-        const pcState = (window.PoCoach && window.PoCoach.getState()) || {};
+        pcState = (window.PoCoach && window.PoCoach.getState()) || {};
         doneDaysMap = (window.PoCoach && window.PoCoach.getDoneDays()) || {};
         pcDays = Array.isArray(pcState.days) ? pcState.days : [];
       } catch (e) {}
@@ -6730,11 +6731,16 @@ img, video, canvas, svg { max-width: 100%; }
       // below, completely unchanged — so an untagged log behaves
       // exactly as it always has.
       const claimedKindSlots = computeClaimedKindSlots(plan.layout, activityEntries).sessions;
+      // BUG FIX (reported, part 2 of 2) — the strength equivalent of
+      // claimedKindSlots: a strength log claims its week's same-day-
+      // type slot (see computeClaimedStrengthDaySlots) even when logged
+      // on a different date than that slot's own day.
+      const claimedStrengthDaySlots = computeClaimedStrengthDaySlots(plan.layout, pcState).sessions;
       $$('tpLayoutDays').innerHTML = plan.layout.map((day) => {
         const sessionsHtml = day.sessions.map((s) => {
           let isDone;
           if (s.discipline === 'strength') {
-            isDone = !!doneDaysMap[day.dateKey];
+            isDone = !!doneDaysMap[day.dateKey] || claimedStrengthDaySlots.has(s);
           } else {
             isDone = claimedKindSlots.has(s) || activityEntries.some((a) => a.dateKey === day.dateKey && !a.kind && disciplineForActivityType(a.activityTypeId) === s.discipline);
           }
@@ -8201,7 +8207,7 @@ img, video, canvas, svg { max-width: 100%; }
   // LOWEST priority tier by design. Such a rhythm entry is now routed
   // to a separate `extras` list instead — reported, never the main
   // pick, never silently dropped either.
-  function buildTodayRebalancePick(missedDayTypes, todayLayoutEntry, rhythmForDay, targetsNotYetMet) {
+  function buildTodayRebalancePick(missedDayTypes, todayLayoutEntry, rhythmForDay, targetsNotYetMet, claimedStrengthDayTypes, days) {
     const sessions = [];
     const cantFit = [];
     const extras = [];
@@ -8250,6 +8256,17 @@ img, video, canvas, svg { max-width: 100%; }
     // "can't fit" instead of silently vanishing.
     (rhythmForDay || []).forEach((entry) => {
       if (satisfied.has(entry.discipline) || entry.discipline === 'rest') return;
+      // BUG FIX (reported) — today's own native strength day-type,
+      // already claimed this week by an EARLIER log on a different
+      // date (computeClaimedStrengthDaySlots — e.g. Pull logged
+      // Tuesday, rhythm's own Pull day is Wednesday) is already done:
+      // it must never be recommended again just because its native day
+      // has arrived, same as This week's layout already shows it
+      // struck through.
+      if (entry.discipline === 'strength' && claimedStrengthDayTypes) {
+        const dayType = resolveRhythmStrengthDayType(days || [], entry.kind);
+        if (dayType && claimedStrengthDayTypes.has(dayType)) return;
+      }
       // BUG FIX (reported) — a rhythm entry for a discipline whose
       // WHOLE-WEEK target is already fully met (no key in
       // `targetsNotYetMet` — the plain legacy week-to-date aggregate,
@@ -8414,7 +8431,12 @@ img, video, canvas, svg { max-width: 100%; }
       }
 
       const todayLayoutEntry = result.layout.find((d) => d.dateKey === todayKeyStr) || null;
-      const todayPick = buildTodayRebalancePick(missedDayTypes, todayLayoutEntry, rhythmForDay, targetsNotYetMet);
+      // BUG FIX (reported) — the same week-scoped strength day-type
+      // claim the layout's own strike-through uses (computeClaimedStrengthDaySlots),
+      // so Today's pick never re-recommends a native rhythm day-type
+      // an earlier log this week already satisfied.
+      const claimedStrengthDayTypes = computeClaimedStrengthDaySlots(stored.plan.layout, state).dayTypes;
+      const todayPick = buildTodayRebalancePick(missedDayTypes, todayLayoutEntry, rhythmForDay, targetsNotYetMet, claimedStrengthDayTypes, state.days);
 
       let emptyReason = null;
       // BUG FIX (reported) — todayPick.sessions ALWAYS includes
@@ -8847,6 +8869,67 @@ img, video, canvas, svg { max-width: 100%; }
       core.slice(targetSessions).forEach((e) => { e.isExtra = true; });
     }
     return entries;
+  }
+  // BUG FIX (reported) — strength's own week-scoped, day-type-aware
+  // slot claim, mirroring computeClaimedKindSlots's shape for run/swim
+  // (bound to the layout's own Monday..Sunday, same-date-first then
+  // earliest-unclaimed), but by DAY TYPE instead of a kind tag, since a
+  // strength log carries no kind of its own — it's derived the exact
+  // same way missedDayTypesThisWeek already derives it (an ad-hoc log's
+  // own exercise day, or a Routine-runner log's routine.linkedDayTypes)
+  // so a Pull logged early in the week (e.g. Tuesday, rhythm's Pull day
+  // is Wednesday) claims that week's Pull slot instead of leaving it
+  // unstruck. One session per slot — a second log of an already-claimed
+  // type claims nothing further. Untagged/unresolvable logs claim
+  // nothing, same as before this feature existed.
+  function computeClaimedStrengthDaySlots(planLayout, state) {
+    const claimed = new Set();
+    const claimedDayTypes = new Set();
+    if (!Array.isArray(planLayout) || !planLayout.length) return { sessions: claimed, dayTypes: claimedDayTypes };
+    const weekMin = dateKey(mondayOf(DayLib.parseDateKey(planLayout[0].dateKey)));
+    const weekMax = addDaysKey(weekMin, 6);
+    const days = Array.isArray(state.days) ? state.days : [];
+    const slotsByType = {};
+    planLayout.forEach((day) => {
+      (day.sessions || []).forEach((s) => {
+        if (s.discipline !== 'strength') return;
+        const dayType = resolveRhythmStrengthDayType(days, s.kind);
+        if (!dayType) return;
+        (slotsByType[dayType] || (slotsByType[dayType] = [])).push({ dateKey: day.dateKey, session: s });
+      });
+    });
+    Object.keys(slotsByType).forEach((key) => slotsByType[key].sort((a, b) => (a.dateKey < b.dateKey ? -1 : 1)));
+    const exDayById = {};
+    (state.exercises || []).forEach((ex) => { exDayById[ex.id] = ex.day; });
+    const dayNameById = {};
+    days.forEach((d) => { dayNameById[d.id] = d.name; });
+    const routineById = {};
+    (state.routines || []).forEach((r) => { routineById[r.id] = r; });
+    const loggedEntries = [];
+    const logs = state.logs || {};
+    Object.keys(logs).forEach((exId) => {
+      const dayId = exDayById[exId];
+      const exDayName = dayId != null ? dayNameById[dayId] : null;
+      (logs[exId] || []).forEach((log) => {
+        if (!log.date) return;
+        const dk = DayLib.effectiveDateKey(new Date(log.date));
+        if (dk < weekMin || dk > weekMax) return;
+        const routine = log.routineId ? routineById[log.routineId] : null;
+        const linkedDayNames = (routine && Array.isArray(routine.linkedDayTypes) && routine.linkedDayTypes.length)
+          ? routine.linkedDayTypes.map((id) => dayNameById[id]).filter(Boolean)
+          : null;
+        if (linkedDayNames && linkedDayNames.length) linkedDayNames.forEach((name) => loggedEntries.push({ dateKey: dk, dayType: name }));
+        else if (exDayName) loggedEntries.push({ dateKey: dk, dayType: exDayName });
+      });
+    });
+    loggedEntries.sort((a, b) => (a.dateKey < b.dateKey ? -1 : 1));
+    loggedEntries.forEach(({ dateKey: dk, dayType }) => {
+      const candidates = slotsByType[dayType] || [];
+      let pick = candidates.find((c) => c.dateKey === dk && !claimed.has(c.session));
+      if (!pick) pick = candidates.find((c) => !claimed.has(c.session));
+      if (pick) { claimed.add(pick.session); claimedDayTypes.add(dayType); }
+    });
+    return { sessions: claimed, dayTypes: claimedDayTypes };
   }
   // rhythm (optional) — the full weekly rhythm object. For each
   // earlier day this week, a TYPED strength rhythm entry (kind other
@@ -9652,10 +9735,10 @@ img, video, canvas, svg { max-width: 100%; }
   // for strength) — reused here, not reinvented, so "done for today"
   // can never disagree with what the layout section itself shows
   // struck through.
-  function isLayoutDayFullyDone(day, claimedKindSlots, doneDaysMap) {
+  function isLayoutDayFullyDone(day, claimedKindSlots, doneDaysMap, claimedStrengthDaySlots) {
     if (!day || !Array.isArray(day.sessions) || !day.sessions.length) return false;
     return day.sessions.every((s) => {
-      if (s.discipline === 'strength') return !!doneDaysMap[day.dateKey];
+      if (s.discipline === 'strength') return !!doneDaysMap[day.dateKey] || (claimedStrengthDaySlots && claimedStrengthDaySlots.has(s));
       return claimedKindSlots.has(s) || activityEntries.some((a) => a.dateKey === day.dateKey && !a.kind && disciplineForActivityType(a.activityTypeId) === s.discipline);
     });
   }
@@ -9671,14 +9754,16 @@ img, video, canvas, svg { max-width: 100%; }
     const todayLayoutEntry = isCurrentWeek ? (stored.plan.layout.find((d) => d.dateKey === todayKey) || null) : null;
     let doneDaysMap = {};
     let pcDays = [];
+    let pcState = {};
     try {
-      const pcState = (window.PoCoach && window.PoCoach.getState()) || {};
+      pcState = (window.PoCoach && window.PoCoach.getState()) || {};
       doneDaysMap = (window.PoCoach && window.PoCoach.getDoneDays()) || {};
       pcDays = Array.isArray(pcState.days) ? pcState.days : [];
     } catch (e) {}
     const claimedKindSlots = isCurrentWeek ? computeClaimedKindSlots(stored.plan.layout, activityEntries).sessions : new Set();
+    const claimedStrengthDaySlots = isCurrentWeek ? computeClaimedStrengthDaySlots(stored.plan.layout, pcState).sessions : new Set();
 
-    if (isCurrentWeek && isLayoutDayFullyDone(todayLayoutEntry, claimedKindSlots, doneDaysMap)) {
+    if (isCurrentWeek && isLayoutDayFullyDone(todayLayoutEntry, claimedKindSlots, doneDaysMap, claimedStrengthDaySlots)) {
       // FEATURE (reported) — every one of today's real sessions is
       // already done: a code-only, always-fresh state that outranks
       // whatever's cached (which could only ever be stale here, since
